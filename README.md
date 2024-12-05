@@ -2,9 +2,9 @@
 Superconducting cIRCUIT-ENUMeration
 ======================================
 
-A library for enumerating superconducting circuits.
+A library for enumerating superconducting circuits. Used to produce the results in [Enumeration of all superconducting circuits up to 5 nodes](https://doi.org/10.48550/arXiv.2410.18497). For access to the databases of enumerated circuits used in the publication, please email the authors. All reasonable requests will be granted.
 
-At the moment this package requires a modified version of [SQcircuit](https://github.com/stanfordLINQS/SQcircuit/) to function. Hopefully, by January 2025, we will have the package working on the current versions of [SQcircuit](https://github.com/stanfordLINQS/SQcircuit/) and [scqubits](https://github.com/scqubits/scqubits).
+At the moment, a few circuits examined in the paper require a modified version of [SQcircuit](https://github.com/stanfordLINQS/SQcircuit/) to run properly.Hopefully, by January 2025, we will have the package working on the current versions of [SQcircuit](https://github.com/stanfordLINQS/SQcircuit/) and [scqubits](https://github.com/scqubits/scqubits).
 
 
 Installation
