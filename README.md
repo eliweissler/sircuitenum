@@ -4,13 +4,13 @@ Superconducting cIRCUIT-ENUMeration
 
 A library for enumerating superconducting circuits. Used to produce the results in [Enumeration of all superconducting circuits up to 5 nodes](https://doi.org/10.48550/arXiv.2410.18497). For access to the databases of enumerated circuits used in the publication, please email the authors. All reasonable requests will be granted.
 
-At the moment, a few circuits examined in the paper require a modified version of [SQcircuit](https://github.com/stanfordLINQS/SQcircuit/) to run properly.Hopefully, by January 2025, we will have the package working on the current versions of [SQcircuit](https://github.com/stanfordLINQS/SQcircuit/) and [scqubits](https://github.com/scqubits/scqubits).
+At the moment, a few circuits examined in the paper require a modified version of [SQcircuit](https://github.com/stanfordLINQS/SQcircuit/) to run properly. Hopefully, by January 2025, we will have the package working on the current versions of [SQcircuit](https://github.com/stanfordLINQS/SQcircuit/) and [scqubits](https://github.com/scqubits/scqubits).
 
 
 Installation
 ------------
 
-`sircuitenum` can be installed from source or via the Python package manager PyPI. The package has been tested on Python 3.11 on both Linux and Mac.
+Currently `sircuitenum` can only be installed from source, although installation via the Python package manager PyPI will be added soon. The package has been tested on Python 3.11 on both Linux and Mac.
 
 ### Source
 
@@ -18,12 +18,6 @@ Installation
 git clone https://github.com/combes-group/sircuitenum.git
 cd sircuitenum/
 pip install -e .
-```
-
-### PyPI
-
-```bash
-pip install sircuitenum
 ```
 
 Examples
@@ -45,7 +39,7 @@ Testing
 The unit tests can be run locally using `pytest`. To install testing dependencies, install sircuitenum using
 
 ```bash
-pip install sircuitenum[full]
+pip install pip install -e .[full]
 ```
 
 Disclaimer
