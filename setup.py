@@ -1,6 +1,6 @@
 import os
 import re
-from setuptools import setup
+from setuptools import setup, find_packages
 
 HERE = os.path.abspath(os.path.dirname(__file__))
 
@@ -64,7 +64,7 @@ setup(
                     'nbval'
                 ]
     },
-    packages=['sircuitenum'],
+    packages=find_packages(),
 )
 
 py_modules = []
