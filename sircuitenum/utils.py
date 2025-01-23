@@ -56,14 +56,30 @@ def graph_index_to_edges(graph_index: int, n_nodes: int):
     return list(get_basegraphs(n_nodes)[graph_index].edges)
 
 
-def edges_to_graph_index(edges: list, return_mapping: bool = False):
+def edges_to_graph_index(edges: list, return_mapping: bool = False) -> int:
     """
-    Matches a set of edges to a basegraph that's isomorphic to it
+    Matches a given set of edges to an isomorphic base graph.
 
-    Args:
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        return_mapping (bool): return the mapping from edges to the basegraph
+    This function finds a base graph that is isomorphic 
+    to the input edge set.
+
+    Parameters
+    ----------
+    edges : list of tuple of int
+        A list of edge connections representing the desired circuit.  
+        Example: ``[(0,1), (0,2), (1,2)]``.
+    return_mapping : bool, optional
+        If `True`, returns the mapping of edges to the base graph.  
+        Defaults to `False`.
+
+    Returns
+    -------
+    int
+        The index of the graph matching the given edges within  
+        the set of graphs with the same number of nodes.
+    dict, optional
+        If `return_mapping=True`, also returns a dictionary  
+        mapping edges to the base graph.
     """
     # Graph object to use in comparison
     G1 = nx.Graph()
@@ -716,23 +732,29 @@ def get_circuit_data(file: str, unique_key: str, char_mapping: dict = None):
 
 def get_circuit_data_batch(db_file: str, n_nodes: int,
                            char_mapping: dict = None,
-                           filter_str: str = ''):
+                           filter_str: str = '') -> pd.DataFrame:
     """
-    Returns all the circuits present in the database for the specified
-    number of nodes, and any other filter statements given.
+    Retrieve all circuits from the database for a specified number of nodes, 
+    with optional filtering criteria.
 
-    Args:
-        db_file (str, optional): sqlite db_file to look in.
-                                Defaults to "circuits.db"
-        n_nodes (int): number of nodes in the circuit
-        char_mapping (dict, optional): mapping from character to
-                                       list of circuit elements
-        filters (str, optional): SQL filter statement
-                                (i.e. WHERE circuit_index = 100).
+    Parameters
+    ----------
+    db_file : str, optional
+        Path to the SQLite database file. Defaults to ``"circuits.db"``.
+    n_nodes : int
+        Number of nodes in the circuit.
+    char_mapping : dict, optional
+        A mapping from characters to lists of circuit elements.
+    filters : str, optional
+        SQL filter statement for refining the query.  
+        Example: ``"WHERE circuit_index = 100"``.
 
-    Returns:
-        pandas dataframe containing each circuit as a row
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame where each row represents a circuit matching the query.
     """
+
     if char_mapping is None:
         char_mapping = ENUM_PARAMS["CHAR_TO_COMBINATION"]
     table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
@@ -778,15 +800,27 @@ def get_unique_qubits(db_file: str, n_nodes: str):
     return get_circuit_data_batch(db_file, n_nodes, filter_str=filter_str)
 
 
-def get_equiv_circuits_uid(db_file: str, unique_key: str):
+def get_equiv_circuits_uid(db_file: str, unique_key: str) -> pd.DataFrame:
     """
-    Finds all circuits in the database with either the
-    given unique key, or with it as the equiv circuit
+    Finds all circuits in the database that match a given unique key  
+    or are equivalent to it.
 
-    Args:
-        db_file (str): sqlite db_file to look in.
-                                Defaults to "circuits.db"
-        unique_key (str): unique identifier for the circuit
+    This function searches for circuits in an SQLite database that either:
+    - Have the specified `unique_key`, or  
+    - Are considered equivalent circuits by component-like isomorphism.
+
+    Parameters
+    ----------
+    db_file : str
+        Path to the SQLite database file.  
+        Defaults to `"circuits.db"`.
+    unique_key : str
+        The unique identifier for the circuit.
+
+    Returns
+    -------
+    pandas.DataFrame
+        A DataFrame containing all matching circuits.
     """
     tables = list_all_tables(db_file)
     entries = []
@@ -800,19 +834,27 @@ def get_equiv_circuits_uid(db_file: str, unique_key: str):
     return pd.concat(entries).sort_values(by="equiv_circuit")
 
 
-def get_equiv_circuits(db_file: str, circuit: list, edges: list):
+def get_equiv_circuits(db_file: str, circuit: list, edges: list) -> Union[pd.DataFrame, None]:
     """
-    Finds all circuits equivalent to the one provided
-    that are present in the database.
-    Returns None if none are found.
+    Finds all circuits in the database that are equivalent to a given circuit.  
 
-    Args:
-        db_file (str): sqlite db_file to look in.
-                                Defaults to "circuits.db"
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [["J"],["L", "J"], ["C"]]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
+    Parameters
+    ----------
+    db_file : str
+        Path to the SQLite database file.  
+        Defaults to `"circuits.db"`.
+    circuit : list
+        A list of element labels defining the desired circuit.  
+        Example: `[["J"], ["L", "J"], ["C"]]`
+    edges : list
+        A list of edge connections defining how circuit elements are connected.  
+        Example: `[(0,1), (0,2), (1,2)]`
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        A DataFrame containing all equivalent circuits found in the database.  
+        Returns `None` if no equivalent circuits are found.
     """
 
     entry = find_circuit_in_db(db_file, circuit, edges)

@@ -125,22 +125,25 @@ def delete_table(db_file: str, n_nodes: int):
     return
 
 
-def find_unique_ground_placements(circuit: list, edges: list):
+def find_unique_ground_placements(circuit: list, edges: list) -> tuple[int]:
     """
     Uses component graph isomorphism to determine the unique
     ground node placements for a given circuit.
 
-    Assumes edges is a continous list from 0 to max number
+    Parameters
+    ----------
+    circuit : list of list of str
+        A list representing the elements of the desired circuit.  
+        Example: ``[["J"], ["L", "J"], ["C"]]``.
+    edges : list of tuple of int
+        A list of edge connections for the desired circuit.  
+        Example: ``[(0,1), (0,2), (1,2)]``.
 
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [["J"],["L", "J"], ["C"]]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-
-    Returns:
-        tuple of integers representing unique ground node
-        placements
+    Returns
+    -------
+    tuple of int
+        A tuple containing integers representing the unique ground node placements
+        for the given circuit.
     """
     unique_nodes = []
     unique_graphs = []
@@ -224,30 +227,34 @@ def remove_dangling_edges(df: pd.DataFrame):
     return df.iloc[ind_to_keep].copy()
 
 
-def find_equiv_cir_series(db_file: str, circuit: list, edges: list):
+def find_equiv_cir_series(db_file: str, circuit: list, edges: list) -> str:
     """
-    Searches the database for circuits that are equivalent
-    to the one given, up to a reduction of series linear
-    circuit elements
+    Searches the database for circuits that are equivalent to the given one,
+    up to a reduction of series linear circuit elements.
 
-    Args:
-        db_file (str): sql database file that's already been completed
-                       for the previous number of nodes.
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [["J"],["L", "J"], ["C"]]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
+    Parameters
+    ----------
+    db_file : str
+        Path to the SQLite database file that has been preprocessed for the given number of nodes.
+    circuit : list of list of str
+        A list representing the circuit elements.  
+        Example: ``[["J"], ["L", "J"], ["C"]]``.
+    edges : list of tuple of int
+        A list of edge connections that define the circuit's connectivity.  
+        Example: ``[(0,1), (0,2), (1,2)]``.
 
-    Returns:
-        unique key of the equivalent circuit that is in the
-        non isomorphic set
+    Returns
+    -------
+    str
+        The unique key of the equivalent circuit found in the non-isomorphic set.  
+        Returns "" if no equivalent circuit is found.
     """
 
     # What does it look like with series elems removed
     c2, e2 = red.remove_series_elems(circuit, edges)
     equiv = utils.find_circuit_in_db(db_file, c2, e2)
     if equiv.empty:
-        return "not found"
+        return ""
     # Return the equivalent circuit
     if equiv.iloc[0]['equiv_circuit'] == "":
         return equiv.iloc[0]['unique_key']

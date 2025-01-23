@@ -1,7 +1,7 @@
 __doc__ = "optimization.py: Contains functions used to optimize circuit performance as a function of underlying circuit parameters"
 __author__ = "Eli Weissler"
 __version__ = "0.1.0"
-__all__ = ["sweep_params", "optimize_diff_evol", "gen_param_dict_anyq"]
+__all__ = ["sweep_params", "optimize_diff_evol", "gen_param_dict_anyq", "get_ngate_mc"]
 
 # To prevent each process from doing parallel linear algebra under the hood
 import  os
@@ -322,23 +322,61 @@ def get_anharmonicity(spec):
 
 def get_ngate_mc(param_set: list, *args, **kwargs):
     """
-    Objective function to be minimized for optimization.
-    Returns -ngates performed by the circuit.
+Objective function to be minimized for optimization.
 
-    Returns the average (and optionally std) of evaluations
-    sampled from a gaussian with std amp, centered on
-    the value inside of param_sets
-    
-    Args:
-        param_set (list): list of parameter values in GHz. Values
-                           are given in the order they appear in circuit.
-        args (list): extra arguments [circuit, edges, ground_node, trunc_num,
-                                      offset_integer, cj, ntrial, amp_param, 
-                                      amp_offset, return_std, workers]
+    This function is designed to be used in the optimization process. It returns the negative of 
+    the number of ngates performed by the circuit for a given set of parameters. The function 
+    evaluates the circuit based on the parameters and samples from a Gaussian distribution 
+    centered on the provided values.
 
-    Returns:
-        float: -ngates done by the circuit, or -ngates, std of samples
+    Parameters
+    ----------
+    param_set : list of float
+        A list of parameter values in GHz. The values are given in the order they appear in the circuit.
+    args : list
+        A list of extra arguments required for the circuit evaluation, including:
+        - circuit : list of tuple of str
+            The list of elements that form the circuit.
+        - edges : list of tuple of int
+            The list of edges for the circuit.
+        - ground_node : int
+            The index of the ground node.
+        - trunc_num : int or list of int
+            The truncation number(s) used in the evaluation.
+        - offset_integer : bool
+            Whether the offset integer is enabled.
+        - cj : float
+            The value for junction capacitance in GHz. Pass 0 to include none.
+        - ntrial : int
+            The number of trials to perform.
+        - amp_param : float
+            Amplitude of random noise for sampling the parameters.
+        - amp_offset : float
+            Amplitude of random noise for sampling the offsets.
+        - return_std : bool
+            Whether to return the standard deviation of the samples.
+        - workers : int
+            The number of workers to use for parallel computation.
+    kwargs : dict, optional
+        Additional keyword arguments for customization.
+
+    Returns
+    -------
+    float
+        The negative mean ngates performed by the circuit, or if `return_std` is `True`, 
+        a tuple containing:
+
+        - float : The mean ngates performed.
+        
+        - float : The standard deviation of the ngates computed from the sampled values.
+
+    Notes
+    -----
+    - The objective function is intended to be used with optimization algorithms such as differential evolution.
+    - The circuit's performance is evaluated multiple times using Gaussian-distributed noise to estimate the average performance.
+
     """
+
     [ntrial, amp_elem, amp_off, return_std, workers, package] = args[-6:]
 
     return_median = kwargs.get("return_median", False)
@@ -579,7 +617,7 @@ def pick_truncation_sc(cir: scq.Circuit, thresh: float = 1e-06, neig: int = 5,
         return params, truncs
 
 # 5 min timeout to help speed things up
-def timed_out_(*args, **kwargs):
+def _timed_out(*args, **kwargs):
     timeout_min = 60
     try:
         return func_timeout(60*timeout_min, get_ngate_mc, args, kwargs)
@@ -698,11 +736,24 @@ def sweep_params(circuit: list, edges: list, params: list,
     -------
     dict
         A dictionary containing arrays for the following quantities:
-        - ``eigenvalues`` (last dimension is ``n_eig``),
-        - ``rates`` (a dictionary mapping to arrays of decay rates),
-        - ``gate_time``,
-        - ``anharmonicity`` (alpha),
-        - ``t1``, ``tphi``, ``tg``, ``tgate``, ``ngate``.
+
+        - ``eigenvalues`` (last dimension is ``n_eig``)
+
+        - ``rates`` (a dictionary mapping to arrays of decay rates)
+
+        - ``gate_time``
+
+        - ``anharmonicity`` (alpha)
+
+        - ``t1``
+        
+        - ``tphi``
+        
+        - ``tg``
+        
+        - ``tgate``
+        
+        - ``ngate``
     """
 
     # Calculate the return array size
@@ -822,12 +873,78 @@ def callback_function(xk, convergence):
 
 def optimize_diff_evol(circuit: list, edges: list, ground_node: int,
                        ranges: list = None, offset_integer: bool = False,
-                       trials: list = [1, 100],
+                       optim_func = _timed_out, trials: list = [1, 100],
                        amps: dict = {"elem": [0, 0.025], "offset": [0, 1e-06]},
                        trunc_num: Union[int, list] = -1,
                        cj: float = 10.0, quiet: bool = False,
                        package: str = "sq", trunc_est_n: int = 200,
-                       **kwargs):
+                       **kwargs) -> dict:
+    """
+    Optimize a circuit's performance using differential evolution.
+
+    This function optimizes a circuit's parameters by running differential evolution
+    on the given circuit and edge configuration. It estimates the truncation number if 
+    not provided, and uses a set of user-defined or default parameters for the optimization 
+    process. The function returns the best parameters and final evaluation results.
+
+    Parameters
+    ----------
+    circuit : list of list of str
+        A list representing the elements of the desired circuit.  
+        Example: ``[["J"], ["L", "J"], ["C"]]``.
+    edges : list of tuple of int
+        A list of edge connections for the desired circuit.  
+        Example: ``[(0,1), (0,2), (1,2)]``.
+    ground_node : int
+        The index of the ground node in the circuit.
+    ranges : list of tuple of float, optional
+        A list of parameter ranges for each element. If not provided, the ranges are automatically 
+        generated based on the circuit and edge configuration.
+    offset_integer : bool, optional
+        Whether the offset integer is enabled. Default is ``False``.
+    optim_func: function, optional
+        Function to optimize, must match the inputs of :func:`get_ngate_mc`.
+    trials : list of int, optional
+        A list containing the number of trials for optimization. Default is ``[1, 100]``.
+    amps : dict, optional
+        A dictionary defining the amplitude ranges for elements and offset. 
+        Default is ``{"elem": [0, 0.025], "offset": [0, 1e-06]}``.
+    trunc_num : int or list of int, optional
+        The truncation number. If set to ``-1``, it will be estimated automatically. Default is ``-1``.
+    cj : float, optional
+        The coefficient for truncation estimation. Default is ``10.0``.
+    quiet : bool, optional
+        If set to ``True``, suppresses the output during the optimization process. Default is ``False``.
+    package : str, optional
+        The package used for truncation estimation. Options are ``"sq"`` or ``"sc"``. Default is ``"sq"``.
+    trunc_est_n : int, optional
+        The number of trials for truncation estimation. Default is ``200``.
+    **kwargs : keyword arguments, optional
+        Additional parameters for the differential evolution optimization process. Default values are 
+        provided if not specified, including `disp`, `popsize`, `callback`, `workers`, `tol`, `init`, 
+        and `maxiter`.
+
+    Returns
+    -------
+    dict
+        A dictionary containing the results of the optimization process:
+
+        - ``ngate``: The final optimized value.
+
+        - ``param_best``: The best parameters found during optimization.
+
+        - ``ngate_mean``: The mean value from the Monte Carlo evaluation.
+
+        - ``ngate_std``: The standard deviation of the Monte Carlo evaluation.
+
+    Notes
+    -----
+    - Uses `scipy.optimize.differential_evolution` for the optimization process.
+    - Truncation numbers are automatically estimated if not provided.
+    - Detailed progress is shown if `quiet` is set to `False`.
+
+    """
+    
     
     kwargs = dict({'disp': 'True', 'popsize': 20,
                    "callback": callback_function, "polish": False,
@@ -915,8 +1032,7 @@ def optimize_diff_evol(circuit: list, edges: list, ground_node: int,
     #  ntrial, amp_elem, amp_off, return_std]
     args = [circuit, edges, ground_node, trunc_num, offset_integer, cj,
             trials[0], amps["elem"][0], amps["offset"][0], False, 1, package]
-    res = sp.optimize.differential_evolution(timed_out_,
-                                             args=args, **kwargs)
+    res = sp.optimize.differential_evolution(optim_func, args=args, **kwargs)
 
     if not quiet:
         print("Finished optimization\n", res)
