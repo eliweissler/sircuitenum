@@ -322,7 +322,7 @@ def get_anharmonicity(spec):
 
 def get_ngate_mc(param_set: list, *args, **kwargs):
     """
-Objective function to be minimized for optimization.
+    Objective function to be minimized for optimization.
 
     This function is designed to be used in the optimization process. It returns the negative of 
     the number of ngates performed by the circuit for a given set of parameters. The function 
@@ -335,28 +335,29 @@ Objective function to be minimized for optimization.
         A list of parameter values in GHz. The values are given in the order they appear in the circuit.
     args : list
         A list of extra arguments required for the circuit evaluation, including:
-        - circuit : list of tuple of str
-            The list of elements that form the circuit.
-        - edges : list of tuple of int
-            The list of edges for the circuit.
-        - ground_node : int
-            The index of the ground node.
-        - trunc_num : int or list of int
-            The truncation number(s) used in the evaluation.
-        - offset_integer : bool
-            Whether the offset integer is enabled.
-        - cj : float
-            The value for junction capacitance in GHz. Pass 0 to include none.
-        - ntrial : int
-            The number of trials to perform.
-        - amp_param : float
-            Amplitude of random noise for sampling the parameters.
-        - amp_offset : float
-            Amplitude of random noise for sampling the offsets.
-        - return_std : bool
-            Whether to return the standard deviation of the samples.
-        - workers : int
-            The number of workers to use for parallel computation.
+
+        - circuit (list of tuple of str): The list of elements that form the circuit.
+        
+        - edges (list of tuple of int): The list of edges for the circuit.
+        
+        - ground_node (int): The index of the ground node.
+        
+        - trunc_num (int or list of int): The truncation number(s) used in the evaluation.
+        
+        - offset_integer (bool): Whether the offset integer is enabled.
+        
+        - cj (float): The value for junction capacitance in GHz. Pass 0 to include none.
+        
+        - ntrial (int): The number of trials to perform.
+        
+        - amp_param (float): Amplitude of random noise for sampling the parameters.
+        
+        - amp_offset (float): Amplitude of random noise for sampling the offsets.
+        
+        - return_std (bool): Whether to return the standard deviation of the samples.
+        
+        - workers (int): The number of workers to use for parallel computation.
+
     kwargs : dict, optional
         Additional keyword arguments for customization.
 
@@ -366,15 +367,14 @@ Objective function to be minimized for optimization.
         The negative mean ngates performed by the circuit, or if `return_std` is `True`, 
         a tuple containing:
 
-        - float : The mean ngates performed.
+        - float: The mean ngates performed.
         
-        - float : The standard deviation of the ngates computed from the sampled values.
+        - float: The standard deviation of the ngates computed from the sampled values.
 
     Notes
     -----
     - The objective function is intended to be used with optimization algorithms such as differential evolution.
     - The circuit's performance is evaluated multiple times using Gaussian-distributed noise to estimate the average performance.
-
     """
 
     [ntrial, amp_elem, amp_off, return_std, workers, package] = args[-6:]
@@ -894,7 +894,7 @@ def optimize_diff_evol(circuit: list, edges: list, ground_node: int,
         Example: ``[["J"], ["L", "J"], ["C"]]``.
     edges : list of tuple of int
         A list of edge connections for the desired circuit.  
-        Example: ``[(0,1), (0,2), (1,2)]``.
+        Example: ``[(0, 1), (0, 2), (1, 2)]``.
     ground_node : int
         The index of the ground node in the circuit.
     ranges : list of tuple of float, optional
@@ -902,7 +902,7 @@ def optimize_diff_evol(circuit: list, edges: list, ground_node: int,
         generated based on the circuit and edge configuration.
     offset_integer : bool, optional
         Whether the offset integer is enabled. Default is ``False``.
-    optim_func: function, optional
+    optim_func : function, optional
         Function to optimize, must match the inputs of :func:`get_ngate_mc`.
     trials : list of int, optional
         A list containing the number of trials for optimization. Default is ``[1, 100]``.
@@ -921,8 +921,8 @@ def optimize_diff_evol(circuit: list, edges: list, ground_node: int,
         The number of trials for truncation estimation. Default is ``200``.
     **kwargs : keyword arguments, optional
         Additional parameters for the differential evolution optimization process. Default values are 
-        provided if not specified, including `disp`, `popsize`, `callback`, `workers`, `tol`, `init`, 
-        and `maxiter`.
+        provided if not specified, including ``disp``, ``popsize``, ``callback``, ``workers``, ``tol``, ``init``, 
+        and ``maxiter``.
 
     Returns
     -------
@@ -930,19 +930,15 @@ def optimize_diff_evol(circuit: list, edges: list, ground_node: int,
         A dictionary containing the results of the optimization process:
 
         - ``ngate``: The final optimized value.
-
         - ``param_best``: The best parameters found during optimization.
-
         - ``ngate_mean``: The mean value from the Monte Carlo evaluation.
-
         - ``ngate_std``: The standard deviation of the Monte Carlo evaluation.
 
     Notes
     -----
-    - Uses `scipy.optimize.differential_evolution` for the optimization process.
+    - Uses :func:`scipy.optimize.differential_evolution` for the optimization process.
     - Truncation numbers are automatically estimated if not provided.
-    - Detailed progress is shown if `quiet` is set to `False`.
-
+    - Detailed progress is shown if ``quiet`` is set to ``False``.
     """
     
     
