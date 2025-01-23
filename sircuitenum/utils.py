@@ -1,16 +1,19 @@
-import sqlite3
+__doc__ = "utils.py: Contains utilities used in other files in the package"
+__author__ = "Eli Weissler, Mohit Bhat"
+__version__ = "0.1.0"
+__all__ = ['get_circuit_data_batch', 'find_circuit_in_db', "get_equiv_circuits", "get_equiv_circuits_uid", "graph_index_to_edges", "edges_to_graph_index"]
+
 import itertools
 import functools
-
 from typing import Union
-import numpy as np
 from pathlib import Path
-import networkx as nx
-import pandas as pd
-
-from tqdm import tqdm
 from time import sleep
 
+import sqlite3
+import numpy as np
+import networkx as nx
+import pandas as pd
+from tqdm import tqdm
 import sympy as sym
 from sympy import collect, expand_mul, Mul, Dummy
 from sympy.core.add import Add
@@ -1015,12 +1018,12 @@ def collect_H_terms(H: Add, zero_ext: bool = True,
         H = collect(H, combos_trig)
 
     if no_coeff:
-        H = remove_coeff_(H, list(combosQ.keys()) + combos + combos_trig)
+        H = _remove_coeff(H, list(combosQ.keys()) + combos + combos_trig)
 
     return H, combos+combos_trig, combosQ
 
 
-def remove_coeff_(H, all_combos):
+def _remove_coeff(H, all_combos):
     H_class = H.copy()
     for combo in all_combos:
         H_class = H_class.replace(lambda x: x.is_Mul

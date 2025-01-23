@@ -1,30 +1,15 @@
-#!/usr/bin/env python
-from __future__ import print_function
-"edge_enumerate.py: Contains functions to enumerated edges of quantum circuits"
-__author__ = "Mohit Bhat, Eli Weissler"
+__doc__ = "enumeration.py: Contains the core functionality for enumerating circuits"
+__author__ = "Eli Weissler, Mohit Bhat"
 __version__ = "0.1.0"
-__status__ = "Development"
-
-# -------------------------------------------------------------------
-# Import Statements
-# -------------------------------------------------------------------
+__all__ = ["generate_all_circuits", "generate_graphs_node", "trim_graph_node", "gen_hamiltonian", "find_equiv_cir_series", "find_unique_ground_placements", "num_possible_circuits"]
 
 import sqlite3
 import itertools
 import functools
 import traceback
 import contextlib
-
-import sympy as sym
-from sympy.parsing.latex import parse_latex
-
-import networkx as nx
-import numpy as np
-import pandas as pd
-
 from pathlib import Path
-from tqdm import tqdm
-from func_timeout import func_timeout, FunctionTimedOut
+from typing import Union
 from multiprocessing import Pool
 from multiprocessing import set_start_method
 try:
@@ -34,6 +19,14 @@ except:
            More than one worker is not supported for enumeration \
            with custom elements.")
 
+import sympy as sym
+import networkx as nx
+import numpy as np
+import pandas as pd
+from sympy.parsing.latex import parse_latex
+from tqdm import tqdm
+from func_timeout import func_timeout, FunctionTimedOut
+
 from sircuitenum import utils
 from sircuitenum import reduction as red
 from sircuitenum import qpackage_interface as pi
@@ -42,20 +35,27 @@ from sircuitenum import quantize
 # -------------------------------------------------------------------
 # Functions
 # -------------------------------------------------------------------
+def num_possible_circuits(base: int, n_nodes: int, quiet: bool = True) -> int:
+    """
+    Estimate the number of possible circuits for a given number of edges and vertices.
 
+    This function calculates the number of possible circuits for a graph with `n_nodes` vertices 
+    and `base` possible edge types. The estimate may be an overestimation.
 
-def num_possible_circuits(base: int, n_nodes: int, quiet: bool = True):
-    """ Calculates the number of possible circuits for a given number
-    # of edges and vertices, may overestimate.
+    Parameters
+    ----------
+    base : int, optional
+        The number of possible edge types. Defaults to ``7``, corresponding to:
+        ``J, C, L, JL, CL, JC, JCL``.
+    n_nodes : int
+        The number of vertices (nodes) in the graph.
+    quiet : bool, optional
+        If ``False``, prints the estimated number of circuits. Defaults to ``True``.
 
-    Args:
-        base (int): The number of possible edges. By default this is 7:
-                        (i.e., J, C, I, JI, CI, JC, JCI)
-        n_nodes (int): the number of vertices in a graph.
-        quiet (bool): print the number of circuits or not
-
-    Returns:
-        n_circuits (int): a list of networkx graphs
+    Returns
+    -------
+    int
+        The estimated number of possible circuits.
     """
     all_graphs = utils.get_basegraphs(n_nodes)
     n_circuits = 0
@@ -256,18 +256,33 @@ def find_equiv_cir_series(db_file: str, circuit: list, edges: list):
 
 
 def generate_graphs_node(db_file: str, n_nodes: int,
-                         base: int, return_vals: bool = False):
-    """ Generates circuits for all graphs for a given number of nodes
-        Stores circuits in table in sql database for the number of nodes
-        Table labeled: 'CIRCUITS_' + str(n_nodes) + '_NODES'
-
-    Args:
-        n_nodes (int): Number of nodes for table
-        base (int): The number of possible edges. By default this is 7:
-                        (i.e., J, C, I, JI, CI, JC, JCI)
-        db_file (str): sql database to store data in
-        return_vals (bool): return the values in a dataframe or not
+                         base: int, return_vals: bool = False) -> Union[pd.DataFrame, None]:
     """
+    Generate circuits for all graphs with a given number of nodes and store them in an SQL database.
+
+    This function generates circuits for all possible graphs with `n_nodes` nodes and 
+    stores them in a table within the specified SQL database. The table is labeled as 
+    ``CIRCUITS_<n_nodes>_NODES``.
+
+    Parameters
+    ----------
+    n_nodes : int
+        The number of nodes for which circuits will be generated and stored.
+    base : int, optional
+        The number of possible edge types. Defaults to ``7``, corresponding to:
+        ``J, C, L, JL, CL, JC, JCL``.
+    db_file : str
+        Path to the SQL database file where the circuits will be stored.
+    return_vals : bool, optional
+        If ``True``, returns the generated circuits as a Pandas DataFrame. Defaults to ``False``.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        If `return_vals` is ``True``, returns a DataFrame containing the generated circuits. 
+        Otherwise, returns ``None``.
+    """
+
 
     # Initialize table
     if db_file is not None:
@@ -303,22 +318,29 @@ def generate_graphs_node(db_file: str, n_nodes: int,
 
 def trim_graph_node(db_file: str, n_nodes: int,
                     base: int = None,
-                    n_workers: int = 1):
+                    n_workers: int = 1) -> None:
     """
-    Marks the circuits in the database as having
-    jj-s, series linear components, and being in a
-    non-isomorphic set of circuits. If the circuit
-    is not in the non-isomorphic set, an equivalent
-    one that is in the set is recorded.
+    Mark circuits in the database based on Josephson junctions, series linear components, 
+    and non-isomorphism.
 
-    All three must be true for the desired final set.
+    This function updates the database to indicate whether each circuit contains 
+    Josephson junctions (JJs), series linear components, and belongs to a non-isomorphic 
+    set of circuits. If a circuit is not in the non-isomorphic set, an equivalent 
+    circuit that is in the set is recorded. 
 
-    Args:
-        db_file (str): path to database to trim
-        n_nodes (int): Number of nodes to consider
-        base (int): The number of possible edges. By default this is 7:
-                        (i.e., J, C, I, JI, CI, JC, JCI)
-        n_workers (int): The number of workers to use. Default 1.
+    All three conditions must be met for inclusion in the final set.
+
+    Parameters
+    ----------
+    db_file : str
+        Path to the SQL database file where circuits are stored.
+    n_nodes : int
+        The number of nodes to consider.
+    base : int, optional
+        The number of possible edge types. Defaults to ``7``, corresponding to:
+        ``J, C, L, JL, CL, JC, JCL``.
+    n_workers : int, optional
+        The number of workers to use for processing. Defaults to ``1``.
     """
     if base is None:
         base = len(utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
@@ -553,7 +575,7 @@ def gen_ham_row_(uid: str, db_file: str):
                 H_sym = H_sym.subs(s, EJ)
 
         # Zero out terms to get the H_class
-        H_class_sym = utils.remove_coeff_(H_sym, all_combos)
+        H_class_sym = utils._remove_coeff(H_sym, all_combos)
         H_sym_str = refine_latex(sym.latex(H_sym))
         info_sym = categorize_hamiltonian(H_sym)
     except KeyboardInterrupt as kbi:
@@ -610,41 +632,54 @@ def gen_ham_row_(uid: str, db_file: str):
 
 def gen_hamiltonian(circuit: list, edges: list, symmetric: bool = False,
                     cob: sym.Matrix = None, var_class: dict = None,
-                    return_combos: bool = False, basis_completion: str = "heuristic"):
+                    return_combos: bool = False, basis_completion: str = "heuristic") -> tuple:
     """
-    Generate a Sympy Hamiltonian for the specified circuit.
-    Uses scqubits to come up with an appropriate variable transformation.
+        Generate a SymPy Hamiltonian for the specified circuit.
 
-    NOTE: External fluxes/charges are not supported right now
+        This function uses `scqubits` to determine an appropriate variable transformation.
 
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [["J"],["L", "J"], ["C"]]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        symmetric (bool, optional): Whether to set all capacitances,
-                                    inductances, and Josephson energies equal.
-                                    Risks losing terms. Defaults to False.
-        cob (sym.Matrix, optional): Optionally give a variable transformation
-                                    instead of using the Z transformation matrix
-                                    from scqubits.
-        var_class (dict, optional): If you give a variable transformation, also
-                                    give a dictionary like scqubits var_categories
-                                    with keys "free", "frozen", "periodic", and
-                                    "extended" that classify the variables.
-        return_combos (bool, optional): optionally return the combination of
-                                        variables present
-        basis_completion (str, optional): basis completion option for scqubits
+        .. note::
+            External fluxes and charges are not currently supported.
 
-    Returns:
-        (Sympy Add, np.array, Sympy Add):
-                   1) Symbolic Hamiltonian where periodic modes are labeled by
-                      n and extended variables are labeled by q.
-                   2) Coordinate transformation matrix (new in terms of node
-                      variables)
-                   3) Hamiltonian "class" that has all constants removed.
+        Parameters
+        ----------
+        circuit : list
+            A list of element labels defining the desired circuit.
+            Example: ``[["J"], ["L", "J"], ["C"]]``.
+        edges : list
+            A list of edge connections defining the circuit topology.
+            Example: ``[(0,1), (0,2), (1,2)]``.
+        symmetric : bool, optional
+            Whether to set all capacitances, inductances, and Josephson energies equal.
+            This may result in the loss of some terms. Default is ``False``.
+        cob : sympy.Matrix, optional
+            An optional variable transformation matrix. If not provided, the 
+            Z transformation matrix from `scqubits` is used.
+        var_class : dict, optional
+            Required if providing a custom variable transformation. Should be a dictionary
+            similar to scqubits's `var_categories`, with keys "free", "frozen", 
+            "periodic", and "extended" to classify the variables.
+        return_combos : bool, optional
+            Whether to return the combinations of variables present. Default is False.
+        basis_completion : str, optional
+            Basis completion option for `scqubits`.
+
+        Returns
+        -------
+        A tuple containing:
+        
+        - **hamiltonian: sympy.Add**
+            Symbolic Hamiltonian where periodic modes are labeled by `n` and extended variables by `q`.
+        
+        - **transformation_matrix: numpy.ndarray**
+            Coordinate transformation matrix (expressing new variables in terms of node variables).
+        
+        - **hamiltonian_class: sympy.Add**
+            Hamiltonian with all constants removed.
+
+        - optionally combinations of variables present
     """
-
+   
     elems = {
             'C': {'default_unit': 'GHz', 'default_value': 0.2},
             'L': {'default_unit': 'GHz', 'default_value': 1.0},
@@ -1192,21 +1227,26 @@ def generate_all_circuits(db_file: str = "circuits.db",
                         base: int = None,
                         n_workers: int = 1,
                         resume: bool = False,
-                        quiet: bool = True):
-    """ Generates all circuits with numbers of nodes between
-        `n_nodes_start` and `n_nodes_stop`, then removes identical
-        circuits the generated circuits.
+                        quiet: bool = True) -> None:
+    """
+    Generate all circuits with node counts between `n_nodes_start` and `n_nodes_stop`.  
 
-        The circuits with and without the identcal elemements removed
-        are saved in sql database.
+    This function generates circuits with varying numbers of nodes, removes duplicate 
+    circuits, and stores both the full set and the deduplicated set in an SQL database.
 
-    Args:
-        file (str): sql database file to store data in
-        n_nodes_start (int) : Min number of nodes to generate circuits for.
-        n_nodes_stop (int) : Max number of nodes to generate circuits for.
-        base (int): The number of possible edges. By default this is 7:
-                        (i.e., J, C, I, JI, CI, JC, JCI)
-        n_workers (int): The number of workers to use. Default 1.
+    Parameters
+    ----------
+    file : str
+        Path to the SQL database file where the generated circuits will be stored.
+    n_nodes_start : int
+        Minimum number of nodes to generate circuits for.
+    n_nodes_stop : int
+        Maximum number of nodes to generate circuits for.
+    base : int, optional
+        The number of possible edge types. Defaults to ``7``, corresponding to:
+        ``J, C, L, JL, CL, JC, JCL``.
+    n_workers : int, optional
+        The number of workers to use for circuit generation. Defaults to ``1``.
     """
     if base is None:
         base = len(utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])

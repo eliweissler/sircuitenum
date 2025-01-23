@@ -1,3 +1,8 @@
+__doc__ = "optimization.py: Contains functions used to optimize circuit performance as a function of underlying circuit parameters"
+__author__ = "Eli Weissler"
+__version__ = "0.1.0"
+__all__ = ["sweep_params", "optimize_diff_evol", "gen_param_dict_anyq"]
+
 # To prevent each process from doing parallel linear algebra under the hood
 import  os
 num_cores = "1"
@@ -11,21 +16,18 @@ warnings.filterwarnings("ignore", message="invalid value encountered in divide")
 warnings.filterwarnings("ignore", message="divide by zero")
 import traceback
 import itertools
-import matplotlib
-
 from typing import Union
 from tqdm import tqdm
 from multiprocessing import Pool
-from func_timeout import func_timeout, FunctionTimedOut
 
 
 import numpy as np
 import pandas as pd
 import scipy as sp
-import matplotlib.pyplot as plt
 import SQcircuit as sq
 import scqubits as scq
 scq.settings.T1_DEFAULT_WARNING=False
+from func_timeout import func_timeout, FunctionTimedOut
 
 from sircuitenum import utils
 from sircuitenum import qpackage_interface as qpi
@@ -371,24 +373,33 @@ def get_ngate_mc(param_set: list, *args, **kwargs):
 
 
 def gen_param_dict_anyq(circuit: list, edges: list, param_sets: list,
-                        cj: float = 10.0):
+                        cj: float = 10.0) -> dict:
     """
-    Generates a dictionary of parameter values for use in
-    qpackage interface.
+    Generate a dictionary of parameter values for use in the qpackage interface.
 
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [("J",),("L", "J"), ("C",)]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        param_sets (list): list of parameter values in GHz. Values
-                           are given in the order they appear in circuit.
-        cj (float): junction capacitance in GHz. Pass 0 to ignore it.
+    This function constructs a dictionary containing parameter values corresponding 
+    to a given circuit, formatted for compatibility with the qpackage interface.
 
-    Returns:
-        dict: parameter values dictionary
+    Parameters
+    ----------
+    circuit : list
+        A list of element labels defining the desired circuit.  
+        Example: ``[("J",), ("L", "J"), ("C",)]``.
+    edges : list
+        A list of edge connections defining the circuit topology.  
+        Example: ``[(0,1), (0,2), (1,2)]``.
+    param_sets : list
+        A list of parameter values in GHz. Values are assigned in the order 
+        they appear in the `circuit` list.
+    cj : float
+        Junction capacitance in GHz. Pass ``0`` to ignore this parameter.
+
+    Returns
+    -------
+    dict
+        A dictionary containing the parameter values for the circuit.
+        Maps (edge, elem) -> (value, unit)
     """
-
     param_dict = {}
     idx = 0
     for elems, edge in zip(circuit, edges):
@@ -642,41 +653,56 @@ def sweep_params(circuit: list, edges: list, params: list,
                  ground_node: int = 0, workers: int = 4, n_eig: int = 5,
                  extras: dict = {}, trunc_num: Union[int, list] = -1,
                  cj: float = 10.0, just_spec: bool = False, quiet: bool = False,
-                 package: str = "sq"):
-    """General function to perform paramater sweeps on quantum circuits
-    using SQcircuit.
+                 package: str = "sq") -> dict:
+    """
+    Perform parameter sweeps on quantum circuits using SQcircuit.
 
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [("J",),("L", "J"), ("C",)]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        params (list): list of parameter values in GHz. Float entries are fixed,
-                       while iterable fields are swept over.
-        ground_node (int, optional): Ground node. If None is given, then
-                                     adds small capacitive coupling for each
-                                     node to gorund. Defaults to 0.
-        workers (int, optional): Number of workers to use in parallel evalutation.
-        n_eig (int, optional): Number of eigenvalues to compute and save.
-        extras: (dict, optional): Optional fields to compute, providing a function
-                                  that takes in an SQcircuit circuit objects.
-                                  extras[str] = func for scalar
-                                  extras[str] = (dims, func) for non-scalar
-        trunc_num (int or list, optional): truncation number for each mode
-        cj (float): junction capacitance in GHz. Pass 0 to ignore it.
-        just_spec (bool): Only calculate the energy spectrum to save time.
-        quiet (bool): whether to print out messages or not
-        package (str): which package to use, sqcircuit "sq" or scqubits "sc"
+    This function executes parameter sweeps over a quantum circuit using the SQcircuit 
+    package, allowing for evaluation of circuit properties over a range of parameter values.
 
+    Parameters
+    ----------
+    circuit : list
+        A list of element labels defining the desired quantum circuit.  
+        Example: ``[("J",), ("L", "J"), ("C",)]``.
+    edges : list
+        A list of edge connections defining the circuit topology.  
+        Example: ``[(0, 1), (0, 2), (1, 2)]``.
+    params : list
+        A list of parameter values in GHz. Float entries are fixed, while iterable 
+        fields are swept over during the simulation.
+    ground_node : int, optional
+        The ground node index. If ``None``, small capacitive coupling is added for 
+        each node to ground. Defaults to ``0``.
+    workers : int, optional
+        The number of parallel workers to use for evaluation. Defaults to ``1``.
+    n_eig : int, optional
+        The number of eigenvalues to compute and save. Defaults to compute all available eigenvalues.
+    extras : dict, optional
+        A dictionary of additional fields to compute, where each key is a string and each value is 
+        either a function that takes an SQcircuit object (for scalar values) or a tuple containing 
+        the dimensions and a function (for non-scalar values).
+    trunc_num : int or list, optional
+        Truncation number for each mode. Defaults to no truncation.
+    cj : float
+        Junction capacitance in GHz. Pass ``0`` to ignore this parameter.
+    just_spec : bool
+        If ``True``, only calculates the energy spectrum to save time. Defaults to ``False``.
+    quiet : bool
+        If ``True``, suppresses messages during the sweep. Defaults to ``False``.
+    package : str
+        Specifies the package to use for the circuit simulation: ``"sq"`` for SQcircuit or 
+        ``"sc"`` for scqubits.
 
-    Returns:
-        dict: Dictionary containing many arrays that have shapes
-              to match the dimensions of the params input
-                - eigenvalues (last dimension is n_eig),
-                - rates (dictionary that maps to arrays of decay rates), 
-                - gate_time 
-                - anharmonicity (alpha)
-                - t1, tphi, tg, tgate, ngate
+    Returns
+    -------
+    dict
+        A dictionary containing arrays for the following quantities:
+        - ``eigenvalues`` (last dimension is ``n_eig``),
+        - ``rates`` (a dictionary mapping to arrays of decay rates),
+        - ``gate_time``,
+        - ``anharmonicity`` (alpha),
+        - ``t1``, ``tphi``, ``tg``, ``tgate``, ``ngate``.
     """
 
     # Calculate the return array size

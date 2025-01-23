@@ -10,7 +10,7 @@ import os
 import sys
 
 project = 'sircuitenum'
-copyright = '2023, Eli Weissler, Mohit Bhat, Josh Combes'
+copyright = '2025, Eli Weissler, Mohit Bhat, Josh Combes'
 author = 'Eli Weissler, Mohit Bhat, Josh Combes'
 release = '0.1.0'
 
@@ -24,6 +24,8 @@ sys.path.insert(0, os.path.abspath("../sircuitenum"))
 extensions = [
     'sphinx.ext.duration',
     'sphinx.ext.doctest',
+    'sphinx.ext.viewcode',
+    'sphinx.ext.todo',
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
     'sphinx.ext.intersphinx',

@@ -1,13 +1,7 @@
-#!/usr/bin/env python
-"""circuit_reduction.py: Contains functions to reduce the number
- of duplicate circuits present"""
-__author__ = "Mohit Bhat, Eli Weissler"
+__doc__ = "reduction.py: Contains functions used to identify redundant or duplicate circuits"
+__author__ = "Eli Weissler, Mohit Bhat"
 __version__ = "0.1.0"
-__status__ = "Development"
-
-# -------------------------------------------------------------------
-# Import Statements
-# -------------------------------------------------------------------
+__all__ = ["mark_non_isomorphic_set", "isomorphic_circuit_in_set", "convert_circuit_to_component_graph"]
 
 
 import numpy as np
@@ -311,7 +305,7 @@ def mark_non_isomorphic_set(df: pd.DataFrame, **kwargs):
                                 Defaults to considering all.
 
     Returns:
-        Nothing, fills in the 'in_non_iso_set' and 'equiv_circuit'
+        None, fills in the 'in_non_iso_set' and 'equiv_circuit'
         columns of df
     """
     to_consider = kwargs.get("to_consider", np.ones(df.shape[0], dtype=bool))

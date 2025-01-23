@@ -1,10 +1,16 @@
-from sircuitenum import utils
+__doc__ = "quantize.py: contains functions used to produce symbolic hamiltonians"
+__author__ = "Eli Weissler"
+__version__ = "0.1.0"
+__all__ = ["gen_cap_mat", "gen_ind_mat", "gen_junc_pot", "quantize_circuit"]
+
+import itertools
+import functools
 
 import sympy as sym
 import numpy as np
 
-import itertools
-import functools
+from sircuitenum import utils
+
 
 PERIODIC_CHARGE = "n"
 PERIODIC_PHASE = "θ"
@@ -84,6 +90,7 @@ def num_subs(C, vals_in = {}, symbol="C"):
         C = C.subs(x, vals[x_str])
 
     return C/2 + C.transpose()/2, vals
+
 
 def diag_cap_transform(C, numerical=False, eps = 1e-10):
     """
@@ -273,22 +280,31 @@ def gen_ind_mat(circuit, edges):
     return ind_mat
 
 
-def gen_junc_pot(circuit, edges, flux_vars, cob=None, eps=1e-10):
+def gen_junc_pot(circuit, edges, flux_vars, cob=None, eps=1e-10) -> sym.Matrix:
     """
-    Generates the junction potential terms, optionally doing a change of
-    basis.
+    Generate the junction potential terms, optionally applying a change of basis.
 
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [["J"],["L", "J"], ["C"]]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        flux_vars (sym.matrix): a vector of flux variables.
-        cob (sym.Matrix): a change of basis matrix to transform the node flux
-                          variables.
+    This function generates the junction potential terms for the given circuit and 
+    optionally performs a change of basis to transform the flux variables based on 
+    a provided transformation matrix.
 
-    Returns:
-        sym.Matrix of the capacitance matrix
+    Parameters
+    ----------
+    circuit : list
+        A list of element labels for the desired circuit.  
+        Example: ``[["J"], ["L", "J"], ["C"]]``.
+    edges : list
+        A list of edge connections for the desired circuit.  
+        Example: ``[(0, 1), (0, 2), (1, 2)]``.
+    flux_vars : sym.Matrix
+        A vector of flux variables for the circuit.
+    cob : sym.Matrix
+        A change of basis matrix used to transform the node flux variables.
+
+    Returns
+    -------
+    sym.Matrix
+        The capacitance matrix as a symbolic matrix, representing the junction potential terms.
     """
 
     n_nodes = utils.get_num_nodes(edges)
@@ -351,45 +367,59 @@ def quantize_circuit(circuit, edges, Cv=None, V=None, cob=None,
                      return_combos: bool = False,
                      collect_phase: bool = True):
     """
-    Performs a symbolic circuit quantization for the given circuit.
+    Perform a symbolic circuit quantization for the given circuit.
 
-    - Periodic variables are represented using \hat{n}/\hat{θ}
-    - Extended variables are represented using \hat{q}/\hat{ϕ}
-    - Node variables are represented using \hat{q}/\hat{φ}
+    This function performs symbolic quantization of a given circuit. The quantized 
+    variables are categorized as:
+    - Periodic variables are represented by \hat{n} / \hat{θ}.
+    - Extended variables are represented by \hat{q} / \hat{ϕ}.
+    - Node variables are represented by \hat{q} / \hat{φ}.
 
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [["J"],["L", "J"], ["C"]]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        Cv (sym.Matrix, optional): Coupling of nodes in the circuit to
-                                   fixed voltage nodes.
-        V (sym.Matrix, optional): Fixed voltages.
-        cob (sym.Matrix, optional): Change of basis from node variables
-                                    to new variables. This is Z of scqubits.
-                                    NOTE: if you have new written in terms
-                                    of old, this is the inverse of that.
-        periodic (list[int], optional): list of mode numbers (indexed from 1)
-                                        transformed coord that are periodic.
-        extended (list[int], optional): list of mode numbers (indexed from 1)
-                                        transformed coord that are extended.
-        free (list[int], optional): list of mode numbers (indexed from 1)
-                                        transformed coord that are free.
-        frozen (list[int], optional): list of mode numbers (indexed from 1)
-                                        transformed coord that are frozen.
-        return_mats (bool, optional): optionally return the capacitance and
-                                        inductance matrices
-        return_vars (bool, optional): optionally return the sympy variables
-                                      used to construct H
-        return_H_class(bool, optional): optionally return the Hamiltonian with
-                                        all coefficients removed
-        return_combos(bool, optional): optionally return the combination of
-                                       variables present
-        collect_phase (bool, optional): for speed, don't collect the phase terms.
-                                        slightly messier, but faster.
+    Parameters
+    ----------
+    circuit : list
+        A list of element labels for the desired circuit.  
+        Example: ``[["J"], ["L", "J"], ["C"]]``.
+    edges : list
+        A list of edge connections for the desired circuit.  
+        Example: ``[(0, 1), (0, 2), (1, 2)]``.
+    Cv : sym.Matrix, optional
+        Coupling matrix representing the interaction between nodes in the circuit 
+        and fixed voltage nodes.
+    V : sym.Matrix, optional
+        A matrix of fixed voltages applied in the circuit.
+    cob : sym.Matrix, optional
+        A change of basis matrix that transforms node variables to new variables. 
+        This matrix corresponds to the Z transformation of scqubits.
+        If the new variables are expressed in terms of the old, this should be the inverse.
+    periodic : list of int, optional
+        A list of mode numbers (indexed from 1) indicating which coordinates are periodic.
+    extended : list of int, optional
+        A list of mode numbers (indexed from 1) indicating which coordinates are extended.
+    free : list of int, optional
+        A list of mode numbers (indexed from 1) indicating which coordinates are free.
+    frozen : list of int, optional
+        A list of mode numbers (indexed from 1) indicating which coordinates are frozen.
+    return_mats : bool, optional
+        If True, return the capacitance and inductance matrices along with the Hamiltonian.
+    return_vars : bool, optional
+        If True, return the sympy variables used to construct the Hamiltonian.
+    return_H_class : bool, optional
+        If True, return the Hamiltonian with all coefficients removed.
+    return_combos : bool, optional
+        If True, return the combination of variables present in the Hamiltonian.
+    collect_phase : bool, optional
+        If True, skip collecting phase terms for faster execution (results in slightly less precision).
 
-    Returns:
-        Hamiltonian or Hamiltonian, Capacitance Matrix, Inductance Matrix
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - The Hamiltonian of the circuit (sympy expression).
+        - Optionally, the capacitance matrix and inductance matrix.
+        - Optionally, the sympy variables used to construct the Hamiltonian.
+        - Optionally, the Hamiltonian class with coefficients removed.
+        - Optionally, the combinations of variables present in the Hamiltonian.
     """
     edges = utils.zero_start_edges(edges)
 
@@ -479,7 +509,7 @@ def quantize_circuit(circuit, edges, Cv=None, V=None, cob=None,
     to_return = (H,)
 
     if return_H_class:
-        to_return = to_return + (utils.remove_coeff_(H, list(combosQ)+combos),)
+        to_return = to_return + (utils._remove_coeff(H, list(combosQ)+combos),)
     if return_combos:
         to_return = to_return + (list(combosQ)+combos,)
     if return_mats:

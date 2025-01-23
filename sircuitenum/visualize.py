@@ -1,29 +1,25 @@
-"edge_enumerate.py: Contains functions to visualize the circuits present"
-__author__ = "Mohit Bhat, Eli Weissler"
+__doc__ = "visualize.py: Contains functions to visualize circuits and draw diagrams"
+__author__ = "Eli Weissler, Mohit Bhat"
 __version__ = "0.1.0"
-__status__ = "Development"
-
-# -------------------------------------------------------------------
-# Import Statements
-# -------------------------------------------------------------------
-
-import matplotlib.transforms
-import numpy as np
-import networkx as nx
-import matplotlib
-import matplotlib.pyplot as plt
+__all__ = ["draw_circuit_diagram", "draw_basegraph", "draw_circuit_graph"]
 
 from pathlib import Path
+
+import numpy as np
+import networkx as nx
+import matplotlib.transforms
+import matplotlib
+import matplotlib.pyplot as plt
 import schemdraw.elements
 from tqdm import tqdm
 from scipy.spatial.distance import pdist
-
 import schemdraw
 import schemdraw.elements as elm
 
 from sircuitenum import utils
 from sircuitenum import reduction as red
 from sircuitenum import visualize as viz
+
 G_POS_BG = {2: [{0: np.array([-1/np.sqrt(2), -1/np.sqrt(2)]),
                 1: np.array([0., 0.])}],
          3: [{0: np.array([0., 0.]),
@@ -577,19 +573,3 @@ class DotCustom(schemdraw.elements.Element):
         self.segments.append(schemdraw.segments.SegmentCircle((0, 0),
                                                               self.params['radius'],
                                                               **kwargs))
-
-
-
-if __name__ == "__main__":
-
-    # Basegraphs
-    # base = '/home/eweissler/img/basegraphs'
-    # draw_all_basegraphs(base,n_start=2, n_end=5)
-
-    # # Actual Circuits
-    base = "/home/eweissler/img/fixed_layout"
-    toLoad = "/home/eweissler/src/research_scratch/paper/circuits_4_nodes_7_elems.db"
-    for n_nodes in range(2, 3):
-        out_dir = Path(base, f'{n_nodes}_node_circuits')
-        out_dir.mkdir(parents=True, exist_ok=True)
-        draw_all_qubits(toLoad, n_nodes, out_dir=out_dir, layout='fixed')
