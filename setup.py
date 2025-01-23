@@ -29,7 +29,7 @@ setup(
     license='GNU GPL-3.0',
     long_description_content_type="text/markdown",
     long_description=open('README.md').read(),
-    python_requires='>=3.9.0',
+    python_requires='>=3.11.0',
     install_requires=[
                     # enumeration dependencies
                     'numpy==1.26.*',
