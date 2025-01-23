@@ -21,7 +21,7 @@ def find_version(*file_paths):
 
 setup(
     name='Superconducting Circuit Enumeration',
-    version='0.1',  # find_version('asdf', '__init__.py'),
+    version='0.1',
     description='A library for enumerating superconducting circuits',
     url='https://github.com/eliweissler/sircuitenum',
     author='Eli Weissler, Mohit Bhat',
@@ -29,7 +29,7 @@ setup(
     license='GNU GPL-3.0',
     long_description_content_type="text/markdown",
     long_description=open('README.md').read(),
-    python_requires='>3.9.0',
+    python_requires='>=3.9.0',
     install_requires=[
                     # enumeration dependencies
                     'numpy==1.26.*',
@@ -54,9 +54,9 @@ setup(
                     "requests",
 
                     # doc dependencies
-                    'sphinx',
+                    'sphinx==6.2.1',
+                    'sphinx_rtd_theme==1.2.2',
                     'sphinx-autodoc-typehints',
-                    'sphinx_rtd_theme',
                     'nbsphinx',
                     'myst-parser',
 

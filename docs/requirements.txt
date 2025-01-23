@@ -1,3 +1,17 @@
 # Defining the exact version will make sure things don't break
 sphinx==6.2.1
 sphinx_rtd_theme==1.2.2
+
+# enumeration dependencies
+numpy==1.26.*
+networkx==3.4.*
+scipy==1.13.*
+sympy==1.13.*
+pandas==2.2.*
+SQcircuit==1.0.*
+scqubits==4.2.*
+schemdraw==0.19.*
+func_timeout==4.3.*
+antlr4-python3-runtime==4.11
+matplotlib
+tqdm
