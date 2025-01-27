@@ -8,7 +8,7 @@ import pandas as pd
 from pathlib import Path
 
 from sircuitenum import utils
-from sircuitenum.tests.test_qpackage_interface import TEST_CIRCUITS
+from test_qpackage_interface import TEST_CIRCUITS
 
 import numpy.random
 numpy.random.seed(7)  # seed random number generation for all calls to rand_ops
