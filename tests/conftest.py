@@ -1,10 +1,11 @@
-import os
-
+import os, sys
+from pathlib import Path
 from requests.exceptions import RequestException
 import pytest
 from unittest.mock import create_autospec, Mock
 
-PATH = os.path.dirname(os.path.realpath(__file__))
+PATH = str(Path(Path(os.path.realpath(__file__)).parent, "sircuitenum"))
+sys.path.append(PATH)
 
 
 def pytest_addoption(parser):

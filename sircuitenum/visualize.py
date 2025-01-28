@@ -1,29 +1,26 @@
-"edge_enumerate.py: Contains functions to visualize the circuits present"
-__author__ = "Mohit Bhat, Eli Weissler"
+__doc__ = "visualize.py: Contains functions to visualize circuits and draw diagrams"
+__author__ = "Eli Weissler, Mohit Bhat"
 __version__ = "0.1.0"
-__status__ = "Development"
-
-# -------------------------------------------------------------------
-# Import Statements
-# -------------------------------------------------------------------
-
-import matplotlib.transforms
-import numpy as np
-import networkx as nx
-import matplotlib
-import matplotlib.pyplot as plt
+__all__ = ["draw_circuit_diagram", "draw_basegraph", "draw_circuit_graph"]
 
 from pathlib import Path
+from typing import Union
+
+import numpy as np
+import networkx as nx
+import matplotlib.transforms
+import matplotlib
+import matplotlib.pyplot as plt
 import schemdraw.elements
 from tqdm import tqdm
 from scipy.spatial.distance import pdist
-
 import schemdraw
 import schemdraw.elements as elm
 
 from sircuitenum import utils
 from sircuitenum import reduction as red
 from sircuitenum import visualize as viz
+
 G_POS_BG = {2: [{0: np.array([-1/np.sqrt(2), -1/np.sqrt(2)]),
                 1: np.array([0., 0.])}],
          3: [{0: np.array([0., 0.]),
@@ -196,25 +193,52 @@ def black_or_white_text(color: tuple):
 def draw_circuit_graph(circuit: list, edges: list, gtype: str = "component",
                        out="",
                        node_size: float = 10000, scale: float = 6,
-                       font_size: int = 30):
+                       font_size: int = 30) -> Union[plt.Figure, None]:
     """
-    Draw the port or component graph corresponding to the given circuit
+    Draws the port or component graph representation of a given circuit.
 
-    Args:
-        circuit (list of str): a list of elements for the desired circuit
-                                 (i.e., [[['C'],['C'],['L'],['C','J']])
-        edges (list of tuples of ints): a list of edge connections for the
-                             desired circuit (i.e., [(0,1),(1,2),(2,3),(3,0)])
-        gtype (str, optional): type of circuit graph to draw. Options are 'component'
-                               or 'port'
-        out (str, optional): filename to save as, including extension.
-                                 Defaults to "circuit_graph.png".
-        node_size (float, optional): size for tuning size of nodes in plot
-        scale (float, optional): size for tuning overall spacing of nodes
-        font_size (int, optional): text size for node labels
+    This function visualizes a quantum circuit as either a **port graph** or a **component graph** 
+    using NetworkX and Matplotlib. The generated graph can be displayed interactively 
+    or saved as an image file.
 
-    Returns:
-        matplotlib figure if out is "", else nothing
+    Parameters
+    ----------
+    circuit : list of list of str
+        A nested list representing the circuit elements.  
+        Example: `[['C'], ['C'], ['L'], ['C', 'J']]`
+    edges : list of tuple of int
+        A list of edge connections specifying how circuit elements are connected.  
+        Example: `[(0,1), (1,2), (2,3), (3,0)]`
+    gtype : str, optional
+        Type of graph to draw. Options are:
+        - `'component'` : Draws a component-level circuit graph.
+        - `'port'` : Draws a port-level circuit graph.  
+        Default is `'component'`.
+    out : str, optional
+        Filename (with extension) to save the plot.  
+        If `""` (empty string), the graph is displayed interactively.  
+        Default is `"circuit_graph.png"`.
+    node_size : float, optional
+        Size parameter for nodes in the plotted graph.
+    scale : float, optional
+        Scaling factor for overall spacing of nodes.
+    font_size : int, optional
+        Font size for node labels.
+
+    Returns
+    -------
+    matplotlib.figure.Figure or None
+        - If `out=""`, returns a Matplotlib figure object for interactive viewing.
+        - Otherwise, saves the figure to `out` and returns `None`.
+
+    Examples
+    --------
+    >>> draw_circuit_graph(
+    >>>    circuit=[['C'], ['C'], ['L'], ['C', 'J']],
+    >>>    edges=[(0,1), (1,2), (2,3), (3,0)],
+    >>>    gtype="component",
+    >>>    out="circuit.png"
+    >>> )
     """
 
     # Get the layout and scale it
@@ -375,34 +399,50 @@ def draw_all_qubits(file: str, n_nodes: int, out_dir: str,
 def draw_circuit_diagram(circuit: list, edges: list,
                          out: str = "",
                          scale: float = 4.0, layout: str = 'fixed',
-                         spread: float = 2/5, graph_index: int = None):
+                         spread: float = 2/5, graph_index: int = None) -> None:
     """
-    Draws the circuit diagram using schemdraw.
+    Draw the circuit diagram using `schemdraw`.
 
-    For parallel elements goes to 1/4 of the way along
-    the connection and fans oout to do the elements in parallel.
+    For parallel elements, connections are split 1/4 of the way along and fan out 
+    to display parallel elements. Non-planar graphs are not adjusted to avoid overlap.
 
-    Doesn't do anything to avoid overlap for non-planar graphs.
+    Parameters
+    ----------
+    circuit : list
+        A list of element labels for the desired circuit.  
+        Example: ``[["J"], ["L", "J"], ["C"]]``.
+    edges : list
+        A list of edge connections for the desired circuit.  
+        Example: ``[(0,1), (0,2), (1,2)]``.
+    out : str
+        Filename to save the plot. If an empty string (``""``) is provided, 
+        the plot is displayed interactively.
+    scale : float
+        Scaling factor for the networkx positions to spread out the plots if needed.
+    layout : str
+        Options for graph layouts.  
+        **"spring"** produces aesthetically pleasing circuits but may lead to 
+        overlapping elements, even for planar graphs.
+    spread : float
+        Fraction of edge length used to fan out parallel components.
+    graph_index : int
+        Graph number for a fixed layout. Can also be inferred from `edges`.
 
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [["J"],["L", "J"], ["C"]]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        out (str): filename to save the plot to,
-                    a blank string makes the plot show up interactively
-        scale (float): scaling factor for the networkx positions, to spread out
-                        the plots if needed.
-        layout (str): options for graph layouts.
-                      Spring seems to produce prettier circuits, but it often
-                      results in overlapping elements, even for planar graphs.
-        spread (float): fraction of edge length to fan out parallel components
-        graph_index (int): Graph number for fixed layout. Can also infer from edges.
+    Returns
+    -------
+    None
+        Displays the plot interactively if `out == ""`.
 
-    Returns:
-        None: displays plot if out == ""
+    Examples
+    --------
+    >>> draw_circuit_diagram(
+    >>>     circuit=[["J"], ["L", "J"], ["C"]],
+    >>>     edges=[(0,1), (0,2), (1,2)],
+    >>>     out="circuit.png",
+    >>>     layout="spring",
+    >>>     scale=1.5
+    >>> )
     """
-
     edges = utils.zero_start_edges(edges)
 
     elem_dict = {
@@ -577,19 +617,3 @@ class DotCustom(schemdraw.elements.Element):
         self.segments.append(schemdraw.segments.SegmentCircle((0, 0),
                                                               self.params['radius'],
                                                               **kwargs))
-
-
-
-if __name__ == "__main__":
-
-    # Basegraphs
-    # base = '/home/eweissler/img/basegraphs'
-    # draw_all_basegraphs(base,n_start=2, n_end=5)
-
-    # # Actual Circuits
-    base = "/home/eweissler/img/fixed_layout"
-    toLoad = "/home/eweissler/src/research_scratch/paper/circuits_4_nodes_7_elems.db"
-    for n_nodes in range(2, 3):
-        out_dir = Path(base, f'{n_nodes}_node_circuits')
-        out_dir.mkdir(parents=True, exist_ok=True)
-        draw_all_qubits(toLoad, n_nodes, out_dir=out_dir, layout='fixed')

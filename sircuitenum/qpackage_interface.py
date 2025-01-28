@@ -1,14 +1,7 @@
-"qpackage_interface.py: converts circuits to analysis packages"
-__author__ = "Mohit Bhat, Eli Weissler"
+__doc__ = "qpackage_interface.py: contains functions that interface with scqubits and sqcircuit"
+__author__ = "Eli Weissler, Mohit Bhat"
 __version__ = "0.1.0"
-__status__ = "Development"
-__all__ = ['single_edge_loop_kiting',
-           'find_loops',
-           'inductive_subgraph',
-           'to_SQcircuit',
-           'to_SCqubits',
-           'to_CircuitQ',
-           'to_Qucat']
+__all__ = ["to_SQcircuit", "to_SCqubits", "add_explicit_ground_node", "find_loops"]
 
 # -------------------------------------------------------------------
 # Import Statements
@@ -80,21 +73,31 @@ def single_edge_loop_kiting(circuit, edges):
 
 
 def find_loops(circuit, edges, ind_elem=["J", "L"]):
-    """ Provides a list of loops
+    """
+    Generate a list of loops for a given circuit.
 
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [("J",),("L", "J"), ("C",)]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        ind_elem (list): symbols that define inductive elements.
-                        Default is ind_elem = ["J", "L"]
+    This function returns a list of loops for the specified circuit by identifying 
+    the loops formed by the inductive elements and edge connections.
 
-    Returns:
-        loop_lst (list): a list of loops in the circuit
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [("J",),("L", "J"), ("C",)]
-        edges (list): a list of edge connections for the desired circuit
+    Parameters
+    ----------
+    circuit : list
+        A list of element labels for the desired circuit.  
+        Example: ``[("J",), ("L", "J"), ("C",)]``.
+    edges : list
+        A list of edge connections for the desired circuit.  
+        Example: ``[(0, 1), (0, 2), (1, 2)]``.
+    ind_elem : list, optional
+        A list of symbols that define inductive elements. The default is 
+        ``["J", "L"]`` for Josephson junctions and inductors.
+
+    Returns
+    -------
+    tuple
+        A tuple containing:
+        - ``loop_lst`` (list): A list of loops in the circuit.
+        - ``circuit`` (list): The input circuit list.
+        - ``edges`` (list): The input edges list.
     """
 
     # save min mode number for recovering afterwards
@@ -141,25 +144,34 @@ def inductive_subgraph(circuit, edges, ind_elem=["J", "L"]):
 def add_explicit_ground_node(circuit: list, edges: list, params: dict, ecg: float = 20,
                              rand_amp=0.0):
     """
-    Takes in a circuit + edges combo and returns a modified
-    version with an explicit ground node added (as node 0)
+    Add an explicit ground node to the circuit and modify the edges.
 
-    If the 0 node was present before, adds 1 to each node
+    This function takes a circuit and its edges and returns a modified version with 
+    an explicit ground node (node 0) added. If node 0 was already present in the 
+    edges, the function increments all node labels by 1.
 
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [("J"),("L", "J"), ("C")]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        params (dict): dictionary with entries C, L, J, CJ,
-                    which represent the paramaters for the circuit elements.
-                    Additionally entries of C_units, L_units, J_units,
-                    and CJ_units.
-        ecg (float): EC for capacitors coupling to ground in GHz
-    
-    Returns:
-        Modified version of circuit, edges with capacitive coupling
-        to a ground node added
+    Parameters
+    ----------
+    circuit : list
+        A list of element labels for the desired circuit.  
+        Example: ``[("J"), ("L", "J"), ("C")]``.
+    edges : list
+        A list of edge connections for the desired circuit.  
+        Example: ``[(0, 1), (0, 2), (1, 2)]``.
+    params : dict
+        A dictionary containing parameter values for the circuit elements. The dictionary should 
+        include entries for ``C``, ``L``, ``J``, and ``CJ``, which represent the values for 
+        capacitors, inductors, Josephson junctions, and coupling capacitances, respectively. 
+        Additionally, it may include units for these parameters as ``C_units``, ``L_units``, 
+        ``J_units``, and ``CJ_units``.
+    ecg : float
+        The EC (charging energy) for capacitors coupling to the ground, in GHz.
+
+    Returns
+    -------
+    tuple
+        A tuple containing the modified version of the circuit and edges with 
+        capacitive coupling to a ground node added.
     """
     # Get unique node values
     edges_og = edges[:]
@@ -212,25 +224,33 @@ def swap_nodes(edges: list, na: int, nb: int):
     return new_edges
 
 def to_SQcircuit(circuit: list, edges: list,
-                 trunc_num: Union[int, list] = 50, **kwargs):
-    """Converts circuit from list of labels and edges to a
-    SQcircuit formatted circuit network
+                 trunc_num: Union[int, list] = 50, **kwargs) -> sq.Circuit:
+    """
+    Convert a circuit from a list of labels and edges to an SQcircuit-formatted circuit network.
 
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [["J"],["L", "J"], ["C"]]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        trunc_num (int or list): truncation number for each mode
-        params (dict): dictionary with entries C, L, J, CJ,
-                    which represent the paramaters for the circuit elements.
-                    Additionally entries of C_units, L_units, J_units,
-                    and CJ_units. Inputting nothing uses the default
-                    parameter values/units from utils.ELEM_DICT.
+    This function converts the input circuit, specified by a list of element labels and edge 
+    connections, into a circuit network compatible with the SQcircuit package.
 
-    Returns:
-        converted_circuit (SQcircuit.Circuit): returns the input circuit
-                                               converted to SQcircuit.
+    Parameters
+    ----------
+    circuit : list
+        A list of element labels for the desired circuit.  
+        Example: ``[["J"], ["L", "J"], ["C"]]``.
+    edges : list
+        A list of edge connections for the desired circuit.  
+        Example: ``[(0, 1), (0, 2), (1, 2)]``.
+    trunc_num : int or list
+        The truncation number for each mode in the circuit.
+    params : dict, optional
+        A dictionary containing the parameters for the circuit elements, including:
+        - ``C``, ``L``, ``J``, and ``CJ`` for the circuit components.
+        - Optional entries for units: ``C_units``, ``L_units``, ``J_units``, and ``CJ_units``.
+        If no parameters are provided, default values from ``utils.ELEM_DICT`` will be used.
+
+    Returns
+    -------
+    SQcircuit.Circuit
+        The input circuit, converted to the SQcircuit format.
     """
 
     params = kwargs.get("params", utils.gen_param_dict(circuit, edges,
@@ -353,33 +373,40 @@ def to_SQcircuit(circuit: list, edges: list,
 def to_SCqubits(circuit: list, edges: list,
                 trunc_num: Union[int, list] = 50,
                 cutoff: Union[int, list] = 101,
-                **kwargs):
-    """Converts circuit from list of labels and edges to a
-    SCqubits formatted circuit network
-
-    ## NOTE: ONLY SUPPORTS VALUES IN GHz
-
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [("J",),("L", "J"), ("C",)]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        trunc_num (int or list): Number of eigenstates to consider for each
-                                 mode in a composite circuit.
-        https://scqubits.readthedocs.io/en/latest/guide/ipynb/custom_circuit_hd.html
-        cutoff (int or list): Number of points to use in the underlying
-                              position space for each mode.
-
-        params (dict): dictionary with entries C, L, J, CJ,
-                    which represent the paramaters for the circuit elements.
-                    Additionally entries of C_units, L_units, J_units,
-                    and CJ_units. Inputting nothing uses the default
-                    parameter values/units from utils.ELEM_DICT.
-
-    Returns:
-        converted_circuit (scqubits.Circuit): returns the input circuit
-                                               converted to scqubits.
+                **kwargs) -> scq.Circuit:
     """
+    Convert a circuit from a list of labels and edges to an SCqubits-formatted circuit network.
+
+    This function converts the input circuit, specified by a list of element labels and edge 
+    connections, into a circuit network compatible with the SCqubits package.
+
+    **Note:** This function only supports values in GHz.
+
+    Parameters
+    ----------
+    circuit : list
+        A list of element labels for the desired circuit.  
+        Example: ``[("J",), ("L", "J"), ("C",)]``.
+    edges : list
+        A list of edge connections for the desired circuit.  
+        Example: ``[(0, 1), (0, 2), (1, 2)]``.
+    trunc_num : int or list
+        The number of eigenstates to consider for each mode in a composite circuit.
+        For more details, refer to: `SCqubits Custom Circuit Guide <https://scqubits.readthedocs.io/en/latest/guide/ipynb/custom_circuit_hd.html>`_.
+    cutoff : int or list
+        The number of points to use in the underlying position space for each mode.
+    params : dict, optional
+        A dictionary with entries for the circuit parameters, including:
+        - ``C``, ``L``, ``J``, and ``CJ`` for the circuit elements.
+        - Optional entries for units: ``C_units``, ``L_units``, ``J_units``, and ``CJ_units``.
+        If no parameters are provided, default values from ``utils.ELEM_DICT`` are used.
+
+    Returns
+    -------
+    scqubits.Circuit
+        The input circuit, converted to the SCqubits circuit format.
+    """
+
     params = kwargs.get("params", utils.gen_param_dict(circuit, edges,
                                                        utils.ELEM_DICT))
     sym_cir = kwargs.get("sym_cir", False)

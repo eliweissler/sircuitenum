@@ -1,14 +1,9 @@
-#!/usr/bin/env python
-"""circuit_reduction.py: Contains functions to reduce the number
- of duplicate circuits present"""
-__author__ = "Mohit Bhat, Eli Weissler"
+__doc__ = "reduction.py: Contains functions used to identify redundant or duplicate circuits"
+__author__ = "Eli Weissler, Mohit Bhat"
 __version__ = "0.1.0"
-__status__ = "Development"
+__all__ = ["mark_non_isomorphic_set", "isomorphic_circuit_in_set", "convert_circuit_to_component_graph"]
 
-# -------------------------------------------------------------------
-# Import Statements
-# -------------------------------------------------------------------
-
+from typing import Union
 
 import numpy as np
 import pandas as pd
@@ -28,39 +23,40 @@ def colors_match(n1_attrib, n2_attrib):
 def convert_circuit_to_component_graph(circuit: list, edges: list,
                                        ground_nodes: list = [],
                                        ground_color: int = -1,
-                                       comp_map: dict = None):
-    """Encodes a circuit as a colored component graph -- see
-    Enumeration of Architectures with Perfect Matchings
-    Herber, Guo, Allison.
+                                       comp_map: dict = None) -> nx.Graph:
+    """
+    Encodes a circuit as a colored component graph.
 
-    Assumes that all circuit elements are two port-simple
-    devices (i.e. symmetric)
+    This representation follows the method described in  
+    *"Enumeration of Architectures with Perfect Matchings" (Herber, Guo, Allison).*  
 
-    Assumes component type isomorphism. This
-    means that different copies of the same component 
-    are considered identical.
+    ### Assumptions:
+    - All circuit elements are **two-port symmetric devices**.
+    - **Component type isomorphism** is assumed, meaning identical components are treated as the same.
+    - **Ground edges are automatically removed** if placed between labeled ground nodes.
+    - Differs from port graphs by representing **each node and device as a single vertex** instead of treating ports separately.
 
-    Automatically removes any edges placed between labeled 
-    ground nodes.
+    Parameters
+    ----------
+    circuit : list of list of str
+        A list of element labels for the desired circuit.  
+        Example: ``[['J'], ['L', 'J'], ['C']]``.
+    edges : list of tuple of int
+        A list of edge connections for the desired circuit.  
+        Example: ``[(0,1), (0,2), (1,2)]``.
+    ground_nodes : list of int, optional
+        A list of nodes that are grounded.  
+        Example: ``[0, 1]``.
+    ground_color : int, optional
+        Color assigned to ground nodes. Defaults to ``-1``.
+    comp_map : dict, optional
+        A dictionary mapping components to colors for the colored graph.  
+        Ensures consistency between different circuits.
 
-    Practically differs from port graphs in that each node
-    and device is represented by a single graph vertex, as
-    opposed to each port being a different vertex.
-
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [["J"],["L", "J"], ["C"]]
-        edges (list): a list of edge connections for the desired circuit
-                        e.g. [(0,1), (0,2), (1,2)]
-        ground_nodes (list): optionally, a list of nodes that are grounded
-                             e.g. [0, 1]
-        ground_color int: color for ground nodes, default is -1
-        comp_map (dict): dictionary that maps components to colors for
-                         the colored graph. So it's consistent between
-                         different circuits.
-
-    Returns:
-        nx.Graph representation of the port graph
+    Returns
+    -------
+    networkx.Graph
+        A **NetworkX graph** representation of the component graph.
     """
     if comp_map is None:
         comp_map = utils.ENUM_PARAMS["EDGE_COLOR_DICT"]
@@ -127,7 +123,7 @@ def convert_circuit_to_component_graph(circuit: list, edges: list,
 def convert_circuit_to_port_graph(circuit: list, edges: list,
                                   ground_nodes: list = [],
                                   ground_color: int = -1,
-                                  comp_map: dict = None):
+                                  comp_map: dict = None) -> nx.Graph:
     """Encodes a circuit as a colored port graph -- see
     Enumeration of Architectures with Perfect Matchings
     Herber, Guo, Allison.
@@ -256,27 +252,38 @@ def convert_circuit_to_port_graph(circuit: list, edges: list,
 
 
 def isomorphic_circuit_in_set(circuit: list, edges: list, c_set: list,
-                              e_set=None, return_index=False):
-    """Helper function to see if a circuit that is isomprphic
-    to the given circuit
-    (list/tuple of tuples) is in a set of circuits
-    (list of list/tuple of tuples)
+                              e_set=None, return_index=False) -> Union[int, bool]:
+    """
+    Check if a circuit that is isomorphic to the given circuit exists in a set of circuits.
 
-    Args:
-        circuit (list): a list of element labels for the desired circuit
-                        e.g. [("J"),("L", "J"), ("C")]
-        edges (list): a list of edge connections for the circuit
-                        (assumed edges for everything in the set
-                        if no e_set is given)
-                        e.g. [(0,1), (0,2), (1,2)]
-        c_set (list of lists): list of circuit-like elements
-        e_set (list of lists): list of edges for the circuit list. If none
-                               is given then assumes edges argument is the edge
-        return_index (bool): return index of isomorphic circuit, returns
-                             nan if it's not present
+    This function determines whether a circuit, represented as a list or tuple of tuples, 
+    has an isomorphic counterpart in a given set of circuits.
 
-    Returns:
-        True if circuit is present in c_set, False if it isn't
+    Parameters
+    ----------
+    circuit : list
+        A list of element labels for the desired circuit.  
+        Example: ``[("J"), ("L", "J"), ("C")]``.
+    edges : list
+        A list of edge connections for the circuit. If `e_set` is not provided, 
+        this is assumed to be the edge set for all circuits in `c_set`.  
+        Example: ``[(0,1), (0,2), (1,2)]``.
+    c_set : list of list
+        A list of circuit-like elements representing different circuits.
+    e_set : list of list, optional
+        A list of edge sets corresponding to the circuits in `c_set`. 
+        If `None`, the `edges` parameter is used as the edge set.
+    return_index : bool, optional
+        If `True`, return the index of the isomorphic circuit in `c_set`. 
+        If no match is found, returns `nan`.
+
+    Returns
+    -------
+    bool or int
+    - `True` if an isomorphic circuit is present in `c_set`, `False` otherwise.
+    - If `return_index` is `True`, returns the index of the isomorphic circuit, 
+    or `nan` if not found.
+
     """
     port_graph = convert_circuit_to_port_graph(circuit, edges)
     for i, c2 in enumerate(c_set):
@@ -311,7 +318,7 @@ def mark_non_isomorphic_set(df: pd.DataFrame, **kwargs):
                                 Defaults to considering all.
 
     Returns:
-        Nothing, fills in the 'in_non_iso_set' and 'equiv_circuit'
+        None, fills in the 'in_non_iso_set' and 'equiv_circuit'
         columns of df
     """
     to_consider = kwargs.get("to_consider", np.ones(df.shape[0], dtype=bool))

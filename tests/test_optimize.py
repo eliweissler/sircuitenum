@@ -491,11 +491,11 @@ def test_optimize_diff_evol():
     trials = [1, 100]
     ranges = [(0.1, 10), (1, 30), (0.05, 0.5), (0,3)]
     res_sq = optim.optimize_diff_evol(circuit, edges, ground_node,
-                             ranges, offset_integer, trials,
+                             ranges, offset_integer, trials=trials,
                              workers=workers, package=package)
     package = "sc"
     res_sc = optim.optimize_diff_evol(circuit, edges, ground_node,
-                             ranges, offset_integer, trials,
+                             ranges, offset_integer, trials=trials,
                              workers=workers, package=package)
     
 
