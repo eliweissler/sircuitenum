@@ -170,8 +170,11 @@ def add_explicit_ground_node(circuit: list, edges: list, params: dict, ecg: floa
     Returns
     -------
     tuple
-        A tuple containing the modified version of the circuit and edges with 
-        capacitive coupling to a ground node added.
+        A tuple containing a modified version of:
+            - circuit
+            - edges
+            - params 
+        with capacitive coupling to a separate ground node added.
     """
     # Get unique node values
     edges_og = edges[:]
@@ -411,20 +414,25 @@ def to_SCqubits(circuit: list, edges: list,
                                                        utils.ELEM_DICT))
     sym_cir = kwargs.get("sym_cir", False)
     initiate_sym_calc = kwargs.get("initiate_sym_calc", True)
+    add_gnd = kwargs.get("add_ground_node", False)
 
     # ground node is node = 0
     ground_node = kwargs.get("ground_node", None)
     if ground_node is None:
-        edges = utils.zero_start_edges(edges)
-        edges = [(n1 + 1, n2 + 1) for (n1, n2) in edges]
-        new_params = {}
-        for key in params:
-            edge, elem = key
-            new_edge = (edge[0] + 1, edge[1] + 1)
-            new_params[(new_edge, elem)] = params[(edge, elem)]
-        params = new_params
+        if add_gnd:
+            circuit, edges, params = add_explicit_ground_node(circuit, edges, params)
+        else:
+            edges = utils.zero_start_edges(edges)
+            edges = [(n1 + 1, n2 + 1) for (n1, n2) in edges]
+            new_params = {}
+            for key in params:
+                edge, elem = key
+                new_edge = (edge[0] + 1, edge[1] + 1)
+                new_params[(new_edge, elem)] = params[(edge, elem)]
+            params = new_params
     elif ground_node != 0:
         edges = swap_nodes(edges, 0, ground_node)
+        new_params = {}
         for key in params:
             edge, elem = key
             new_edge = swap_nodes([edge], 0, ground_node)[0]

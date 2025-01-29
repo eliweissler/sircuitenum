@@ -170,8 +170,7 @@ def make_sc(circuit: list, edges: list, param_sets: list, ground_node: int = 0,
     params = gen_param_dict_anyq(circuit, edges, param_sets, cj=cj)
     sc = qpi.to_SCqubits(circuit, edges, params=params,
                            ground_node=ground_node,
-                           trunc_num=trunc_num)
-
+                           trunc_num=trunc_num, add_ground_node=True)
     # Set the extermal fluxes/charges
     nelems = sum(utils.count_elems_mapped(circuit).values())
     i = nelems
@@ -358,6 +357,8 @@ def get_ngate_mc(param_set: list, *args, **kwargs):
         
         - workers (int): The number of workers to use for parallel computation.
 
+        - package (str): which package to use "sc" or "sq"
+
     kwargs : dict, optional
         Additional keyword arguments for customization.
 
@@ -494,13 +495,13 @@ def gen_param_range_anyq(circuit: list, edges: list, ground_node: int, offset_in
                 else:
                     param_range.append((0, 1))
     elif package == "sc":
-        scq = qpi.to_SCqubits(circuit, edges, ground_node=ground_node, rand_amp=0.25)
-        for _ in scq.external_fluxes:
+        cir = qpi.to_SCqubits(circuit, edges, ground_node=ground_node, rand_amp=0.25)
+        for _ in cir.external_fluxes:
             if offset_integer:
                 param_range.append((min(INT_OFFSETS_FLUX.keys()), max(INT_OFFSETS_FLUX.keys())))
             else:
                 param_range.append((0, 1))
-        for _ in scq.offset_charges:
+        for _ in cir.offset_charges:
             if offset_integer:
                 param_range.append((min(INT_OFFSETS_CHARGE.keys()), max(INT_OFFSETS_CHARGE.keys())))
             else:
