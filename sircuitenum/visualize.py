@@ -482,11 +482,15 @@ def draw_circuit_diagram(circuit: list, edges: list,
         pos = nx.spring_layout(G)
     elif layout == 'fixed':
         pos = G_POS[G.number_of_nodes()][graph_index]
+    else:
+        pos = layout
+    
+    print(pos)
 
     # Scale
     scaled_pos = {}
     for k in pos:
-        scaled_pos[k] = pos[k]*scale
+        scaled_pos[k] = pos[k]*float(scale)
 
     # Define the circuit elements
     elem_bank = {

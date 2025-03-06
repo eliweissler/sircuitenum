@@ -195,35 +195,35 @@ def test_find_equiv_cir_series():
     edges = [(0, 2), (2, 1), (0, 1)]
     circuit = [("L",), ("L",), ("L",)]
     uid = enum.find_equiv_cir_series(TEMP_FILE, circuit, edges)
-    c, e = red.remove_series_elems(circuit, edges)
+    c, e = red.linear_star_mesh(circuit, edges)
     c2, e2 = utils.get_circuit_data(TEMP_FILE, uid)
     assert red.isomorphic_circuit_in_set(c, e, [c2])
 
     edges = [(0, 2), (2, 1), (0, 1)]
     circuit = [("C",), ("L",), ("L",)]
     uid = enum.find_equiv_cir_series(TEMP_FILE, circuit, edges)
-    c, e = red.remove_series_elems(circuit, edges)
+    c, e = red.linear_star_mesh(circuit, edges)
     c2, e2 = utils.get_circuit_data(TEMP_FILE, uid)
     assert red.isomorphic_circuit_in_set(c, e, [c2])
 
     edges = [(0, 2), (2, 1), (0, 1)]
     circuit = [("C",), ("C",), ("J",)]
     uid = enum.find_equiv_cir_series(TEMP_FILE, circuit, edges)
-    c, e = red.remove_series_elems(circuit, edges)
+    c, e = red.linear_star_mesh(circuit, edges)
     c2, e2 = utils.get_circuit_data(TEMP_FILE, uid)
     assert red.isomorphic_circuit_in_set(c, e, [c2])
 
     edges = [(0, 1), (1, 2), (2, 3)]
     circuit = [("C",), ("C",), ("J",)]
     uid = enum.find_equiv_cir_series(TEMP_FILE, circuit, edges)
-    c, e = red.remove_series_elems(circuit, edges)
+    c, e = red.linear_star_mesh(circuit, edges)
     c2, e2 = utils.get_circuit_data(TEMP_FILE, uid)
     assert red.isomorphic_circuit_in_set(c, e, [c2])
 
     edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
     circuit = [("C",), ("C",), ("J",), ("L",)]
     uid = enum.find_equiv_cir_series(TEMP_FILE, circuit, edges)
-    c, e = red.remove_series_elems(circuit, edges)
+    c, e = red.linear_star_mesh(circuit, edges)
     c2, e2 = utils.get_circuit_data(TEMP_FILE, uid)
     assert red.isomorphic_circuit_in_set(c, e, [c2])
 
@@ -546,16 +546,16 @@ def test_assign_H_groups():
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=4)
     enum.assign_H_groups(TEMP_FILE, 3, n_workers=4, resume=False)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
-    assert df.H_group.unique().size == 22
-    assert df.H_group_sym.unique().size == 22
+    assert df.H_group.unique().size == 20 # used to be 22
+    assert df.H_group_sym.unique().size == 20
     os.remove(TEMP_FILE)
 
     
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=5, n_workers=1)
     enum.assign_H_groups(TEMP_FILE, 3, n_workers=1, resume=False)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
-    assert df.H_group.unique().size == 22
-    assert df.H_group_sym.unique().size == 22
+    assert df.H_group.unique().size == 20
+    assert df.H_group_sym.unique().size == 20
     os.remove(TEMP_FILE)
 
 

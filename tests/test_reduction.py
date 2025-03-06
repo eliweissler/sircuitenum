@@ -156,45 +156,77 @@ def test_convert_circuit_to_port_graph():
     assert all(x in G.edges for x in exp_edges)
 
 
-def test_remove_series_elems():
+def test_linear_star_mesh():
 
     # Test a few obvious cases
     edges = [(0, 1), (1, 2), (2, 0)]
     circuit = [("L",), ("L",), ("L",)]
-    c2, e2 = red.remove_series_elems(circuit, edges)
+    c2, e2 = red.linear_star_mesh(circuit, edges)
     assert e2 == [(0, 1)]
     assert c2 == [("L",)]
 
-    edges = [(0, 1), (1, 2)]
-    circuit = [("C",), ("L",)]
-    c2, e2 = red.remove_series_elems(circuit, edges)
-    assert e2 == edges
-    assert c2 == circuit
-
     edges = [(0, 1), (1, 2), (2, 0)]
     circuit = [("C",), ("C",), ("L",)]
-    c2, e2 = red.remove_series_elems(circuit, edges)
+    c2, e2 = red.linear_star_mesh(circuit, edges)
     assert e2 == [(0, 1)]
     assert c2 == [("C", "L")]
 
-    # Some larger ones -- test the 2,3/3,4 connection
+    # Some larger ones -- dangling C
     edges = [(0, 1), (1, 2), (2, 3), (2, 4), (3, 4)]
     circuit = [("C",), ("J",), ("C", "J"), ("L", "J"), ("L",)]
-    c2, e2 = red.remove_series_elems(circuit, edges)
-    assert e2 == edges
-    assert c2 == circuit
+    c2, e2 = red.linear_star_mesh(circuit, edges)
+    assert e2 == [(0, 1), (1, 2), (1, 3), (2, 3)]
+    assert c2 == [('J',), ('C', 'J'), ('J', 'L'), ('L',)]
 
     edges = [(0, 1), (1, 2), (2, 3), (2, 4), (3, 4)]
     circuit = [("C",), ("J",), ("L",), ("J", "L"), ("L",)]
-    c2, e2 = red.remove_series_elems(circuit, edges)
-    assert e2 == [(0, 1), (1, 2), (2, 3)]
-    assert c2 == [("C",), ("J",), ("J", "L")]
+    c2, e2 = red.linear_star_mesh(circuit, edges)
+    assert e2 == [(0, 1), (1, 2)]
+    assert c2 == [("J",), ("J", "L")]
 
     edges = [(0, 1), (1, 2), (2, 3), (2, 4), (3, 4)]
-    circuit = [("C",), ("J",), ("C", "J"), ("J", "L"), ("J", "L")]
-    c2, e2 = red.remove_series_elems(circuit, edges)
+    circuit = [("C", "J"), ("J",), ("C", "J"), ("J", "L"), ("J", "L")]
+    c2, e2 = red.linear_star_mesh(circuit, edges)
     assert e2 == edges
     assert c2 == circuit
+    
+    edges = [(0, 1), (0, 2), (0, 3)]
+    circuit = [("L",), ("C",), ("J",)]
+    c2, e2 = red.linear_star_mesh(circuit, edges)
+    assert c2 == [("J",)]
+    assert e2 == [(0, 1)]
+
+
+    # Test a y->delta
+    edges = [(0, 1), (0, 2), (0, 3)]
+    circuit = [("C",), ("C",), ("C",)]
+    c2, e2 = red.linear_star_mesh(circuit, edges)
+    assert e2 == [(0, 1)]
+    assert c2 == [("C",)]
+
+    # Test a y->delta
+    edges = [(0, 1), (0, 2), (0, 3)]
+    circuit = [("C",), ("C",), ("C",)]
+    c2, e2 = red.linear_star_mesh(circuit, edges)
+    assert e2 == [(0, 1)]
+    assert c2 == [("C",)]
+
+    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (2, 3), (1, 3)]
+    circuit = [("C",), ("C",), ("C",), ("L",), ("J", "L"), ("J",)]
+    c2, e2 = red.linear_star_mesh(circuit, edges)
+    assert e2 == [(0, 1), (1, 2), (0, 2)]
+    assert c2 == [("C", "L"), ("C", "J", "L"), ("C", "J")]
+
+
+    # 4 pronged star
+    edges = [(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (2, 3), (1, 3), (2, 4)]
+    circuit = [("L",), ("L",), ("L",), ("L",), ("C",), ("J", "L"), ("J",), ("C",)]
+    c2, e2 = red.linear_star_mesh(circuit, edges)
+    assert e2 == [(0, 1), (1, 2), (0, 2), (1, 3), (0, 3),  (2, 3)]
+    assert c2 == [("C", "L"), ("J", "L"), ("J", "L"), ("C", "L"), ("L",), ("L",)]
+
+
+
 
     # Test the full set of fully connected three nodes
     edges = [(0, 1), (1, 2), (2, 0)]
@@ -202,7 +234,7 @@ def test_remove_series_elems():
     n_series = 0
     n_no_series = 0
     for c in ALL_CONNECTED_3:
-        c2, e2 = red.remove_series_elems(c, edges)
+        c2, e2 = red.linear_star_mesh(c, edges)
         if utils.circuit_in_set(c, NON_SERIES_3):
             assert utils.get_num_nodes(e2) == 3
             n_no_series += 1
@@ -339,12 +371,12 @@ def test_full_reduction():
             assert df.iloc[row['equiv_circuit']]['in_non_iso_set']
             assert red.isomorphic_circuit_in_set(c1, e1, [c2])
 
-    # Test a small set of 4 node Y circuits
-    edges = [[(0, 1), (0, 2), (0, 3)]]*4 + [[(0, 1), (1, 2), (0, 3)]]
+    # Test a small set of 3 node delta circuits
+    edges = [[(0, 1), (1, 2), (0, 2)]]*4 + [[(0, 1), (1, 2), (0, 3)]]
     circuit = [[("L",), ("L",), ("L",)],
                [("L",), ("L",), ("C",)],
                [("L",), ("C",), ("J",)],
-               [("L",), ("L",), ("L",)],
+               [("J",), ("C",), ("L",)],
                [("L",), ("L",), ("J",)]]
     df = pd.DataFrame({"edges": edges, "circuit": circuit,
                        "in_non_iso_set": False, "equiv_circuit": "",
@@ -356,12 +388,12 @@ def test_full_reduction():
     bad = df[df['in_non_iso_set'] == 0]
 
     assert all(df['filter'] == np.array([False, False, True,
-                                         False, True]))
-    assert all(df['no_series'] == np.array([True, True, True,
+                                         True, True]))
+    assert all(df['no_series'] == np.array([False, False, True,
                                             True, False]))
-    assert all(df['in_non_iso_set'] == np.array([True, True, True,
+    assert all(df['in_non_iso_set'] == np.array([False, False, True,
                                                  False, False]))
-    assert filt.shape[0] == 3
+    assert filt.shape[0] == 1
     # Make sure final set is right
     assert all(red.isomorphic_circuit_in_set(c, edges[0], [circuit[0],
                                                            circuit[1],
@@ -469,5 +501,4 @@ def test_isomorphic_circuit_in_set():
 
 
 if __name__ == "__main__":
-    test_convert_circuit_to_component_graph()
-    test_convert_circuit_to_port_graph()
+    test_full_reduction()

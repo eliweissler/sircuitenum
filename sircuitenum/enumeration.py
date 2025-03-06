@@ -251,7 +251,7 @@ def find_equiv_cir_series(db_file: str, circuit: list, edges: list) -> str:
     """
 
     # What does it look like with series elems removed
-    c2, e2 = red.remove_series_elems(circuit, edges)
+    c2, e2 = red.linear_star_mesh(circuit, edges)
     equiv = utils.find_circuit_in_db(db_file, c2, e2)
     if equiv.empty:
         return ""
@@ -790,7 +790,7 @@ def assign_H_groups(db_file: str, n_nodes: int,
                 sql_str += " AND H_group is null"
                 unique_counts = [x for x in cur.execute(sql_str).fetchall()]
     
-    print("Total Groups:", n_counts)
+    # print("Total Groups:", n_counts)
 
     # Filter out none values from circuits that timed out in 
     # quantization

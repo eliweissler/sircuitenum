@@ -4,6 +4,7 @@ __version__ = "0.1.0"
 __all__ = ["mark_non_isomorphic_set", "isomorphic_circuit_in_set", "convert_circuit_to_component_graph"]
 
 from typing import Union
+from itertools import combinations
 
 import numpy as np
 import pandas as pd
@@ -285,12 +286,12 @@ def isomorphic_circuit_in_set(circuit: list, edges: list, c_set: list,
     or `nan` if not found.
 
     """
-    port_graph = convert_circuit_to_port_graph(circuit, edges)
+    port_graph = convert_circuit_to_component_graph(circuit, edges)
     for i, c2 in enumerate(c_set):
         c2_edges = edges
         if e_set is not None:
             c2_edges = e_set[i]
-        port_graph_2 = convert_circuit_to_port_graph(c2, c2_edges)
+        port_graph_2 = convert_circuit_to_component_graph(c2, c2_edges)
         if nx.is_isomorphic(port_graph, port_graph_2, node_match=colors_match):
             if return_index:
                 return i
@@ -372,11 +373,13 @@ def mark_non_isomorphic_set(df: pd.DataFrame, **kwargs):
     df['equiv_circuit'] = equiv_circuit
 
 
-def remove_series_elems(circuit: list, edges: list,
+def linear_star_mesh(circuit: list, edges: list,
                         to_reduce: list = ["L", "C"]):
     """
-    Reduces the size of the given circuit by eliminating
-    linear components that are in series.
+    Identifies whether a fully inductive or fully capacitive star
+    subcircuit exists. In the special case of degree 1 this is a
+    dangling edge, and in the case of degree 2 this is a series
+    inductor or capacitor.
 
     Args:
         circuit (list): a list of element labels for the desired circuit
@@ -387,74 +390,67 @@ def remove_series_elems(circuit: list, edges: list,
                                     Defaults to linear elements ['L','C']
 
     Returns:
-        True if the circuit cannot be reduced
-        False if the circuit can be reduced
+        new circuit, new edges
     """
 
-    num_nodes = utils.get_num_nodes(edges)
-
     # Base case: 2 nodes
+    num_nodes = utils.get_num_nodes(edges)
     if num_nodes == 2:
         return circuit, edges
 
-    node_representation = utils.circuit_node_representation(
-        circuit, edges)
-
     # Check each node to see if there are only
     # two of the same linear element connect to it
+    node_representation = utils.circuit_node_representation(
+        circuit, edges)
     for node in range(num_nodes):
 
         # Record how many of each component is at this node
         # and how many components total are there
         n_present = {}
-        total_present = 0
         for component, node_repr in node_representation.items():
-            n_present[component] = node_repr[node]
-            total_present += n_present[component]
+            n = node_repr[node]
+            if n > 0:
+                n_present[component] = n
 
-        # Can't reduce if we have more than two components
-        # connected to the node
-        if total_present == 2:
-            for component in to_reduce:
+        # Only one type present and that type is L or C
+        if len(n_present) == 1 and ("L" in n_present or "C" in n_present):
+            component = list(n_present.keys())[0]
+            # Recursive case:
+            # Add direct connections between the outer elements
+            new_c = []
+            new_e = []
+            to_connect = []
+            for i in range(len(edges)):
+                edge = list(edges[i])
+                if node in edge:
+                    edge.remove(node)
+                    to_connect.append(edge[0])
+                else:
+                    new_e.append(edges[i])
+                    new_c.append(circuit[i])
+            
+            for edge in combinations(sorted(to_connect), 2):
+                new_e.append(edge)
+                new_c.append((component,))
 
-                # Recursive case:
-                # Reduce if both components connected to
-                # a node are the same linear element
-                if n_present[component] == 2:
+            # Re-number nodes if you removed
+            # not the max number
+            new_e = utils.renumber_nodes(new_e)
 
-                    # Remove this node and insert
-                    # a direct edge in its place
-                    new_c = []
-                    new_e = []
-                    to_connect = []
-                    for i in range(len(edges)):
-                        edge = list(edges[i])
-                        if node in edge:
-                            edge.remove(node)
-                            to_connect.append(edge[0])
+            # Combine any redundant edges
+            new_c, new_e = utils.combine_redundant_edges(new_c, new_e)
 
-                        else:
-                            new_e.append(edges[i])
-                            new_c.append(circuit[i])
-                    new_e.append(tuple(sorted(to_connect)))
-                    new_c.append((component,))
-
-                    # Re-number nodes if you removed
-                    # not the max number
-                    new_e = utils.renumber_nodes(new_e)
-
-                    # Combine any redundant edges
-                    new_c, new_e = utils.combine_redundant_edges(new_c, new_e)
-
-                    return remove_series_elems(new_c, new_e)
-
-    # Base case -- nothing to reduce
+            # Check to see if there are any other reduction opportunities
+            return linear_star_mesh(new_c, new_e)
+    
+    # Base case: nothhing to reduce
     return circuit, edges
+
 
 
 def full_reduction(df: pd.DataFrame):
     """Performs the full reduction procedure:
-    1) Removes circuits that have isolated series linear elements
+    1) Removes circuits that have isolated series (or star) linear elements
     2) Removes circuits that have no jj's
     3) Creates a set of circuits whose port-graphs are non-isomorphic
 
@@ -468,8 +464,8 @@ def full_reduction(df: pd.DataFrame):
     """
 
     # Mark series circuits
-    eq_circuits = df.apply(lambda row: remove_series_elems(row['circuit'],
-                                                           row['edges']),
+    eq_circuits = df.apply(lambda row: linear_star_mesh(row['circuit'],
+                                                        row['edges']),
                            axis=1)
     no_series = np.array([utils.get_num_nodes(eq_circuits.iloc[i][1]) ==
                           utils.get_num_nodes(df['edges'].iloc[i])
@@ -481,11 +477,11 @@ def full_reduction(df: pd.DataFrame):
     df['filter'] = has_nl.astype(int)
 
     # Create non-isomorphic set of yes-jj, no-series circuits
-    mark_non_isomorphic_set(df, to_consider=np.logical_and(no_series, has_nl))
+    mark_non_isomorphic_set(df, to_consider=np.logical_and(no_series,
+                                                           has_nl))
 
     # Create non-isomorphic set of no-jj, no-series circuits
-    mark_non_isomorphic_set(df,
-                            to_consider=np.logical_and(no_series,
+    mark_non_isomorphic_set(df, to_consider=np.logical_and(no_series,
                                                        np.logical_not(has_nl)))
 
 

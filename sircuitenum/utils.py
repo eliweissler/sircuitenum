@@ -63,6 +63,8 @@ def edges_to_graph_index(edges: list, return_mapping: bool = False) -> int:
     This function finds a base graph that is isomorphic 
     to the input edge set.
 
+    If none is found, returns -1
+
     Parameters
     ----------
     edges : list of tuple of int
@@ -96,7 +98,7 @@ def edges_to_graph_index(edges: list, return_mapping: bool = False) -> int:
                     return i, GM.mapping
                 return i
 
-    raise ValueError("Error: No Isomorphic Graph Found")
+    return -1
 
 
 def encoding_to_components(circuit_raw: str, char_mapping: dict = None):
@@ -393,7 +395,7 @@ def circuit_degree(circuit: list, edges: list):
 
     Returns:
        list of how many elements are connected to each node
-       e.g. [1, 2, 1]
+       e.g. [3, 2, 3]
     """
     node_repr = circuit_node_representation(circuit, edges)
     return list(sum([np.array(x) for x in node_repr.values()]))
@@ -606,7 +608,8 @@ def write_df(file: str, df: pd.DataFrame, n_nodes: int, overwrite=False):
 def update_db_from_df(file: str, df: pd.DataFrame,
                       to_update: list,
                       str_cols: list = [],
-                      float_cols: list = []):
+                      float_cols: list = [],
+                      uids: list = []):
     """
     Updates the given columns listed in to_update
     for entries within df.
@@ -619,6 +622,7 @@ def update_db_from_df(file: str, df: pd.DataFrame,
         to_update (list): columns to update
         str_cols (list): columns that are string valued
         float_cols (list): columns that are float valued
+        uids (list): list of individual uids to update
 
     Returns:
         None, writes the dataframe info to the database
@@ -627,10 +631,15 @@ def update_db_from_df(file: str, df: pd.DataFrame,
 
     n_fields = len(to_update)
 
+    if len(uids) == 0:
+        uids = list(df.unique_key.values)
+
     with sqlite3.connect(file, timeout=5000) as con:
         cur = con.cursor()
         # sql_str = ""
-        for _, row in df.iterrows():
+        for uid in uids:
+            row = df.loc[uid]
+        # for _, row in df.iterrows():
             n_nodes = row['n_nodes']
             sql_str = f"UPDATE CIRCUITS_{n_nodes}_NODES SET "
             for i, col in enumerate(to_update):

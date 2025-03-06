@@ -18,6 +18,8 @@ import traceback
 import itertools
 from typing import Union
 from tqdm import tqdm
+
+import multiprocessing as mp
 from multiprocessing import Pool
 
 
@@ -31,7 +33,6 @@ from func_timeout import func_timeout, FunctionTimedOut
 
 from sircuitenum import utils
 from sircuitenum import qpackage_interface as qpi
-from sircuitenum import enumeration as enum
 
 EPS_C = 1e-4
 INT_OFFSETS_CHARGE = {0: 0.0+EPS_C, 1: 0.25+EPS_C, 2: 0.5+EPS_C, 3: 0.75+EPS_C}
@@ -140,7 +141,8 @@ def calc_decay_rates_sq(cr, decay_types = DECAYS_SQ):
 
 def make_sc(circuit: list, edges: list, param_sets: list, ground_node: int = 0,
              offset_integer: bool = False, trunc_num: Union[int, list] = 50,
-             cj: float = 10.0):
+             cj: float = 10.0, cutoff: Union[int, list] = 201,
+             add_ground_node: bool = True):
     """
     Constructs an SCqubits circuit from the given circuit, edges,
     and parameter values
@@ -154,6 +156,7 @@ def make_sc(circuit: list, edges: list, param_sets: list, ground_node: int = 0,
                         e.g. [(0,1), (0,2), (1,2)]
         param_sets (list): list of parameter values in GHz. Values
                            are given in the order they appear in circuit.
+                           Offsets are included at the end, flux then charge.
         ground_node (int, optional): Ground node. If None is given, then
                                      adds small capacitive coupling for each
                                      node to gorund. Defaults to 0.
@@ -170,7 +173,8 @@ def make_sc(circuit: list, edges: list, param_sets: list, ground_node: int = 0,
     params = gen_param_dict_anyq(circuit, edges, param_sets, cj=cj)
     sc = qpi.to_SCqubits(circuit, edges, params=params,
                            ground_node=ground_node,
-                           trunc_num=trunc_num, add_ground_node=True)
+                           trunc_num=trunc_num, add_ground_node=add_ground_node,
+                           cutoff=cutoff)
     # Set the extermal fluxes/charges
     nelems = sum(utils.count_elems_mapped(circuit).values())
     i = nelems
@@ -834,6 +838,7 @@ def sweep_params(circuit: list, edges: list, params: list,
     vals = itertools.product(*[enumerate(x) for x in ranges])
     vals = [(v,) + (n_eig, circuit, edges, ground_node,
                     trunc_num, False, cj, extras, just_spec, package) for v in vals]
+    print(vals[0])
     if workers > 1:
         pool = Pool(processes=workers)
         for idx, res in tqdm(pool.imap_unordered(sweep_helper_, vals),
@@ -953,7 +958,7 @@ def optimize_diff_evol(circuit: list, edges: list, ground_node: int,
 
     # Auto make ranges if none is given
     if ranges is None:
-        ranges = gen_param_range_anyq(circuit, edges, ground_node, offset_integer)
+        ranges = gen_param_range_anyq(circuit, edges, ground_node, offset_integer, package=package)
     kwargs["bounds"] = ranges
 
     # Determine integrality of variables
@@ -1036,7 +1041,10 @@ def optimize_diff_evol(circuit: list, edges: list, ground_node: int,
         print("----------------------------")      
 
     to_return["ngate"] = -res.fun
-    cir = make_sq(circuit, edges, res.x, ground_node=ground_node)
+    if package == "sq":
+        cir = make_sq(circuit, edges, res.x, ground_node=ground_node)
+    elif package == "sc":
+        cir = make_sc(circuit, edges, res.x, ground_node=ground_node)
     to_return["param_best"] = res.x
 
     # Run final evaluation
@@ -1045,12 +1053,15 @@ def optimize_diff_evol(circuit: list, edges: list, ground_node: int,
     args2 = [circuit, edges, ground_node, trunc_num, False, cj,
              trials[1], amps["elem"][1], amps["offset"][1], True,
              kwargs["workers"], package]
-    to_return["ngate_mean"] , to_return["ngate_std"] = get_ngate_mc(res.x, *args2)
+    if optim_func == _timed_out:
+        to_return["ngate_mean"] , to_return["ngate_std"] = optim_func(res.x, *args2)
 
-    if not quiet:
-        print("Finished evaluation")
-        print("mean (+/- std):", int(to_return["ngate_mean"]),
-              "+/-", int(to_return["ngate_std"]))
-        print("----------------------------")
+        if not quiet:
+            print("Finished evaluation")
+            print("mean (+/- std):", int(to_return["ngate_mean"]),
+                "+/-", int(to_return["ngate_std"]))
+            print("----------------------------")
+    else:
+        to_return["f(x)_best"] = optim_func(res.x, *args2)
 
     return to_return
