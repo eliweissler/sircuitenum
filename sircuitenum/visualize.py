@@ -398,7 +398,7 @@ def draw_all_qubits(file: str, n_nodes: int, out_dir: str,
 
 def draw_circuit_diagram(circuit: list, edges: list,
                          out: str = "",
-                         scale: float = 4.0, layout: str = 'fixed',
+                         scale: float = 4.0, layout: Union[str, dict] = 'fixed',
                          spread: float = 2/5, graph_index: int = None) -> None:
     """
     Draw the circuit diagram using `schemdraw`.
@@ -419,10 +419,14 @@ def draw_circuit_diagram(circuit: list, edges: list,
         the plot is displayed interactively.
     scale : float
         Scaling factor for the networkx positions to spread out the plots if needed.
-    layout : str
+    layout : Union[str, dict]
         Options for graph layouts.  
         **"spring"** produces aesthetically pleasing circuits but may lead to 
         overlapping elements, even for planar graphs.
+        **"fixed"** uses pre-determined node positions G_POS.
+        To specify positions directly, give a dictionary that maps node to
+        position {0: np.array([1., 1.]), 1: np.array([0., 0.])}
+
     spread : float
         Fraction of edge length used to fan out parallel components.
     graph_index : int
@@ -485,8 +489,6 @@ def draw_circuit_diagram(circuit: list, edges: list,
     else:
         pos = layout
     
-    print(pos)
-
     # Scale
     scaled_pos = {}
     for k in pos:

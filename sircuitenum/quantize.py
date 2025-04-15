@@ -365,7 +365,8 @@ def quantize_circuit(circuit, edges, Cv=None, V=None, cob=None,
                      sigma = [], return_mats=False, return_vars=False,
                      return_H_class: bool = False,
                      return_combos: bool = False,
-                     collect_phase: bool = True):
+                     collect_phase: bool = True,
+                     expand_trig: bool = True):
     """
     Perform a symbolic circuit quantization for the given circuit.
 
@@ -494,7 +495,9 @@ def quantize_circuit(circuit, edges, Cv=None, V=None, cob=None,
 
     # Combine terms and group terms in H
     H = C_terms[0] + L_terms[0] + J_terms
-    H = sym.expand_trig(sym.expand(sym.nsimplify(H)))
+    H = sym.expand(sym.nsimplify(H))
+    if expand_trig:
+        H = sym.expand_trig(H)
     if cob is None:
         H, combos, combosQ = utils.collect_H_terms(H, zero_ext=False,
                                   periodic_charge="n", periodic_phase="θ",

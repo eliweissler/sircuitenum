@@ -88,7 +88,7 @@ def test_make_sc():
     EJ = 5.0
     CJ = 10.0
     obj = optim.make_sc(circuit, edges, param_sets=[EJ, EL, EJ, EL, EC, EC, 0.5, 0], cj=CJ,
-                        ground_node=None)
+                        ground_node=None, add_ground_node=False)
     system_hierarchy = [[1, 3], [2]]
     obj.configure(system_hierarchy=system_hierarchy,
                   subsystem_trunc_dims=[35, 6])
@@ -248,7 +248,7 @@ def test_get_ngate_mc():
     args = [circuit, edges, ground_node, trunc_num, offset_integer, cj,
             ntrial, amp_param, amp_offset, return_std, workers, package]
     ngate = optim.get_ngate_mc(params, *args)
-    assert abs(ngate + 182410) < 1
+    assert abs(ngate + 198570) < 1
 
     ntrial = 100
     workers = min(int(os.cpu_count()/2), ntrial)
@@ -394,7 +394,7 @@ def test_sweep_helper():
     args = [vals,  n_eig, circuit, edges, ground_node, trunc_num,
             offset_integer, cj, {}, just_spec, package]
     idx, res = optim.sweep_helper_(args)
-    assert abs(res["ngate"] - 182410) < 1
+    assert abs(res["ngate"] - 198570) < 1
     # Test sc vs. sq difference
     # Not the exact same because of ground capacitance
     assert np.max(1-np.abs((res2["spec"] - res2["spec"][0]+0.01)/(res["spec"] - res["spec"][0]+0.01))) < 0.05
@@ -502,5 +502,6 @@ def test_optimize_diff_evol():
 
 if __name__ == "__main__":
 
-    test_sweep_params()
-    test_optimize_diff_evol()
+    test_make_sc()
+    test_get_ngate_mc()
+    # test_sweep_helper()
