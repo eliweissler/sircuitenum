@@ -326,15 +326,14 @@ def gen_junc_pot(circuit, edges, flux_vars, cob=None, eps=1e-10) -> sym.Matrix:
         for elem in elems:
             if "J" in elem:
                 val += -EJ[elem]
-
-        node_vec = np.zeros(n_nodes, dtype=int)
-        node_vec[i] = -1
-        node_vec[j] = 1
-        node_vec = sym.Matrix(node_vec)
-        if cob is not None:
-            node_vec = sym.transpose(cob)*node_vec
-
-        j_terms += val*sym.cos((sym.transpose(flux_vars)*node_vec)[0])
+        if abs(val) > 0:
+            node_vec = np.zeros(n_nodes, dtype=int)
+            node_vec[i] = -1
+            node_vec[j] = 1
+            node_vec = sym.Matrix(node_vec)
+            if cob is not None:
+                node_vec = sym.transpose(cob)*node_vec
+            j_terms += val*sym.cos((sym.transpose(flux_vars)*node_vec)[0])
 
     return j_terms
 

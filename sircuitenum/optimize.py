@@ -216,7 +216,6 @@ def calc_decay_rates_sc(cr, decay_types = DECAYS_SC):
     for dec in decay_types:
         decay_rates[dec] = {}
         for dec_type in decay_types[dec]:
-            ## TODO: Make temperature match SQ
             try:
                 decay_rates[dec][dec_type] = 1/(1e-09*eval(f"cr.{dec}_{dec_type}(total=True)"))
             except RuntimeError:
@@ -283,23 +282,27 @@ def decoherence_time(decay_rates, t_1_channels = [],
         dec_names = {"t1": "t1",
                      "tphi": "tphi"}
     if len(t_1_channels) == 0:
-        t_1_channels = decay_rates[dec_names["t1"]].keys()
+        t_1_channels = list(decay_rates[dec_names["t1"]].keys())
     if len(t_phi_channels) == 0:
-        t_phi_channels = decay_rates[dec_names["tphi"]].keys()
+        t_phi_channels = list(decay_rates[dec_names["tphi"]].keys())
         
     # Calculate t1
-    t_1_rate = 0
+    t_1_rate = 0*decay_rates[dec_names['t1']][t_1_channels[0]]
     for dec_type in t_1_channels:
         rate = decay_rates[dec_names['t1']][dec_type]
-        if np.isfinite(rate):
+        if isinstance(rate, np.ndarray):
+            t_1_rate[np.isfinite(rate)] += rate[np.isfinite(rate)]
+        elif np.isfinite(rate):
             t_1_rate += rate
     t_1 = 1/t_1_rate
 
     # Calculate tphi
-    t_phi_rate = 0
+    t_phi_rate = 0*decay_rates[dec_names['tphi']][t_phi_channels[0]]
     for dec_type in t_phi_channels:
         rate = decay_rates[dec_names['tphi']][dec_type]
-        if np.isfinite(rate):
+        if isinstance(rate, np.ndarray):
+            t_phi_rate[np.isfinite(rate)] += rate[np.isfinite(rate)]
+        elif np.isfinite(rate):
             t_phi_rate += rate
     t_phi = 1/t_phi_rate    
 
