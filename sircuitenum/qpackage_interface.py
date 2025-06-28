@@ -19,8 +19,6 @@ import sircuitenum.utils as utils
 # -------------------------------------------------------------------
 # Functions
 # -------------------------------------------------------------------
-
-
 def single_edge_loop_kiting(circuit, edges):
     """ expands edges which contain loops by splitting inductors and
     adding nodes. Done since networkx doesn't calcuate loops for multigraphs
@@ -79,6 +77,9 @@ def find_loops(circuit, edges, ind_elem=["J", "L"]):
     This function returns a list of loops for the specified circuit by identifying 
     the loops formed by the inductive elements and edge connections.
 
+    TODO: Allow it to deal with multiple J, L on a single edge and
+          return an assignment of elements to loops
+
     Parameters
     ----------
     circuit : list
@@ -93,11 +94,7 @@ def find_loops(circuit, edges, ind_elem=["J", "L"]):
 
     Returns
     -------
-    tuple
-        A tuple containing:
-        - ``loop_lst`` (list): A list of loops in the circuit.
-        - ``circuit`` (list): The input circuit list.
-        - ``edges`` (list): The input edges list.
+    ``loop_lst`` (list): A list of loops in the circuit, of the form [(1, 2, 3), (4, 5)]
     """
 
     # save min mode number for recovering afterwards
@@ -111,7 +108,7 @@ def find_loops(circuit, edges, ind_elem=["J", "L"]):
     circuit_temp, edges_temp = single_edge_loop_kiting(circuit, edges)
 
     # Make a graph that represents only inductive edges
-    ind_edges = inductive_subgraph(circuit_temp, edges_temp, ind_elem)
+    ind_edges = subgraph(circuit_temp, edges_temp, ind_elem)
     G = nx.from_edgelist(ind_edges)
 
     # Find loops in the inductive subgraph
@@ -125,20 +122,21 @@ def find_loops(circuit, edges, ind_elem=["J", "L"]):
     return loop_lst
 
 
-def inductive_subgraph(circuit, edges, ind_elem=["J", "L"]):
-    """Returns a list of edges that contain an inductive element
+def subgraph(circuit, edges, elems=["J", "L"]):
+    """Returns a list of edges that contain at least one of the elements
+    specified in elem
 
     Args:
         circuit (list): a list of element labels for the desired circuit
                         e.g. [["J"],["L", "J"], ["C"]]
         edges (list): a list of edge connections for the desired circuit
                         e.g. [(0,1), (0,2), (1,2)]
-        ind_elem (list): symbols that define inductive elements.
+        elem (list): symbols that define inductive elements.
                         Default is ind_elem = ["J", "L"]
     """
 
     return [edges[i] for i in range(len(edges))
-            if np.any(np.in1d(circuit[i], ind_elem))]
+            if np.any(np.in1d(circuit[i], elems))]
 
 
 def add_explicit_ground_node(circuit: list, edges: list, params: dict, ecg: float = 20,

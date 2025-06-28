@@ -230,16 +230,18 @@ def count_elems_mapped(circuit: list, **kwargs):
         counts[elem] = 0
 
     for elems in circuit:
-        for elem in elems:
-            counts[elem] += 1
+        for elem in possible_elems:
+            for device in elems:
+                if elem in device:
+                    counts[elem] += 1
 
     return counts
 
 
 def add_elem_number(circuit: list, **kwargs):
     """
-    Counts the total number of each mapped circuit
-    element in the circuit
+    Returns a new circuit list where elements
+    are numbered
 
     Args:
         circuit (list): a list of element labels for the desired circuit
@@ -248,7 +250,7 @@ def add_elem_number(circuit: list, **kwargs):
                                is the unique set in CHAR_TO_COMBINATION
 
     Returns:
-        dict: each entry is element -> number, i.e. "J" -> 2
+        list: each element is followed by a number starting at 1 e.g. "C2" or "L1"
     """
     possible_elems = kwargs.get("possible_elems", list_single_elems())
     circuit_new = []
