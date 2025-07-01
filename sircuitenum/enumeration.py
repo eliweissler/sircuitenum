@@ -23,9 +23,7 @@ import sympy as sym
 import networkx as nx
 import numpy as np
 import pandas as pd
-from sympy.parsing.latex import parse_latex
 from tqdm import tqdm
-from func_timeout import func_timeout, FunctionTimedOut
 
 from sircuitenum import utils
 from sircuitenum import reduction as red
@@ -158,7 +156,6 @@ def find_unique_ground_placements(circuit: list, edges: list) -> tuple[int]:
             unique_graphs.append(test)
             unique_nodes.append(gnd)
     return tuple(unique_nodes)
-
 
 
 def expand_ground_node(df: pd.DataFrame):
@@ -389,15 +386,15 @@ def trim_graph_node(db_file: str, n_nodes: int,
     np.random.shuffle(args)
     if n_workers > 1:
         pool = Pool(processes=n_workers)
-        for _ in tqdm(pool.imap_unordered(reduce_individual_set_, args),
+        for _ in tqdm(pool.imap_unordered(_reduce_individual_set, args),
                       total=sum(1 for _ in args)):
             pass
     else:
         for arg_set in tqdm(args):
-            reduce_individual_set_(arg_set)
+            _reduce_individual_set(arg_set)
 
 
-def reduce_individual_set_(args: tuple):
+def _reduce_individual_set(args: tuple):
     """
     Parallel helper function for calling full reduction
     on groups defined by the specified sql filter string.
@@ -449,10 +446,82 @@ def reduce_individual_set_(args: tuple):
     utils.update_db_from_df(db_file, df, to_update, str_cols)
 
 
-def add_hamiltonians_to_table(db_file: str, n_nodes: int,
+def _gen_ham_class_row(args):
+    """
+    Helper function to generate the Hamiltonian for the given uid
+    in the given db file.
+
+    Args:
+        uid (str): circuit unique key
+        db_file (str): database file
+
+    Raises:
+        ValueError: Error with circuit database
+        kbi: Keyboard interrupt
+    """
+    uid, db_file = args
+
+    # Load the graphs with the specified edges counts and graph index
+    filter_str = f"WHERE unique_key LIKE '{uid}'"
+    n_nodes = int(uid[1])
+    df = utils.get_circuit_data_batch(db_file, n_nodes,
+                                      filter_str=filter_str)
+
+    if df.shape[0] > 1:
+        raise ValueError("Multiple Circuits on Unique Key")
+    entry = df.iloc[0]
+
+    # Generate the Hamiltonian
+    try:
+        ## Same Circuit Paramter values
+        # Choose transformation
+        Z_sym, var_types, h_class_sym = quantize.choose_Z(entry.circuit, entry.edges)
+        n_nd = 0
+        for nd_mode in ["free", "frozen", "sigma"]:
+            n_nd += len(var_types.get(nd_mode, []))
+        # Apply transformation and record form of nonlinear terms
+        wJT = quantize.gen_w(entry.circuit, entry.edges, "J").transpose()
+        wJT_trans_sym, wJT_key_sym, _ = quantize._maximize_wT(sym.simplify(wJT*Z_sym)[:, :-n_nd])
+        ## Different Circuit Paramter values
+        Z, var_types, h_class = quantize.choose_Z(utils.add_elem_number(entry.circuit), entry.edges)
+        wJT_trans, wJT_key, _ = quantize._maximize_wT(sym.simplify(wJT*Z)[:, :-n_nd])
+
+    except KeyboardInterrupt as kbi:
+        raise kbi
+    except Exception as exc:
+        print("-------------------------------------------")
+        print("Unable to Generate Hamiltonian for:", uid)
+        print(traceback.format_exc())
+        print(exc)
+        print("-------------------------------------------")
+        return
+    
+    # Set values
+    to_update = ["n_compact", "n_extended", "n_harmonic",
+                "n_free", "n_frozen", "n_sigma",
+                "H_class", "wJT",  "H_class_sym", "wJT_sym"]
+    df.at[uid, "H_class"] = h_class + "_" + wJT_key
+    df.at[uid, "H_class_sym"] = h_class_sym + "_" + wJT_key_sym
+    df.at[uid, "wJT"] = wJT_key
+    df.at[uid, "wJT_sym"] = wJT_key_sym
+    df.at[uid, "n_compact"] = len(var_types.get("compact", []))
+    df.at[uid, "n_extended"] = len(var_types.get("extended", []))
+    df.at[uid, "n_harmonic"] = len(var_types.get("harmonic", []))
+    df.at[uid, "n_free"] = len(var_types.get("free", []))
+    df.at[uid, "n_frozen"] = len(var_types.get("frozen", []))
+    df.at[uid, "n_sigma"] = len(var_types.get("sigma", []))
+
+
+    # Update value in database
+    utils.update_db_from_df(db_file, df, to_update,
+                            str_cols=["H_class", "H_class_sym","wJT", "wJT_sym"])
+
+
+def add_hamiltonian_classes(db_file: str, n_nodes: int,
                               n_workers: int = 4, resume: bool = False):
     """
-    Adds hamiltonians to the specified db file
+    Constructs a variable transformation and identifies the hamiltonian
+    class for each circuit in the database
 
     Args:
         db_file (str): database file
@@ -470,28 +539,22 @@ def add_hamiltonians_to_table(db_file: str, n_nodes: int,
         None
     """
 
-    # Add new columns if not resuming
     with sqlite3.connect(db_file) as con:
+        
+        # Add new columns if not resuming
         cur = con.cursor()
         table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
         if not resume:
-            new_cols = ["n_periodic", "n_extended", "n_harmonic",
-                        "periodic", "extended", "harmonic"]
-            new_cols += gen_func_combos_(n_nodes-1).keys()
-            new_cols += [x+"_sym" for x in new_cols]
-            new_cols = ["H", "H_sym", "coord_transform",
-                        "H_class", "H_class_sym", "nonlinearity_counts",
-                        "nonlinearity_counts_sym",
-                        "H_group", "H_group_sym"] + new_cols
+            new_cols = ["n_compact", "n_extended", "n_harmonic",
+                        "n_free", "n_frozen", "n_sigma",
+                        "H_class", "wJT",  "H_class_sym", "wJT_sym"]
             for col in new_cols:
                 sql_str = f"ALTER TABLE {table_name}\n"
-                if "n_" in col or "cos" in col or "sin" in col:
-                    sql_str += f"ADD {col} int DEFAULT 0"
-                else:
-                    sql_str += f"ADD {col}"
+                sql_str += f"ADD {col}"
                 cur.execute(sql_str)
                 con.commit()
-
+        
+        # Gather all unique keys
         sql_query = f"SELECT DISTINCT unique_key\
                       FROM {table_name}\
                       WHERE in_non_iso_set LIKE 1\
@@ -506,658 +569,20 @@ def add_hamiltonians_to_table(db_file: str, n_nodes: int,
             unique_keys = unique_keys_all
 
     # Randmize order because difficult ones tend to be near each other
-    # This will give more accurate time estimates and spread parallel better
+    # This will give more accurate time estimates and spread workers better
     np.random.shuffle(unique_keys)
 
     # Go through all the circuits and update rows with info
     args = list(zip(unique_keys, [db_file]*len(unique_keys)))
     if n_workers > 1:
         pool = Pool(processes=n_workers)
-        for _ in tqdm(pool.imap_unordered(timed_out_, args),
+        for _ in tqdm(pool.imap_unordered(_gen_ham_class_row, args),
                           total=n_total, initial=n_total-len(unique_keys)):
             pass
     else:
         for arg_set in tqdm(args):
-            gen_ham_row_(arg_set[0], arg_set[1])
+            _gen_ham_class_row((arg_set[0], arg_set[1]))
 
-# Sometimes it doesn't work and hangs :(
-# 60 Minute Timeout
-def timed_out_(args):
-    timeout_min = 60
-    try:
-        return func_timeout(60*timeout_min, gen_ham_row_, args)
-    except FunctionTimedOut:
-        print(f"Could not complete {args[0]} ({timeout_min} min timout)")
-    except Exception as e:
-        raise e
-
-
-def gen_ham_row_(uid: str, db_file: str):
-    """
-    Helper function to generate the Hamiltonian for the given uid
-    in the given db file.
-
-    Args:
-        uid (str): circuit unique key
-        db_file (str): database file
-
-    Raises:
-        ValueError: Error with circuit database
-        kbi: Keyboard interrupt
-    """
-
-    # Load the graphs with the specified edges counts and graph index
-    filter_str = f"WHERE unique_key LIKE '{uid}'"
-    n_nodes = int(uid[1])
-    df = utils.get_circuit_data_batch(db_file, n_nodes,
-                                      filter_str=filter_str)
-
-    if df.shape[0] > 1:
-        raise ValueError("Multiple Circuits on Unique Key")
-    entry = df.iloc[0]
-
-    # Generate the Hamiltonian
-    try:
-        H, trans, H_class, all_combos = gen_hamiltonian(entry.circuit,
-                                                        entry.edges,
-                                                        symmetric=False,
-                                                        return_combos=True)
-        H_str = refine_latex(sym.latex(H))
-        info = categorize_hamiltonian(H)
-
-        # Symmetrize the Hamiltonian
-        C = sym.Symbol("C", positive=True, real=True)
-        EJ = sym.Symbol("E_{J}", positive=True, real=True)
-        CJ = sym.Symbol("C_{J}", positive=True, real=True)
-        L = sym.Symbol("L", positive=True, real=True)
-        H_sym = H.copy()
-        for s in H.free_symbols:
-            if "C_" in str(s) and "J" not in str(s):
-                H_sym = H_sym.subs(s, C)
-            elif "C_" in str(s) and "J" in str(s):
-                H_sym = H_sym.subs(s, CJ)
-            elif "L_" in str(s):
-                H_sym = H_sym.subs(s, L)
-            elif "E_{J" in str(s):
-                H_sym = H_sym.subs(s, EJ)
-
-        # Zero out terms to get the H_class
-        H_class_sym = utils._remove_coeff(H_sym, all_combos)
-        H_sym_str = refine_latex(sym.latex(H_sym))
-        info_sym = categorize_hamiltonian(H_sym)
-    except KeyboardInterrupt as kbi:
-        raise kbi
-    except Exception as exc:
-        print("-------------------------------------------")
-        print("Unable to Generate Hamiltonian for:", uid)
-        print(traceback.format_exc())
-        print(exc)
-        print("-------------------------------------------")
-        return
-
-    # Set values
-    to_update = ["H", "H_sym", "coord_transform", "H_class", "H_class_sym",
-                 "nonlinearity_counts", "nonlinearity_counts_sym",
-                 "H_group", "H_group_sym"]
-    df.at[uid, "H"] = H_str
-    df.at[uid, "H_sym"] = H_sym_str
-    df.at[uid, "coord_transform"] = str(trans)
-    df.at[uid, "H_class"] = refine_latex(sym.latex(H_class))
-    df.at[uid, "H_class_sym"] = refine_latex(sym.latex(H_class_sym))
-    for col in info:
-        if col in df.columns:
-            df.at[uid, col] = info[col]
-            to_update.append(col)
-    for col in info_sym:
-        if col+"_sym" in df.columns:
-            df.at[uid, col+"_sym"] = info_sym[col]
-            to_update.append(col+"_sym")
-
-    # Add nonlinearity counts
-    nonlinearity_cols = [x for x in df.columns if "sin_" in x or "cos_" in x]
-    nonlinearity_cols_sym = [x for x in nonlinearity_cols if "_sym" in x]
-    nonlinearity_cols = [x for x in nonlinearity_cols if "_sym" not in x]
-    nonlinearity_counts = "".join([str(int(x)) for x in
-                                   df[nonlinearity_cols].loc[uid].values])
-    nonlinearity_counts_sym = "".join([str(int(x)) for x in
-                                       df[nonlinearity_cols_sym].loc[uid].values])
-    df.at[uid, "nonlinearity_counts"] = nonlinearity_counts
-    df.at[uid, "nonlinearity_counts_sym"] = nonlinearity_counts_sym
-
-    # Update value in database
-    utils.update_db_from_df(db_file, df, to_update,
-                            str_cols=["H", "H_sym", "periodic",
-                                      "extended", "harmonic",
-                                      "coord_transform",
-                                      "periodic_sym", "extended_sym",
-                                      "harmonic_sym",
-                                      "H_class", "H_class_sym",
-                                      "nonlinearity_counts",
-                                      "nonlinearity_counts_sym",
-                                      "H_group", "H_group_sym"])
-
-
-def gen_hamiltonian(circuit: list, edges: list, symmetric: bool = False,
-                    cob: sym.Matrix = None, var_class: dict = None,
-                    return_combos: bool = False, basis_completion: str = "heuristic") -> tuple:
-    """
-        Generate a SymPy Hamiltonian for the specified circuit.
-
-        This function uses `scqubits` to determine an appropriate variable transformation.
-
-        .. note::
-            External fluxes and charges are not currently supported.
-
-        Parameters
-        ----------
-        circuit : list
-            A list of element labels defining the desired circuit.
-            Example: ``[["J"], ["L", "J"], ["C"]]``.
-        edges : list
-            A list of edge connections defining the circuit topology.
-            Example: ``[(0,1), (0,2), (1,2)]``.
-        symmetric : bool, optional
-            Whether to set all capacitances, inductances, and Josephson energies equal.
-            This may result in the loss of some terms. Default is ``False``.
-        cob : sympy.Matrix, optional
-            An optional variable transformation matrix. If not provided, the 
-            Z transformation matrix from `scqubits` is used.
-        var_class : dict, optional
-            Required if providing a custom variable transformation. Should be a dictionary
-            similar to scqubits's `var_categories`, with keys "free", "frozen", 
-            "periodic", and "extended" to classify the variables.
-        return_combos : bool, optional
-            Whether to return the combinations of variables present. Default is False.
-        basis_completion : str, optional
-            Basis completion option for `scqubits`.
-
-        Returns
-        -------
-        A tuple containing:
-        
-        - **hamiltonian: sympy.Add**
-            Symbolic Hamiltonian where periodic modes are labeled by `n` and extended variables by `q`.
-        
-        - **transformation_matrix: numpy.ndarray**
-            Coordinate transformation matrix (expressing new variables in terms of node variables).
-        
-        - **hamiltonian_class: sympy.Add**
-            Hamiltonian with all constants removed.
-
-        - optionally combinations of variables present
-    """
-   
-    elems = {
-            'C': {'default_unit': 'GHz', 'default_value': 0.2},
-            'L': {'default_unit': 'GHz', 'default_value': 1.0},
-            'J': {'default_unit': 'GHz', 'default_value': 15.0},
-            'CJ': {'default_unit': 'GHz', 'default_value': 500.0}
-            }
-    params = utils.gen_param_dict(circuit, edges, elems)
-
-    if not symmetric:
-        # Set random values to avoid unintentionally
-        # deleting terms
-        for edge, comp in params:
-            if comp in ["C", "L"]:
-                param_range = (0.1, 1)
-            else:
-                param_range = (1, 20)
-            params[(edge, comp)] = (np.random.uniform(*param_range), "GHz")
-
-    if cob is None:
-        # Use scQubits to get a transformation Matrix
-        obj = pi.to_SCqubits(circuit, edges, params=params, sym_cir=True,
-                             initiate_sym_calc=False,
-                             basis_completion=basis_completion)
-
-        # Get symbolic Hamiltonian and add final free mode
-        # as a given
-        cob, var_class = obj.variable_transformation_matrix()
-        var_class["free"] += [utils.get_num_nodes(edges)]
-
-    elif var_class is None:
-        raise ValueError("Must include variable classification with cob matrix")
-
-    # Un-symmetrize the edges if that's what's requested
-    if not symmetric:
-        new_circuit = []
-        counts = {"J": 0, "L": 0, "C": 0}
-        for elems in circuit:
-            new_elems = []
-            for elem in elems:
-                new_elems.append(f"{elem}_{counts[elem] + 1}")
-                counts[elem] += 1
-            new_circuit.append(new_elems)
-        circuit = new_circuit
-
-    H, H_class, all_combos = quantize.quantize_circuit(circuit, edges,
-                                                       cob=sym.Matrix(cob),
-                                                       **var_class,
-                                                       return_H_class=True,
-                                                       return_combos=True,
-                                                       collect_phase=True)
-    to_return = (H, cob, H_class)
-    if return_combos:
-        to_return = to_return + (all_combos,)
-    return to_return
-
-
-def assign_H_groups(db_file: str, n_nodes: int,
-                    n_workers: int = 1, resume: bool = False) -> None:
-    """
-    Assigns Hamiltonians in the database into groups
-    based on the functional form of the linear and
-    nonlinear parts of their hamiltonians
-    
-    Args:
-        db_file (str): path to database file
-        n_nodes (int): number of nodes to examine
-        n_workers (int, optional): Number of workers to use. Defaults to 1.
-    """
-    # Figure out where to start if resuming
-    if resume:
-        table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
-        columns = utils.list_all_columns(db_file, table_name)
-        H_group_started = "H_group" in columns
-        H_group_sym_started = "H_group_sym" in columns
-    else:
-        H_group_started = False
-        H_group_sym_started = False
-
-    # Get the unique nonlinearity counts strings
-    with sqlite3.connect(db_file) as con:
-        cur = con.cursor()
-        table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
-        sql_str = f"SELECT DISTINCT nonlinearity_counts \
-                    FROM {table_name}\
-                    WHERE in_non_iso_set LIKE 1\
-                    AND filter LIKE 1"
-        unique_counts = [x for x in cur.execute(sql_str).fetchall()]
-        n_counts = len(unique_counts)
-        sql_str_sym = f"SELECT DISTINCT nonlinearity_counts_sym \
-                    FROM {table_name}\
-                    WHERE in_non_iso_set LIKE 1\
-                    AND filter LIKE 1"
-        unique_counts_sym = [x for x in cur.execute(sql_str_sym).fetchall()]
-        n_counts_sym = len(unique_counts)
-        if resume:
-            if H_group_sym_started:
-                sql_str_sym = sql_str[:]
-                sql_str_sym += " AND H_group_sym is null"
-                unique_counts_sym = [x for x in cur.execute(sql_str_sym).fetchall()]
-            elif H_group_started:
-                sql_str += " AND H_group is null"
-                unique_counts = [x for x in cur.execute(sql_str).fetchall()]
-    
-    # print("Total Groups:", n_counts)
-
-    # Filter out none values from circuits that timed out in 
-    # quantization
-    unique_counts = [x[0] for x in unique_counts if x is not None]
-    unique_counts_sym = [x[0] for x in unique_counts_sym if x is not None]
-
-    # Shuffle for accurate runtime estimates
-    np.random.shuffle(unique_counts)
-    np.random.shuffle(unique_counts_sym)
-
-    # Make the pool if we're parallel
-    if n_workers > 1:
-        pool = Pool(processes=n_workers)
-
-    # Do non-symmetric first
-    # args are db_file, n_nodes, nl_cnt, symmetric, mapping
-    n_entries = len(unique_counts)
-    if not H_group_sym_started:
-        print("Full Hamiltonians...")
-        args = list(zip([db_file]*n_entries, [n_nodes]*n_entries,
-                        unique_counts, [False]*n_entries,
-                        [utils.ENUM_PARAMS["CHAR_TO_COMBINATION"]]*n_entries))
-        if n_workers > 1:
-            for _ in tqdm(pool.imap_unordered(unique_hams_for_count_, args),
-                        total=n_counts, initial=n_counts-n_entries):
-                pass
-        else:
-            for arg_set in args:
-                unique_hams_for_count_(arg_set)
-
-    # Now do symmetric
-    print("Symmetric Hamiltonians...")
-    n_entries = len(unique_counts_sym)
-    args = list(zip([db_file]*n_entries, [n_nodes]*n_entries,
-                    unique_counts_sym, [True]*n_entries,
-                    [utils.ENUM_PARAMS["CHAR_TO_COMBINATION"]]*n_entries))
-    if n_workers > 1:
-        for _ in tqdm(pool.imap_unordered(unique_hams_for_count_, args),
-                      total=n_counts_sym, initial=n_counts_sym-n_entries):
-            pass
-    else:
-        for arg_set in args:
-            unique_hams_for_count_(arg_set)
-
-
-def unique_hams(hams: list[str], group_base: str = "", normalize_sign: bool = True):
-    """
-    Identifies Hamiltonians in a set that differ
-    by relabelling variables. Assigns each entry to
-    a group.
-
-    Args:
-        hams (list[str]): list of Hamiltonians, loaded from the database
-        group_base (str, optional): optional prefix for group name. Defaults to "".
-        normalize_sign (bool, optional): Whether to make all terms positive in H_class.
-                                         Defaults to True.
-    
-    Returns:
-        list[str]: list of unique hamiltonian strings
-        list[str]: group labels for each entry
-    """
-
-    reduced = []
-    groups = []
-    # Examine every row in the set
-    group_n = 1
-    for l_str in hams:
-
-        is_dup = False
-
-        # Make the string parsable by sympy
-        l_str = l_str.replace("\\hat{" + quantize.EXTENDED_CHARGE + "}", "Q")
-        l_str = l_str.replace("\\hat{" + quantize.PERIODIC_CHARGE + "}", "n")
-        l_str = l_str.replace("\\hat{" + quantize.EXTENDED_PHASE + "}", "F")
-        l_str = l_str.replace("\\hat{" + quantize.PERIODIC_PHASE + "}", "p")
-        
-        H_base = parse_latex(l_str)
-
-        # Get the Phase and Charge terms
-        q_list = [q for q in H_base.free_symbols if "Q" in str(q)]
-        n_list = [q for q in H_base.free_symbols if "n" in str(q)]
-        f_list = [q for q in H_base.free_symbols if "F" in str(q)]
-        p_list = [q for q in H_base.free_symbols if "p" in str(q)]
-
-        # Alternative A, B, C terms
-        q_list_alt = np.array([sym.Symbol(f"Q_{chr(ord('A') + int(n))}")
-                                for n in range(len(q_list))])
-        n_list_alt = np.array([sym.Symbol(f"n_{chr(ord('A') + int(n))}")
-                                for n in range(len(n_list))])
-        f_list_alt = np.array([sym.Symbol(f"F_{chr(ord('A') + int(n))}")
-                                for n in range(len(f_list))])
-        p_list_alt = np.array([sym.Symbol(f"p_{chr(ord('A') + int(n))}")
-                                for n in range(len(p_list))])
-
-        # Possible assignments of 1, 2, 3 -> A, B, C
-        q_ass = itertools.permutations(range(len(q_list)), len(q_list))
-        n_ass = itertools.permutations(range(len(n_list)), len(n_list))
-        f_ass = itertools.permutations(range(len(f_list)), len(f_list))
-        p_ass = itertools.permutations(range(len(p_list)), len(p_list))
-
-        # Try every permutation of A, B, C -> 1, 2, 3
-        for combo in itertools.product(q_ass, n_ass, f_ass, p_ass):
-
-            # Make it a list for indexing
-            combo = [list(x) for x in combo]
-
-            # Test out the specific permutation
-            H_test = H_base.copy()
-
-            # Replace 1, 2, 3 with A, B, C
-            if combo[0]:
-                for x1, x2 in zip(q_list, q_list_alt[combo[0]]):
-                    H_test = H_test.subs(x1, x2)
-            if combo[1]:
-                for x1, x2 in zip(n_list, n_list_alt[combo[1]]):
-                    H_test = H_test.subs(x1, x2)
-            if combo[2]:
-                for x1, x2 in zip(f_list, f_list_alt[combo[2]]):
-                    H_test = H_test.subs(x1, x2)
-            if combo[3]:
-                for x1, x2 in zip(p_list, p_list_alt[combo[3]]):
-                    H_test = H_test.subs(x1, x2)
-
-            # Check if this permutation is in the reduced set already
-            for i, H_ref in enumerate(reduced):
-
-                if H_ref is None:
-                    continue
-
-                if H_test - H_ref == 0:
-                    is_dup = True
-                    dup_group = groups[i]
-                    break
-            if is_dup:
-                break
-        if is_dup:
-            reduced.append(None)
-            groups.append(dup_group)
-        if not is_dup:
-            reduced.append(H_test)
-            groups.append(group_base + f"_{group_n}")
-            group_n += 1
-
-    return reduced, groups
-
-
-def unique_hams_in_df(df: pd.DataFrame, symmetric: bool, normalize_sign: bool = True):
-    """
-    Marks unique Hamiltonian classes by creating the H_group column. Meant to be
-    provided a dataframe containing values for a single nonlinearity counts.
-
-    Catches entries with the same H_class and
-    those that differ by renumbering variables.
-
-    Args:
-        df (pd.DataFrame): dataframe containing circuit entries for a single
-                           value of nonlinearity_counts
-        symmetric (bool): whether to examine the "_sym" columns or not.
-        normalize_sign (bool, optional): Whether to make all terms positive in H_class.
-                                         Defaults to True.
-
-    Returns:
-        group_col_name: name of column added to input df
-    """
-
-    if symmetric:
-        l_str_vec = df["H_class_sym"].values
-        nl_cnt = df["nonlinearity_counts_sym"].iloc[0]
-
-    else:
-        l_str_vec = df["H_class"].values
-        nl_cnt = df["nonlinearity_counts"].iloc[0]
-        
-    if normalize_sign:
-        l_str_vec = [x.replace("-", "+") for x in l_str_vec]
-
-
-    # Catch the obviously same ones, i.e.
-    # the H_str is the exact same
-    unique_str, index, inv = np.unique(l_str_vec, return_index=True,
-                                       return_inverse=True)
-
-    # Catch the ones with variables labeled differently
-    reduced, groups = unique_hams(unique_str, group_base=nl_cnt, normalize_sign=normalize_sign)
-
-    groups = np.array(groups)
-    group_col = groups[inv]
-    if symmetric:
-        group_col_name = "H_group_sym"
-        df[group_col_name] = group_col
-    else:
-        group_col_name = "H_group"
-        df[group_col_name] = group_col
-
-    return group_col_name
-
-
-def unique_hams_for_count_(args):
-
-    db_file, n_nodes, nl_cnt, symmetric, mapping = args
-
-    if symmetric:
-        col_name = "nonlinearity_counts_sym"
-    else:
-        col_name = "nonlinearity_counts"
-
-    filter_str = f"WHERE {col_name} LIKE '{nl_cnt}'"
-
-    df = utils.get_circuit_data_batch(db_file, n_nodes,
-                                      char_mapping=mapping,
-                                      filter_str=filter_str)
-    # if df.shape[0] == 0:
-    #     raise ValueError("No entries found for nl count")
-
-    group_col_name = unique_hams_in_df(df, symmetric)
-    
-    utils.update_db_from_df(db_file, df,
-                            to_update=[group_col_name],
-                            str_cols=[group_col_name]
-                            )
-
-    return
-
-
-def gen_func_combos_(n_modes: int) -> dict:
-    """
-    Helper function that generates all combinations of sin/cos
-    given a maximum power
-
-    Args:
-        n_modes (int): Number of modes in the circuit (i.e. max power)
-
-    Returns:
-        dict: dictionary with combos as keys and 0 as values
-    """
-    info = {}
-    for n in range(1, n_modes+1):
-        for type_combo in itertools.product(["p", "e"], repeat=n):
-            for func_combo in itertools.product(["cos", "sin"], repeat=n):
-                # Count the functions present
-                counts = {}
-                for combo in zip(func_combo, type_combo):
-                    if combo in counts:
-                        counts[combo] += 1
-                    else:
-                        counts[combo] = 1
-                # Add the field in the dictionary
-                combos = []
-                for combo in counts:
-                    combos += [combo]*counts[combo]
-                # Sort alphabetically for consistency
-                order = np.sort(["_".join(x) for x in combos])
-                info_str = "_".join(order)
-                info[info_str] = 0
-    return info
-
-
-def categorize_hamiltonian(H: sym.core.Add):
-    """
-    Categorizes a Hamiltonian according to the nonlinearities
-    present.
-
-    Assumes frozen and free modes have already been removed.
-
-    Args:
-        H (sympy.core.Add): sympy Hamiltonian, generated
-                            from gen_hamiltonian
-
-    Returns:
-        info: Dictionary counting the nonlinearities present.
-              Considers every possibility of cos/sin and 
-              extended/periodic variables. Should be 4 choices
-              with one modes, 10 choices with two modes,
-              and 20 with three modes.
-    """
-
-    # Expand H to make searching easier
-    H_test = sym.expand(H)
-
-    # List of variable types
-    theta_list = [th for th in H.free_symbols
-                  if (quantize.PERIODIC_PHASE in str(th) or
-                      quantize.EXTENDED_PHASE in str(th) or
-                      quantize.NODE_PHASE in str(th))
-                  and quantize.EXT_PHASE not in str(th)]
-
-    # Information about the hamiltonian
-    n_modes = len(theta_list)
-    info = {"n_modes": n_modes,
-            "periodic": [],
-            "extended": [],
-            "harmonic": []}
-
-    # Categorize Modes:
-    types = {}
-    funcs = set()
-    [[funcs.add(f) for f in x.atoms(sym.Function)]
-        for x in H_test.atoms(sym.Mul)]
-    for th in theta_list:
-        mode_num = "".join([x for x in str(th) if x.isnumeric()])
-        if quantize.PERIODIC_PHASE in str(th):
-            info["periodic"].append(mode_num)
-            types[str(th)] = "p"
-        elif sym.cos(th) in funcs or sym.sin(th) in funcs:
-            info["extended"].append(mode_num)
-            types[str(th)] = "e"
-        else:
-            info["harmonic"].append(mode_num)
-            types[str(th)] = "h"
-    
-    # Sort mode list
-    for var_type in ["periodic", "extended", "harmonic"]:
-        info[var_type] = sorted(info[var_type])
-
-    # Add counts
-    info["n_periodic"] = len(info["periodic"])
-    info["n_extended"] = len(info["extended"])
-    info["n_harmonic"] = len(info["harmonic"])
-
-    # Products of sin/cos up to n_modes
-    info.update(gen_func_combos_(n_modes))
-
-    # Count the nonlinear terms
-    funcs = set(functools.reduce(lambda x, y: x*y, list(x.atoms(sym.Function)))
-                for x in H_test.atoms(sym.Mul) if len(x.atoms(sym.Function)) > 0)
-    # n = number of nonlinear terms
-    for n in range(1, n_modes+1):
-        # th_combo = list of variables
-        for th_combo in itertools.product(theta_list, repeat=n):
-            # Variable types
-            th_types = [types[str(th)] for th in th_combo]
-            # All different combinations of sin's and cos
-            # of the two thetas
-            for bar in range(n+1):
-                term = 1
-                # Cos terms
-                for i in range(bar):
-                    term *= sym.cos(th_combo[i])
-                # Sin Terms
-                for i in range(bar, n):
-                    term *= sym.sin(th_combo[i])
-                # Check if term was present
-                if term in funcs:
-                    info_str = ["_".join(x) for x in
-                                zip(["cos"]*bar, th_types[:bar])]
-                    info_str += ["_".join(x) for x in
-                                 zip(["sin"]*(n-bar), th_types[bar:])]
-                    info_str = "_".join(np.sort(info_str))
-                    info[info_str] += 1
-                    funcs.remove(term)
-
-    return info
-
-
-def refine_latex(latex_str):
-    """
-    Adds hats to operators, and removes cdots before
-    parenthesis
-
-    Args:
-        latex_str (str): string of the latex math
-
-    Returns:
-        str: copy of the latex_str with the modifications done
-    """
-    latex_str = latex_str.replace(r"\cdot \left(", r"\left(")
-    return latex_str
 
 
 def generate_and_trim(n_nodes: int, db_file: str = "circuits.db",
@@ -1183,20 +608,9 @@ def generate_and_trim(n_nodes: int, db_file: str = "circuits.db",
         table_name = f'CIRCUITS_{n_nodes}_NODES'
         columns = utils.list_all_columns(db_file, table_name)
         H_started = "H_class" in columns
-        H_group_started = "H_group" in columns
-        H_group_sym_started = "H_group_sym" in columns
-        
-        if H_started and not H_group_started:
+        if H_started:
             print("---------------------------------------")
-            print("Resuming at Hamiltonian Phase")
-            print("---------------------------------------")
-        elif H_started and H_group_started and not H_group_sym_started:
-            print("---------------------------------------")
-            print("Resuming at Full H Group")
-            print("---------------------------------------")
-        elif H_started and H_group_started and H_group_sym_started:
-            print("---------------------------------------")
-            print("Resuming at Symmetric H Group")
+            print("Resuming at Hamiltonian Class Phase")
             print("---------------------------------------")
 
     # Pre-Hamiltonian Steps are Fast
@@ -1213,18 +627,11 @@ def generate_and_trim(n_nodes: int, db_file: str = "circuits.db",
 
     # Hamiltonian is the slow part
     if (not resume) or (not H_group_started):
-        print("Appending Hamiltonians to " + str(n_nodes) + " node circuits.")
-        add_hamiltonians_to_table(db_file=db_file, n_nodes=n_nodes,
+        print("Appending Hamiltonian Classes to " + str(n_nodes) + " node circuits.")
+        add_hamiltonian_classes(db_file=db_file, n_nodes=n_nodes,
                                 n_workers=n_workers, resume=resume)
 
-    # print("Categorizing Linear Portion of Hamiltonians for " + str(n_nodes) + " node circuits.")
-    # assign_H_groups(db_file=db_file, n_nodes=n_nodes, n_workers=n_workers,
-    #                 resume=resume)
-    
-    # print("Categorizing Non-Linear Portion of Hamiltonians for " + str(n_nodes) + " node circuits.")
-    # Max 10 workers because this is fast and db conflicts
-    assign_H_groups(db_file=db_file, n_nodes=n_nodes, n_workers=n_workers,
-                    resume=False)
+
     return True
 
 

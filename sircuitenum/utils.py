@@ -14,10 +14,6 @@ import numpy as np
 import networkx as nx
 import pandas as pd
 from tqdm import tqdm
-import sympy as sym
-from sympy import collect, expand_mul, Mul, Dummy
-from sympy.core.add import Add
-from sympy.core.symbol import Symbol
 
 # Set ENUM_PARAMS at end of file
 global ENUM_PARAMS
@@ -663,10 +659,10 @@ def update_db_from_df(file: str, df: pd.DataFrame,
                 try:
                     cur.executescript(sql_str)
                     written = True
-                except sqlite3.OperationalError:
+                except sqlite3.OperationalError as exc:
                     # Database is locked, wait random amount
                     # of time and try again
-                    print("Write Conflict")
+                    print("Database Error -", exc)
                     sleep(np.abs(np.random.random()))
 
         con.commit()
@@ -973,125 +969,6 @@ def list_all_columns(db_file: str, table_name: str):
         cols = [x[1] for x in info]
 
     return cols
-
-def collect_H_terms(H: Add, zero_ext: bool = True, 
-                    periodic_charge="n", periodic_phase="θ",
-                    extended_charge="q", extended_phase="φ",
-                    ext_charge: str = "ng", ext_flux: str = "_{ext}",
-                    no_coeff: bool = False, collect_phase: bool = True) -> Add:
-    """
-    Groups terms in the Hamiltonian.
-
-    Default settings are for our operator convention --
-    not Scqubits (q -> Q and \varphi -> \theta).
-
-    Args:
-        H (Add): Hamiltonian
-        zero_ext (bool, optional): Whether to zero all gate voltages/external
-                                   fluxes. Defaults to True.
-        periodic_charge (str, optional): symbol used for periodic charges.
-                                         Defaults to "n".
-        extended_charge (str, optional): symbol used for extended charges.
-                                         Defaults to "Q".
-        periodic_phase (str, optional): symbol used for periodic phases.
-                                        Defaults to "θ".
-        extended_phase (str, optional): symbol used for extended phases.
-                                         Defaults to "θ".
-        ext_charge (str, optional): symbol used in external charges.
-                                    Defaults to "ng".
-        ext_flux (str, optional): symbol used in external fluxes.
-                                   Defaults to "_{ext}"
-        no_coef (bool, optional): Remove all the coefficients,
-                                  only leaving operators.
-        collect_phase (bool, optional): for speed, don't collect the phase terms.
-                                        slightly messier, but faster.
-
-    Returns:
-        Add: Hamiltonian with terms grouped
-    """
-
-    # List of variable types
-    q_list = [q for q in H.free_symbols
-              if extended_charge in str(q)]
-    n_list = [q for q in H.free_symbols
-              if periodic_charge in str(q) and
-              ext_charge not in str(q)]
-    theta_list = [th for th in H.free_symbols
-                  if (periodic_phase in str(th) or
-                      extended_phase in str(th)) and
-                  ext_flux not in str(th)]
-    ext_list = [q for q in H.free_symbols
-                if ext_charge in str(q) or
-                ext_flux in str(q)]
-    n_modes = len(theta_list)
-
-    # Set all external parameters to 0
-    if zero_ext:
-        for ext in ext_list:
-            H = H.subs(ext, 0)
-
-    # Terms to group
-    # Q and n
-    combosQ = {}
-    for terms in itertools.product(q_list + n_list, repeat=2):
-        combo = functools.reduce(lambda x, y: x*y, terms)
-        indices = np.unique([str(x)[-1] for x in terms])
-        combosQ[combo] = "E_{C"+''.join(indices)+"}"
-
-    # Phase
-    combos = []
-    combos_trig = []
-    if collect_phase:
-        for num_terms in range(1, n_modes + 1):
-            # Straight products
-            combos += list(set([functools.reduce(lambda x, y: x*y, z)
-                                for z in itertools.product(theta_list,
-                                                           repeat=num_terms)]))
-            # Trig products
-            # Encoding signals cos or sin
-            for encoding in itertools.product([0, 1], repeat=num_terms):
-                # Modes is which num_terms modes are being considered
-                for modes in itertools.combinations(range(n_modes), num_terms):
-                    trig_prod = 1
-                    for i, term in enumerate(encoding):
-                        if term:
-                            trig_prod *= sym.cos(theta_list[modes[i]])
-                        else:
-                            trig_prod *= sym.sin(theta_list[modes[i]])
-                    combos_trig += [trig_prod]
-
-        # Explicitly add theta squared terms if only one mode
-        if n_modes == 1:
-            combos += list(set([functools.reduce(lambda x, y: x*y, z)
-                                for z in itertools.product(theta_list,
-                                                           repeat=2)]))
-
-    H = collect(H, list(combosQ.keys()) + combos, func=sym.ratsimp)
-    if collect_phase:
-        H = collect(H, combos_trig)
-
-    if no_coeff:
-        H = _remove_coeff(H, list(combosQ.keys()) + combos + combos_trig)
-
-    return H, combos+combos_trig, combosQ
-
-
-def _remove_coeff(H, all_combos):
-    H_class = H.copy()
-    for combo in all_combos:
-        H_class = H_class.replace(lambda x: x.is_Mul
-                                  # Dividing removes all the terms in combo
-                                  and all([sym not in combo.free_symbols
-                                           for sym in
-                                           (x/combo).free_symbols])
-                                  # And all theta/n terms in x are also in
-                                  # combo
-                                  and all([sym in combo.free_symbols
-                                           for sym in x.free_symbols
-                                           if sym in all_combos]),
-                                  lambda x: -combo if str(x)[0] == "-"
-                                  else combo)
-    return H_class
 
 
 def zero_start_edges(edges):

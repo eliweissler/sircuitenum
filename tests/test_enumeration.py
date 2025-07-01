@@ -271,7 +271,7 @@ def test_generate_graphs_node():
                                         subset['circuit'].values)
 
 
-def test_reduce_individual_set_():
+def test__reduce_individual_set():
 
     # Generate all the 2/3 node circuits
     enum.generate_graphs_node(TEMP_FILE, 2, base=7)
@@ -280,14 +280,14 @@ def test_reduce_individual_set_():
     # CJL Delta
     filter_str = f"WHERE edge_counts LIKE '1,1,1,0,0,0,0' AND graph_index LIKE 1"
     args = (filter_str, TEMP_FILE, 3, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
-    enum.reduce_individual_set_(args)
+    enum._reduce_individual_set(args)
     df = utils.get_circuit_data_batch(TEMP_FILE, 3, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
     assert df["in_non_iso_set"].sum() == 1
 
     # CLL Delta
     filter_str = f"WHERE edge_counts LIKE '1,0,2,0,0,0,0' AND graph_index LIKE 1"
     args = (filter_str, TEMP_FILE, 3, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
-    enum.reduce_individual_set_(args)
+    enum._reduce_individual_set(args)
     df = utils.get_circuit_data_batch(TEMP_FILE, 3, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
     assert df["in_non_iso_set"].sum() == 0
 
@@ -324,31 +324,7 @@ def test_trim_graph_node():
         os.remove(TEMP_FILE)
 
 
-
-def test_gen_hamiltonian():
-
-    # Transmon
-    edges = [(0, 1)]
-    circuit = [("J", "C")]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    assert sy.latex(H, order="grlex") == '- E_{J_1} \\cos{\\left(\\hat{θ}_{1} \\right)} + \\frac{\\hat{n}_{1}^{2}}{2 C_{1} + 2 C_{J_1}}'
-
-    # Fluxoinium
-    edges = [(0, 1)]
-    circuit = [("J", "L")]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    assert sy.latex(H, order="grlex") == '- E_{J_1} \\cos{\\left(\\hat{φ}_{1} \\right)} + \\frac{\\hat{φ}_{1}^{2}}{2 L_{1}} + \\frac{\\hat{q}_{1}^{2}}{2 C_{J_1}}'
-    
-    # Zero-Pi
-    edges = [(0, 1), (2, 3), (0, 3), (1, 2), (0, 2), (1, 3)]
-    circuit = [("J",),("J",), ("L",), ("L",), ("C",), ("C",)]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    assert sy.latex(H, order="grlex") == '\\left(- E_{J_1} - E_{J_2}\\right) \\cos{\\left(\\hat{θ}_{1} \\right)} \\cos{\\left(\\hat{φ}_{3} \\right)} + \\left(E_{J_1} - E_{J_2}\\right) \\sin{\\left(\\hat{θ}_{1} \\right)} \\sin{\\left(\\hat{φ}_{3} \\right)} + \\frac{\\hat{n}_{1}^{2} \\left(C_{1} C_{J_1} + C_{1} C_{J_2} + C_{2} C_{J_1} + C_{2} C_{J_2}\\right)}{8 C_{1} C_{2} C_{J_1} + 8 C_{1} C_{2} C_{J_2} + 8 C_{1} C_{J_1} C_{J_2} + 8 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{n}_{1} \\hat{q}_{2} \\left(C_{1} C_{J_1} + C_{1} C_{J_2} - C_{2} C_{J_1} - C_{2} C_{J_2}\\right)}{8 C_{1} C_{2} C_{J_1} + 8 C_{1} C_{2} C_{J_2} + 8 C_{1} C_{J_1} C_{J_2} + 8 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{n}_{1} \\hat{q}_{3} \\left(- C_{1} C_{J_1} + C_{1} C_{J_2} - C_{2} C_{J_1} + C_{2} C_{J_2}\\right)}{4 C_{1} C_{2} C_{J_1} + 4 C_{1} C_{2} C_{J_2} + 4 C_{1} C_{J_1} C_{J_2} + 4 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{q}_{2}^{2} \\left(C_{1} C_{J_1} + C_{1} C_{J_2} + C_{2} C_{J_1} + C_{2} C_{J_2} + 4 C_{J_1} C_{J_2}\\right)}{32 C_{1} C_{2} C_{J_1} + 32 C_{1} C_{2} C_{J_2} + 32 C_{1} C_{J_1} C_{J_2} + 32 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{q}_{2} \\hat{q}_{3} \\left(- C_{1} C_{J_1} + C_{1} C_{J_2} + C_{2} C_{J_1} - C_{2} C_{J_2}\\right)}{8 C_{1} C_{2} C_{J_1} + 8 C_{1} C_{2} C_{J_2} + 8 C_{1} C_{J_1} C_{J_2} + 8 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{q}_{3}^{2} \\left(4 C_{1} C_{2} + C_{1} C_{J_1} + C_{1} C_{J_2} + C_{2} C_{J_1} + C_{2} C_{J_2}\\right)}{8 C_{1} C_{2} C_{J_1} + 8 C_{1} C_{2} C_{J_2} + 8 C_{1} C_{J_1} C_{J_2} + 8 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{φ}_{2}^{2} \\left(2 L_{1} + 2 L_{2}\\right)}{L_{1} L_{2}} + \\frac{\\hat{φ}_{2} \\hat{φ}_{3} \\left(2 L_{1} - 2 L_{2}\\right)}{L_{1} L_{2}} + \\frac{\\hat{φ}_{3}^{2} \\left(L_{1} + L_{2}\\right)}{2 L_{1} L_{2}}'
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=True)[0]
-    assert sy.latex(H, order="grlex") == '- 2 E_{J} \\cos{\\left(\\hat{θ}_{1} \\right)} \\cos{\\left(\\hat{φ}_{3} \\right)} + \\frac{\\hat{n}_{1}^{2}}{4 C + 4 C_{J}} + \\frac{4 \\hat{φ}_{2}^{2}}{L} + \\frac{\\hat{φ}_{3}^{2}}{L} + \\frac{\\hat{q}_{3}^{2}}{4 C_{J}} + \\frac{\\hat{q}_{2}^{2}}{16 C}'
-
-
-def test_gen_ham_row_():
+def test__gen_ham_class_row():
 
     # Generate all the 2 node circuits
     enum.generate_graphs_node(TEMP_FILE, 2, base=7)
@@ -360,159 +336,39 @@ def test_gen_ham_row_():
     uid = df.iloc[0]["unique_key"]
 
     # Add cols
-    new_cols = ["n_periodic", "n_extended", "n_harmonic",
-                        "periodic", "extended", "harmonic"]
-    new_cols += enum.gen_func_combos_(1).keys()
-    new_cols += [x+"_sym" for x in new_cols]
-    new_cols = ["H", "H_sym", "coord_transform",
-                "H_class", "H_class_sym", "nonlinearity_counts",
-                "nonlinearity_counts_sym",
-                "H_group", "H_group_sym"] + new_cols
-    with sqlite3.connect(TEMP_FILE) as con:
-        cur = con.cursor()
-        for col in new_cols:
-            sql_str = f"ALTER TABLE {table_name}\n"
-            if "n_" in col or "cos" in col or "sin" in col:
-                sql_str += f"ADD {col} int DEFAULT 0"
-            else:
-                sql_str += f"ADD {col}"
-            cur.execute(sql_str)
-            con.commit()
-    enum.gen_ham_row_(uid, TEMP_FILE)
+    new_cols = ["n_compact", "n_extended", "n_harmonic",
+                "n_free", "n_frozen", "n_sigma",
+                "H_class", "wJT",  "H_class_sym", "wJT_sym"]
+    con = sqlite3.connect(TEMP_FILE)
+    cur = con.cursor()
+    for col in new_cols:
+        sql_str = f"ALTER TABLE {table_name}\n"
+        if "n_" in col or "cos" in col or "sin" in col:
+            sql_str += f"ADD {col} int DEFAULT 0"
+        else:
+            sql_str += f"ADD {col}"
+        cur.execute(sql_str)
+    con.commit()
+    con.close()
 
-    # Test H is right
+    enum._gen_ham_class_row((uid, TEMP_FILE))
+
+    # Test stuff is right
     df = utils.get_circuit_data_batch(TEMP_FILE, 2, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
-    assert df["H"].iloc[0] == '- E_{J_1} \\cos{\\left(\\hat{φ}_{1} \\right)} + \\frac{\\hat{φ}_{1}^{2}}{2 L_{1}} + \\frac{\\hat{q}_{1}^{2}}{2 C_{J_1}}'
+    entry = df.iloc[0]
+    assert entry["n_compact"] == 0
+    assert entry["n_extended"] == 1
+    assert entry["n_harmonic"] == 0
+    assert entry["n_free"] == 0
+    assert entry["n_frozen"] == 0
+    assert entry["n_sigma"] == 1
+    assert entry["H_class"] == "010_0-_0_0-_0-_2"
+    assert entry["H_class_sym"] == "010_0-_0_0-_0-_2"
+    assert entry["wJT"] == "2"
+    assert entry["wJT_sym"] == "2"
+
 
     os.remove(TEMP_FILE)
-
-
-def test_unique_hams():
-
-    h_list = ['\\cos{(\\hat{θ}_{1})} + \\hat{n}_{1}^{2}']*3
-    reduced, groups = enum.unique_hams(h_list)
-    assert len([x for x in reduced if not x is None]) == 1
-    assert all(x == "_1" for x in groups)
-
-    h_list = ['\\cos{(\\hat{θ}_{1})} + \\hat{n}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{2})} + \\hat{n}_{1}^{2}']
-    reduced, groups = enum.unique_hams(h_list)
-    assert len([x for x in reduced if not x is None]) == 1
-    assert all(x == "_1" for x in groups)
-
-    h_list = ['\\cos{(\\hat{θ}_{1})} \\cos{(\\hat{φ}_{3})} + \\hat{n}_{1}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{3}^{2} + \\hat{q}_{3}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{3})} \\cos{(\\hat{φ}_{1})} + \\hat{n}_{3}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{1}^{2} + \\hat{q}_{1}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{1})}} + \\hat{n}_{1}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{3}^{2} + \\hat{q}_{3}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{2})} + \\hat{n}_{1}^{2}']
-    reduced, groups = enum.unique_hams(h_list)
-    assert len([x for x in reduced if not x is None]) == 3
-    assert groups == ["_1", "_1", "_2", "_3"]
-
-
-def test_unique_hams_in_df():
-
-
-    h_list = ['\\cos{(\\hat{θ}_{1})} \\cos{(\\hat{φ}_{3})} + \\hat{n}_{1}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{3}^{2} + \\hat{q}_{3}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{3})} \\cos{(\\hat{φ}_{1})} + \\hat{n}_{3}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{1}^{2} + \\hat{q}_{1}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{1})}} + \\hat{n}_{1}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{3}^{2} + \\hat{q}_{3}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{2})} + \\hat{n}_{1}^{2}']
-    
-    df = pd.DataFrame({"H_class": h_list, "nonlinearity_counts": [""]*4})
-    enum.unique_hams_in_df(df, symmetric=False)
-    assert len(np.unique([x for x in df["H_group"] if not x is None])) == 3
-    assert list(df["H_group"].values) == ["_1", "_1", "_2", "_3"]
-    
-
-def test_unique_hams_for_count_():
-
-
-    enum.generate_all_circuits(TEMP_FILE, 2, 2, base=7, n_workers=4)
-    args = (TEMP_FILE, 2, "1000", True, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
-    enum.unique_hams_for_count_(args)
-    assert utils.get_unique_qubits(TEMP_FILE, 2)["H_group"].unique().size == 2
-    os.remove(TEMP_FILE)
-
-
-def test_gen_func_combos_():
-    
-    assert len(enum.gen_func_combos_(1)) == 4
-    assert len(enum.gen_func_combos_(2)) == 14
-
-
-def test_categorize_hamiltonian():
-
-    # Transmon
-    edges = [(0, 1)]
-    circuit = [("J", "C")]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    info = enum.categorize_hamiltonian(H)
-    assert info['n_modes'] == 1
-    assert info['n_periodic'] == 1
-    assert info['n_extended'] == 0
-    assert info['n_harmonic'] == 0
-    assert info["periodic"] == ["1"]
-    assert info["extended"] == []
-    assert info["harmonic"] == []
-    for k in info:
-        if "sin" in k or "cos" in k:
-            if k == "cos_p":
-                assert info[k] == 1
-            else:
-                assert info[k] == 0
-
-    # Fluxoinium
-    edges = [(0, 1)]
-    circuit = [("J", "L")]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    info = enum.categorize_hamiltonian(H)
-    assert info['n_modes'] == 1
-    assert info['n_periodic'] == 0
-    assert info['n_extended'] == 1
-    assert info['n_harmonic'] == 0
-    assert info["periodic"] == []
-    assert info["extended"] == ["1"]
-    assert info["harmonic"] == []
-    for k in info:
-        if "sin" in k or "cos" in k:
-            if k == "cos_e":
-                assert info[k] == 1
-            else:
-                assert info[k] == 0
-
-    # Zero-Pi
-    edges = [(0, 1), (2, 3), (0, 3), (1, 2), (0, 2), (1, 3)]
-    circuit = [("J",),("J",), ("L",), ("L",), ("C",), ("C",)]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    info = enum.categorize_hamiltonian(H)
-    assert info['n_modes'] == 3
-    assert info['n_periodic'] == 1
-    assert info['n_extended'] == 1
-    assert info['n_harmonic'] == 1
-    assert info["periodic"] == ["1"]
-    assert info["extended"] == ["3"]
-    assert info["harmonic"] == ["2"]
-    for k in info:
-        if "sin" in k or "cos" in k:
-            if k in ["cos_e_cos_p", "sin_e_sin_p"]:
-                assert info[k] == 1
-            else:
-                assert info[k] == 0
-
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=True)[0]
-    info = enum.categorize_hamiltonian(H)
-    assert info['n_modes'] == 3
-    assert info['n_periodic'] == 1
-    assert info['n_extended'] == 1
-    assert info['n_harmonic'] == 1
-    assert info["periodic"] == ["1"]
-    assert info["extended"] == ["3"]
-    assert info["harmonic"] == ["2"]
-    for k in info:
-        if "sin" in k or "cos" in k:
-            if k == "cos_e_cos_p":
-                assert info[k] == 1
-            else:
-                assert info[k] == 0
 
 
 def df_equality_check(df1: pd.DataFrame, df2: pd.DataFrame):
@@ -538,24 +394,35 @@ def df_equality_check(df1: pd.DataFrame, df2: pd.DataFrame):
                     assert v1 == v2
 
 
-def test_assign_H_groups():
+def test_add_hamiltonian_classes():
     
     
     # Generate all the 3 node circuits and check that
-    # there's 22 H classes
-    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=4)
-    enum.assign_H_groups(TEMP_FILE, 3, n_workers=4, resume=False)
+    # there's 19 H classes
+    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=1, quiet=False)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
-    assert df.H_group.unique().size == 20 # used to be 22
-    assert df.H_group_sym.unique().size == 20
+    assert df.H_class.unique().size == 19
+    assert df.H_class_sym.unique().size == 19
     os.remove(TEMP_FILE)
 
-    
-    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=5, n_workers=1)
-    enum.assign_H_groups(TEMP_FILE, 3, n_workers=1, resume=False)
+     # Generate all the 3 node circuits and check that
+    # there's 19 H classes
+    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=4, quiet=False)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
-    assert df.H_group.unique().size == 20
-    assert df.H_group_sym.unique().size == 20
+    assert df.H_class.unique().size == 19
+    assert df.H_class_sym.unique().size == 19
+    os.remove(TEMP_FILE)
+    
+    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=5, n_workers=4)
+    df = utils.get_unique_qubits(TEMP_FILE, 3)
+    assert df.H_class.unique().size == 19
+    diff = [x for x in df.H_class.unique() if x not in df.H_class_sym.unique()]
+    for x in ['110_1-1_1_0-0_1-1_2220', '011_0-0_2_1-1_1-1_21']:
+        assert x in diff
+    diff2 = [x for x in df.H_class_sym.unique() if x not in df.H_class.unique()]
+    for x in ['110_1-1_0_0-0_0-0_2220']:
+        assert x in diff2
+    assert df.H_class_sym.unique().size == 18
     os.remove(TEMP_FILE)
 
 
@@ -703,7 +570,10 @@ def test_qps_enum():
 
 if __name__ == "__main__":
     # test_generate_graphs_node()
-    test_generate_all_circuits()
+    # test_generate_all_circuits()
+    # test_find_equiv_cir_series()
+    # test_add_hamiltonian_classes()
+    test__gen_ham_class_row()
     # test_find_equiv_cir_series()
     # test_gen_hamiltonian()
     # test_categorize_hamiltonian()

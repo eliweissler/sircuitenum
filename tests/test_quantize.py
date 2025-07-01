@@ -650,7 +650,18 @@ def test__var_col_perms():
 
 def test__sub_equal_LC():
 
-    assert False
+    C1, C2, C3 = sym.symbols("C1, C2, C3")
+    CJ1, CJ2 = sym.symbols("CJ1, CJ2")
+    L1, L2 = sym.symbols("L1, L2")
+    X = sym.Matrix([[C1, L1, C2],
+                    [C3, C1, L2],
+                    [CJ1, CJ2, CJ1]])
+    
+    test = quantize._sub_equal_LC(X)
+
+    assert test[0,0] == test[0,2] == test[1,0] == test[1,1]
+    assert test[0,1] == test[1,2]
+    assert test[2,0] == test[2,1] == test[2,2]
 
 
 def test_well_spaced():
@@ -1309,20 +1320,20 @@ def test_gen_spaced_var_trans():
 
 
     # All three node circuits
-    db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
-    for n in range(2, 5):
-        df = utils.get_unique_qubits(db_path, n)
-        from tqdm import tqdm
-        for i, row in tqdm(df.iterrows(), total=df.shape[0]):
-            # print(row.circuit, row.edges)
-            trans, var_types = quantize.gen_spaced_var_trans(row.circuit, row.edges)
-            # print(len(trans), "transformations")
-            try:
-                assert row.n_periodic == len(var_types.get("compact", []))
-                assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
-            except:
-                print("Failed", row.circuit, row.edges)
-                breakpoint()
+    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    # for n in range(2, 5):
+    #     df = utils.get_unique_qubits(db_path, n)
+    #     from tqdm import tqdm
+    #     for i, row in tqdm(df.iterrows(), total=df.shape[0]):
+    #         # print(row.circuit, row.edges)
+    #         trans, var_types = quantize.gen_spaced_var_trans(row.circuit, row.edges)
+    #         # print(len(trans), "transformations")
+    #         try:
+    #             assert row.n_periodic == len(var_types.get("compact", []))
+    #             assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
+    #         except:
+    #             print("Failed", row.circuit, row.edges)
+    #             breakpoint()
 
 
 def test_secondary_transformation_harm_ext():
@@ -1532,22 +1543,22 @@ def test_choose_Z():
 
 
     # All three node circuits
-    db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
-    for n in range(2, 3):
-        df = utils.get_unique_qubits(db_path, n)
-        from tqdm import tqdm
-        for i, row in tqdm(df.iterrows(), total=df.shape[0]):
-            # print(row.circuit, row.edges)
-            circuit = row.circuit
-            circuit = utils.add_elem_number(circuit)
-            Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
-            # print(len(trans), "transformations")
-            try:
-                assert row.n_periodic == len(var_types.get("compact", []))
-                assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
-            except:
-                print("Failed", row.circuit, row.edges)
-                breakpoint()
+    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    # for n in range(2, 3):
+    #     df = utils.get_unique_qubits(db_path, n)
+    #     from tqdm import tqdm
+    #     for i, row in tqdm(df.iterrows(), total=df.shape[0]):
+    #         # print(row.circuit, row.edges)
+    #         circuit = row.circuit
+    #         circuit = utils.add_elem_number(circuit)
+    #         Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
+    #         # print(len(trans), "transformations")
+    #         try:
+    #             assert row.n_periodic == len(var_types.get("compact", []))
+    #             assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
+    #         except:
+    #             print("Failed", row.circuit, row.edges)
+    #             breakpoint()
                 
 def test_gen_junc_pot():
 
@@ -1562,55 +1573,128 @@ def test_gen_junc_pot():
     ans = r'- E_{J} \cos{\left(p_{1} - p_{2} \right)}'
     assert sym.latex(J, order="grlex") == ans
 
-    J = quantize.gen_junc_pot(circuit, edges, th_vec, cob=Z)
+    J = quantize.gen_junc_pot(circuit, edges, th_vec, Z=Z)
     ans = r'- E_{J} \cos{\left(p_{1} \right)}'
     assert sym.latex(J, order="grlex") == ans
 
 
 def test_num_subs():
 
-    assert False
+    C1, C2, C3 = sym.symbols("C1, C2, C3", positive=True, real=True)
+    L1 = sym.symbols("L1", positive=True, real=True)
+    X = sym.Matrix([[C1, 1, C2],
+                    [C3, C1, L1]])
+    test, vals = quantize.num_subs(X, symbol="C", hermitify=False)
+    assert test[0,0] == test[1,1] == vals["C1"]
+    assert test[0,2] == vals["C2"]
+    assert test[1,0] == vals["C3"]
+    assert test[0,1] == 1
+    assert L1 in test.free_symbols
 
-def test_quantize_circuit():
+    X = sym.Matrix([[C1, 1, C2],
+                    [C3, C1, L1]])
+    test, vals = quantize.num_subs(X, symbol="L", hermitify=False)
+    assert test[1,2] == vals["L1"]
+    assert test[0,1] == 1
+    assert all(x in test.free_symbols for x in  [C1, C2, C3])
+
+    vals_in = {"C1": 1, "C2":2, "C3":3}
+    test, vals = quantize.num_subs(X, symbol="C", vals_in=vals_in, hermitify=False)
+    assert test[0,0] == test[1,1] == vals["C1"] == vals_in["C1"]
+    assert test[0,2] == vals["C2"] == vals_in["C2"]
+    assert test[1,0] == vals["C3"] == vals_in["C3"]
+    assert test[0,1] == 1
+    assert L1 in test.free_symbols
+
+    CJ = sym.symbols(r"C_{J}", positive=True, real=True)
+    X = sym.Matrix([[CJ, C1],
+                    [C1, 1]])
+    test, vals = quantize.num_subs(X, symbol="C", exclude="J", hermitify=True)
+    assert test[1,0] == test[0,1] == vals["C1"]
+    assert test[1,1] == 1
+    assert CJ in test.free_symbols
+    assert test == test.transpose()
+
+    CJ = sym.symbols(r"C_{J}", positive=True, real=True)
+    X = sym.Matrix([[CJ, 0],
+                    [C1, 1]])
+    test, vals = quantize.num_subs(X, symbol=r"C_{J}", hermitify=True)
+    assert test[1,0] == test[0,1] == C1/2
+    assert test[0,0] == vals["C_{J}"]
+    assert all(x in test.free_symbols for x in  [C1])
+    assert test == test.transpose()
+
+
+def test_collect_H_terms():
+
+    q_vec, th_vec = quantize.gen_variables(3, Z = sym.eye(3), periodic=[1])
+
+    a,b,c = sym.symbols("a,b,c", positive=True, real=True)
+
+    H = q_vec[0]**2 + a*q_vec[0]**2 + b*q_vec[1]*q_vec[2] + c*q_vec[1]*q_vec[2] + a*(th_vec[1]-th_vec[2])**2 + c*th_vec[2]**2 + sym.cos(th_vec[0]+th_vec[1]) + sym.cos(th_vec[0]-th_vec[1])
+
+    H_collect, combos_th, combos_q = quantize.collect_H_terms(H, collect_phase=True)
+
+    ans = 'a n_{1}^{2} + a \\left(φ_{2} - φ_{3}\\right)^{2} + b q_{2} q_{3} + c q_{2} q_{3} + c φ_{3}^{2} + n_{1}^{2} + \\cos{\\left(θ_{1} - φ_{2} \\right)} + \\cos{\\left(θ_{1} + φ_{2} \\right)}'
+
+    assert sym.latex(H, order="grlex") == ans
+
+def test_symbolic_hamiltonian():
 
     # Fluxonium
     edges = [(0, 1)]
     circuit = [("J", "L")]
     obj = pi.to_SCqubits(circuit, edges)
-    Z = sym.Matrix(obj.transformation_matrix)
-
-    H, qv, tv = quantize.quantize_circuit(circuit, edges, cob=Z, free=[2],
+    Z = sym.simplify(sym.Matrix([[1/2, 1/2],
+                                [-1/2, 1/2]]), rational=True)
+    var_types = {"extended": [1], "sigma": [2]}
+    H, qv, tv = quantize.symbolic_hamiltonian(circuit, edges, Z=Z, var_types=var_types,
                                           return_vars=True)
-    ans = '- E_{J} \\cos{\\left(\\hat{φ}_{1} \\right)} + \\frac{\\hat{φ}_{1}^{2}}{2 L} + \\frac{\\hat{q}_{1}^{2}}{2 C_{J}}'
-
+    ans = '- E_{J} \\cos{\\left(φ_{1} \\right)} + \\frac{φ_{1}^{2}}{2 L} + \\frac{q_{1}^{2}}{2 C_{J}}'
     assert sym.latex(H, order="grlex") == ans
 
     # 0 - pi
     edges = [(1, 2), (3, 4), (1, 4), (2, 3), (1, 3), (2, 4)]
     circuit = [("J",), ("J",), ("L",), ("L",), ("C",), ("C",)]
-    obj = pi.to_SCqubits(circuit, utils.zero_start_edges(edges))
-    circuit = [("J1",), ("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
-    Z = sym.Matrix(obj.transformation_matrix)
+    Z = sym.Matrix([[1, 1, 1, 1],
+                    [0, 0, 1, 1],
+                    [0, 1, 0, 1],
+                    [1, 0, 0, 1]])
+    var_types = {"compact":[1], "extended": [2], "harmonic": [3], "sigma": [4]}
 
-    H, qv, tv = quantize.quantize_circuit(circuit, edges, cob=Z, **obj.var_categories | {"frozen": [4]},
-                                          return_vars=True)
-
-    ans = '\\left(- E_{J1} - E_{J2}\\right) \\cos{\\left(\\hat{θ}_{1} \\right)} \\cos{\\left(\\hat{φ}_{3} \\right)} + \\left(E_{J1} - E_{J2}\\right) \\sin{\\left(\\hat{θ}_{1} \\right)} \\sin{\\left(\\hat{φ}_{3} \\right)} + \\frac{\\hat{n}_{1}^{2} \\left(C_{1} C_{J1} + C_{1} C_{J2} + C_{2} C_{J1} + C_{2} C_{J2}\\right)}{8 C_{1} C_{2} C_{J1} + 8 C_{1} C_{2} C_{J2} + 8 C_{1} C_{J1} C_{J2} + 8 C_{2} C_{J1} C_{J2}} + \\frac{\\hat{n}_{1} \\hat{q}_{2} \\left(C_{1} C_{J1} + C_{1} C_{J2} - C_{2} C_{J1} - C_{2} C_{J2}\\right)}{8 C_{1} C_{2} C_{J1} + 8 C_{1} C_{2} C_{J2} + 8 C_{1} C_{J1} C_{J2} + 8 C_{2} C_{J1} C_{J2}} + \\frac{\\hat{n}_{1} \\hat{q}_{3} \\left(- C_{1} C_{J1} + C_{1} C_{J2} - C_{2} C_{J1} + C_{2} C_{J2}\\right)}{4 C_{1} C_{2} C_{J1} + 4 C_{1} C_{2} C_{J2} + 4 C_{1} C_{J1} C_{J2} + 4 C_{2} C_{J1} C_{J2}} + \\frac{\\hat{q}_{2}^{2} \\left(C_{1} C_{J1} + C_{1} C_{J2} + C_{2} C_{J1} + C_{2} C_{J2} + 4 C_{J1} C_{J2}\\right)}{32 C_{1} C_{2} C_{J1} + 32 C_{1} C_{2} C_{J2} + 32 C_{1} C_{J1} C_{J2} + 32 C_{2} C_{J1} C_{J2}} + \\frac{\\hat{q}_{2} \\hat{q}_{3} \\left(- C_{1} C_{J1} + C_{1} C_{J2} + C_{2} C_{J1} - C_{2} C_{J2}\\right)}{8 C_{1} C_{2} C_{J1} + 8 C_{1} C_{2} C_{J2} + 8 C_{1} C_{J1} C_{J2} + 8 C_{2} C_{J1} C_{J2}} + \\frac{\\hat{q}_{3}^{2} \\left(4 C_{1} C_{2} + C_{1} C_{J1} + C_{1} C_{J2} + C_{2} C_{J1} + C_{2} C_{J2}\\right)}{8 C_{1} C_{2} C_{J1} + 8 C_{1} C_{2} C_{J2} + 8 C_{1} C_{J1} C_{J2} + 8 C_{2} C_{J1} C_{J2}} + \\frac{\\hat{φ}_{2}^{2} \\left(2 L_{1} + 2 L_{2}\\right)}{L_{1} L_{2}} + \\frac{\\hat{φ}_{2} \\hat{φ}_{3} \\left(2 L_{1} - 2 L_{2}\\right)}{L_{1} L_{2}} + \\frac{\\hat{φ}_{3}^{2} \\left(L_{1} + L_{2}\\right)}{2 L_{1} L_{2}}'
-
+    H, cMat, lMat, wJT = quantize.symbolic_hamiltonian(circuit, edges, Z=Z, var_types=var_types,
+                                          return_vars=False, return_mats=True)
+    ans = "- 2 E_{J} \\cos{\\left(θ_{1} \\right)} \\cos{\\left(φ_{2} \\right)} + \\frac{n_{1}^{2}}{4 C + 4 C_{J}} + \\frac{φ_{2}^{2}}{L} + \\frac{φ_{3}^{2}}{L} + \\frac{q_{2}^{2}}{4 C_{J}} + \\frac{q_{3}^{2}}{4 C}"
     assert sym.latex(H, order="grlex") == ans
+
+    assert cMat.shape == lMat.shape == (3,3)
+    assert wJT.shape == (2,3)
+
+    C = [x for x in H.free_symbols if "C" in str(x) and "J" not in str(x)][0]
+    Cj = [x for x in H.free_symbols if "C" in str(x) and "J" in str(x)][0]
+    L = [x for x in H.free_symbols if "L" in str(x)][0]
+
+    cMat_exp = sym.Matrix([[2*(C+Cj), 0, 0],
+                            [0, 2*Cj, 0],
+                            [0, 0, 2*C]])
+    lMat_exp = sym.Matrix([[0, 0, 0],
+                            [0, 2/L, 0],
+                            [0, 0, 2/L]])
+    wJT_exp = sym.Matrix([[1,1,0],[-1,1,0]])
+    assert cMat == cMat_exp
+    assert lMat == lMat_exp                   
+    assert quantize._equal_up_to_column_shift_and_sign(wJT, wJT_exp)
 
     # Transmon with Drive
     edges = [(0, 1)]
     circuit = [("J", "C")]
-    obj = pi.to_SCqubits(circuit, edges)
-
-    Z = sym.Matrix(obj.transformation_matrix)
+    Z = sym.simplify(sym.Matrix([[1/2, 1/2],
+                                [-1/2, 1/2]]), rational=True)
     Cv = sym.Matrix(np.array([sym.Symbol("C_c", real=True, positive=True), 0]).reshape((2, 1)))
     V = sym.Matrix(np.array([sym.Symbol("V_g", real=True, positive=True)]).reshape((1, 1)))
-    H, qv, tv = quantize.quantize_circuit(circuit, edges, cob=Z, free=[2], return_vars=True, Cv=Cv, V=V)
-
-    ans = '- \\frac{C_{c} V_{g} \\hat{q}_{1}}{C + C_{J}} - E_{J} \\cos{\\left(\\hat{φ}_{1} \\right)} + \\frac{\\hat{q}_{1}^{2}}{2 C + 2 C_{J}}'
-
+    var_types = {"compact": [1], "sigma": [2]}
+    H, qv, tv = quantize.symbolic_hamiltonian(circuit, edges, Z=Z, var_types=var_types, return_vars=True, Cv=Cv, V=V)
+    ans = '- \\frac{C_{c} V_{g} n_{1}}{C + C_{J}} - E_{J} \\cos{\\left(θ_{1} \\right)} + \\frac{n_{1}^{2}}{2 C + 2 C_{J}}'
     assert sym.latex(H, order="grlex") == ans
 
 
@@ -1629,25 +1713,31 @@ if __name__ == "__main__":
 
     x = 1
 
+    test__wT_key()
+    test__sub_equal_LC()
+    test_num_subs()
+    test_symbolic_hamiltonian()
+    test_collect_H_terms()
+
     # test_find_islands()
     # test_decoupling_transformation()
     # test_decouple_column()
-    test__var_col_perms()
-    test_secondary_transformation_harm_ext()
-    test_decoupling_transformation_3block()
+    # test__var_col_perms()
+    # test_secondary_transformation_harm_ext()
+    # test_decoupling_transformation_3block()
 
-    test__unique_col_combos()
+    # test__unique_col_combos()
 
-    # test_unique_compact()
-    test__find_equiv_mats()
-    test__find_equiv_cols()
-    test_unique_compact_extended()
-    test_unique_harmonic()
-    test_H_hash()
-    test_choose_Z()
+    # # test_unique_compact()
+    # test__find_equiv_mats()
+    # test__find_equiv_cols()
+    # test_unique_compact_extended()
+    # test_unique_harmonic()
+    # test_H_hash()
+    # test_choose_Z()
 
-    # test__vec_space_overlap()
-    test_gen_spaced_var_trans()
+    # # test__vec_space_overlap()
+    # test_gen_spaced_var_trans()
     # test__nonzero_entries_str()
     # test__sort_wT()
 

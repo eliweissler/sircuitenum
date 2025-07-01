@@ -12,6 +12,9 @@ import sympy as sym
 import numpy as np
 import networkx as nx
 
+from sympy import collect, expand_mul, Mul, Dummy
+from sympy.core.add import Add
+
 from sircuitenum import utils
 from sircuitenum.qpackage_interface import subgraph
 
@@ -26,20 +29,20 @@ EXT_CHARGE = "n_g"
 EXT_PHASE = "_{ext}"
 
 
-def gen_variables(n_nodes, cob, periodic):
+def gen_variables(n_nodes, Z, periodic):
 
     Q_str = ""
     th_str = ""
     for n in range(1, n_nodes+1):
-        if cob is None:
-            th_str += "\hat{" + NODE_PHASE + "}_{"+str(n)+"}, "
-            Q_str += "\hat{" + NODE_CHARGE + "}_{"+str(n)+"}, "
+        if Z is None:
+            th_str += NODE_PHASE + "_{"+str(n)+"}, "
+            Q_str += NODE_CHARGE + "_{"+str(n)+"}, "
         elif n in periodic:
-            th_str += "\hat{" + PERIODIC_PHASE + "}_{"+str(n)+"}, "
-            Q_str += "\hat{" + PERIODIC_CHARGE + "}_{"+str(n)+"}, "
+            th_str += PERIODIC_PHASE + "_{"+str(n)+"}, "
+            Q_str += PERIODIC_CHARGE + "_{"+str(n)+"}, "
         else:
-            th_str += "\hat{" + EXTENDED_PHASE + "}_{"+str(n)+"}, "
-            Q_str += "\hat{" + EXTENDED_CHARGE + "}_{"+str(n)+"}, "
+            th_str += EXTENDED_PHASE + "_{"+str(n)+"}, "
+            Q_str += EXTENDED_CHARGE + "_{"+str(n)+"}, "
 
     Q_vec = sym.Matrix(sym.symbols(Q_str[:-1]))
     th_vec = sym.Matrix(sym.symbols(th_str[:-1]))
@@ -445,13 +448,11 @@ def _nonzero_entries_str(X: Union[sym.Matrix, np.ndarray],
 
 def _sort_wT(wT: Union[sym.Matrix, np.ndarray]):
     if not isinstance(wT, np.ndarray):
-        wT = np.array(wT).astype(float)
+        wT = np.array(wT).astype(int)
     keys = []
     for i in range(wT.shape[0]):
-        try:
-            keys.append(str(sum(wT[i, :] != 0)) +"_"+"-".join(wT[i, :].nonzero()[0].astype(str)))
-        except:
-            breakpoint()
+        keys.append(str(sum(wT[i, :] != 0)) +"_"+"-".join(wT[i, :].nonzero()[0].astype(str)))
+
     return wT[np.argsort(keys)]
 
 def _maximize_wT(wT):
@@ -527,7 +528,7 @@ def _wT_key(wT: Union[sym.Matrix, np.ndarray], equalJ=False):
         wT = np.array(wT).astype(float)
 
     # Number of coupled modes
-    coup_mat = wT[0][np.newaxis, :]*wT[0][:, np.newaxis]
+    coup_mat = (wT[0][np.newaxis, :]*wT[0][:, np.newaxis]).astype(float)
     for i in range(1, wT.shape[0]):
         # outer product of row vectors
         term = wT[i][np.newaxis, :]*wT[i][:, np.newaxis]
@@ -573,14 +574,14 @@ def _sub_equal_LC(X):
     C = sym.symbols("C", positive=True, real=True)
     Cj = sym.symbols("C_J", positive=True, real=True)
     for x in X.free_symbols:
-        if "C" in str(x) and "J" not in str(x):
+        if "c" in str(x).lower() and "j" not in str(x).lower():
             X = X.subs(x, C)
-        if "C" in str(x) and "J" in str(x):
+        if "c" in str(x).lower() and "j" in str(x).lower():
             X = X.subs(x, Cj)
     # All L the same
     L = sym.symbols("L", positive=True, real=True)
     for x in X.free_symbols:
-        if "L" in str(x):
+        if "l" in str(x).lower():
             X = X.subs(x, L)
     return X
 
@@ -1398,7 +1399,7 @@ def secondary_transformation_harm_ext(Z0, var_types, cMat, lMat, wJ=sym.Matrix([
     return best_Z, H_hash(Z0*best_Z, var_types, cMat, lMat, wJ, try_perms=False)[0]
 
 
-def choose_Z(circuit, edges) -> tuple[sym.Matrix, str]:
+def choose_Z(circuit, edges) -> tuple[sym.Matrix, dict[str, list[int]], str]:
     
     # Generate capacitance matrix, susceptance matrix, and incidence matrix
     cMat = gen_cap_mat(circuit, utils.zero_start_edges(edges))
@@ -1434,7 +1435,7 @@ def choose_Z(circuit, edges) -> tuple[sym.Matrix, str]:
     
     return Z_final, var_types, lowest_hash
 
-def gen_junc_pot(circuit, edges, flux_vars, cob=None, eps=1e-10) -> sym.Matrix:
+def gen_junc_pot(circuit, edges, flux_vars, Z=None, eps=1e-10) -> sym.Matrix:
     """
     Generate the junction potential terms, optionally applying a change of basis.
 
@@ -1452,7 +1453,7 @@ def gen_junc_pot(circuit, edges, flux_vars, cob=None, eps=1e-10) -> sym.Matrix:
         Example: ``[(0, 1), (0, 2), (1, 2)]``.
     flux_vars : sym.Matrix
         A vector of flux variables for the circuit.
-    cob : sym.Matrix
+    Z : sym.Matrix
         A change of basis matrix used to transform the node flux variables.
 
     Returns
@@ -1460,6 +1461,9 @@ def gen_junc_pot(circuit, edges, flux_vars, cob=None, eps=1e-10) -> sym.Matrix:
     sym.Matrix
         The capacitance matrix as a symbolic matrix, representing the junction potential terms.
     """
+    
+    if Z is None:
+        Z = sym.eye(len(flux_vars))
 
     n_nodes = utils.get_num_nodes(edges)
 
@@ -1481,44 +1485,164 @@ def gen_junc_pot(circuit, edges, flux_vars, cob=None, eps=1e-10) -> sym.Matrix:
             if "J" in elem:
                 val += -EJ[elem]
         if abs(val) > 0:
-            node_vec = np.zeros(n_nodes, dtype=int)
-            node_vec[i] = -1
-            node_vec[j] = 1
-            node_vec = sym.Matrix(node_vec)
-            if cob is not None:
-                node_vec = sym.transpose(cob)*node_vec
-            j_terms += val*sym.cos((sym.transpose(flux_vars)*node_vec)[0])
+            wJi = sym.zeros(n_nodes,1)
+            wJi[i,0] = -1
+            wJi[j,0] = 1
+            j_terms += val*sym.cos((wJi.transpose()*Z*flux_vars)[0])
 
     return j_terms
 
-def num_subs(C, vals_in = {}, symbol="C"):
+
+## TODO: Make this more robust
+def num_subs(C, symbol="C", exclude = "", rand_range = (1,2), vals_in = {}, hermitify=True):
+
     vals = {}
     for x in C.free_symbols:
         x_str = str(x)
-        if symbol in x_str.upper() and "J" not in x_str.upper():
-            # Random capacitance 1/(0.1 - 1.1 GHZ)
-            if vals_in == {}:
-                vals[x_str] = 1/(0.1 + np.random.random())
-            else:
-                vals[x_str] = vals_in[x_str]
-        else:
-            # Random capacitance 1/(10 - 20 GHZ)
-            if vals_in == {}:
-                vals[x_str] = 1/(10 + 10*np.random.random())
-            else:
-                vals[x_str] = vals_in[x_str]
-        C = C.subs(x, vals[x_str])
+        if (symbol in x_str.upper()) or (symbol in x_str.lower()):
+            if exclude == "" or exclude not in x_str:
+                # Random value
+                if vals_in == {}:
+                    vals[x_str] = rand_range[0] + (rand_range[1]-rand_range[0])*np.random.random()
+                # prescribed value
+                else:
+                    vals[x_str] = vals_in[x_str]
+                C = C.subs(x, vals[x_str])
 
-    return C/2 + C.transpose()/2, vals
+    if hermitify:
+        C = C/2 + sym.conjugate(C.transpose())/2
+
+    return C, vals
 
 
-def quantize_circuit(circuit, edges, Cv=None, V=None, cob=None,
-                     periodic=[], extended=[], free=[], frozen=[],
-                     sigma = [], return_mats=False, return_vars=False,
-                     return_H_class: bool = False,
-                     return_combos: bool = False,
-                     collect_phase: bool = True,
-                     expand_trig: bool = True):
+def collect_H_terms(H: Add, zero_ext: bool = True, 
+                    periodic_charge=PERIODIC_CHARGE, periodic_phase=PERIODIC_PHASE,
+                    extended_charge=EXTENDED_CHARGE, extended_phase=EXTENDED_PHASE,
+                    ext_charge: str = EXT_CHARGE, ext_flux: str = EXT_PHASE,
+                    no_coeff: bool = False, collect_phase: bool = True) -> Add:
+    """
+    Groups terms in the Hamiltonian
+    
+    (q and \varphi -> \theta).
+
+    Args:
+        H (Add): Hamiltonian
+        zero_ext (bool, optional): Whether to zero all gate voltages/external
+                                   fluxes. Defaults to True.
+        periodic_charge (str, optional): symbol used for periodic charges.
+                                         Defaults to "n".
+        extended_charge (str, optional): symbol used for extended charges.
+                                         Defaults to "Q".
+        periodic_phase (str, optional): symbol used for periodic phases.
+                                        Defaults to "θ".
+        extended_phase (str, optional): symbol used for extended phases.
+                                         Defaults to "θ".
+        ext_charge (str, optional): symbol used in external charges.
+                                    Defaults to "ng".
+        ext_flux (str, optional): symbol used in external fluxes.
+                                   Defaults to "_{ext}"
+        no_coef (bool, optional): Remove all the coefficients,
+                                  only leaving operators.
+        collect_phase (bool, optional): for speed, don't collect the phase terms.
+                                        slightly messier, but faster.
+
+    Returns:
+        Add: Hamiltonian with terms grouped
+    """
+
+    # List of variable types
+    q_list = [q for q in H.free_symbols
+              if extended_charge in str(q)]
+    n_list = [q for q in H.free_symbols
+              if periodic_charge in str(q) and
+              ext_charge not in str(q)]
+    theta_list = [th for th in H.free_symbols
+                  if (periodic_phase in str(th) or
+                      extended_phase in str(th)) and
+                  ext_flux not in str(th)]
+    ext_list = [q for q in H.free_symbols
+                if ext_charge in str(q) or
+                ext_flux in str(q)]
+    n_modes = len(theta_list)
+
+    # Set all external parameters to 0
+    if zero_ext:
+        for ext in ext_list:
+            H = H.subs(ext, 0)
+
+    # Terms to group
+    # Q and n
+    combosQ = {}
+    for terms in itertools.product(q_list + n_list, repeat=2):
+        combo = functools.reduce(lambda x, y: x*y, terms)
+        indices = np.unique(["".join([c for c in str(x) if c.isdigit()]) for x in terms])
+        combosQ[combo] = "E_{C"+''.join(indices)+"}"
+
+    # Phase
+    combos = []
+    combos_trig = []
+    if collect_phase:
+        for num_terms in range(1, n_modes + 1):
+            # Straight products
+            combos += list(set([functools.reduce(lambda x, y: x*y, z)
+                                for z in itertools.product(theta_list,
+                                                           repeat=num_terms)]))
+            # Trig products
+            # Encoding signals cos or sin
+            for encoding in itertools.product([0, 1], repeat=num_terms):
+                # Modes is which num_terms modes are being considered
+                for modes in itertools.combinations(range(n_modes), num_terms):
+                    trig_prod = 1
+                    for i, term in enumerate(encoding):
+                        if term:
+                            trig_prod *= sym.cos(theta_list[modes[i]])
+                        else:
+                            trig_prod *= sym.sin(theta_list[modes[i]])
+                    combos_trig += [trig_prod]
+
+        # Explicitly add theta squared terms if only one mode
+        if n_modes == 1:
+            combos += list(set([functools.reduce(lambda x, y: x*y, z)
+                                for z in itertools.product(theta_list,
+                                                           repeat=2)]))
+
+    H = sym.expand(H)
+    H = collect(H, list(combosQ.keys()) + combos, func=sym.ratsimp)
+    if collect_phase:
+        H = collect(H, combos_trig)
+
+    if no_coeff:
+        H = _remove_coeff(H, list(combosQ.keys()) + combos + combos_trig)
+
+    return H, combos+combos_trig, combosQ
+
+
+def _remove_coeff(H, all_combos):
+    H_class = H.copy()
+    for combo in all_combos:
+        H_class = H_class.replace(lambda x: x.is_Mul
+                                  # Dividing removes all the terms in combo
+                                  and all([sym not in combo.free_symbols
+                                           for sym in
+                                           (x/combo).free_symbols])
+                                  # And all theta/n terms in x are also in
+                                  # combo
+                                  and all([sym in combo.free_symbols
+                                           for sym in x.free_symbols
+                                           if sym in all_combos]),
+                                  lambda x: -combo if str(x)[0] == "-"
+                                  else combo)
+    return H_class
+
+
+def symbolic_hamiltonian(circuit, edges, Cv=None, V=None, Z=None,
+                            var_types:dict={},
+                            return_mats: bool = False,
+                            return_vars: bool = False,
+                            return_H_class: bool = False,
+                            return_combos: bool = False,
+                            collect_phase: bool = True,
+                            expand_trig: bool = True):
     """
     Perform a symbolic circuit quantization for the given circuit.
 
@@ -1541,18 +1665,10 @@ def quantize_circuit(circuit, edges, Cv=None, V=None, cob=None,
         and fixed voltage nodes.
     V : sym.Matrix, optional
         A matrix of fixed voltages applied in the circuit.
-    cob : sym.Matrix, optional
+    Z : sym.Matrix, optional
         A change of basis matrix that transforms node variables to new variables. 
         This matrix corresponds to the Z transformation of scqubits.
         If the new variables are expressed in terms of the old, this should be the inverse.
-    periodic : list of int, optional
-        A list of mode numbers (indexed from 1) indicating which coordinates are periodic.
-    extended : list of int, optional
-        A list of mode numbers (indexed from 1) indicating which coordinates are extended.
-    free : list of int, optional
-        A list of mode numbers (indexed from 1) indicating which coordinates are free.
-    frozen : list of int, optional
-        A list of mode numbers (indexed from 1) indicating which coordinates are frozen.
     return_mats : bool, optional
         If True, return the capacitance and inductance matrices along with the Hamiltonian.
     return_vars : bool, optional
@@ -1575,91 +1691,87 @@ def quantize_circuit(circuit, edges, Cv=None, V=None, cob=None,
         - Optionally, the combinations of variables present in the Hamiltonian.
     """
     edges = utils.zero_start_edges(edges)
-
     n_nodes = utils.get_num_nodes(edges)
-
-    Q_vec, th_vec = gen_variables(n_nodes, cob, periodic)
+    q_vec, th_vec = gen_variables(n_nodes, Z, var_types.get("compact", []))
     
 
-    C_mat = gen_cap_mat(circuit, edges)
-    L_mat = gen_ind_mat(circuit, edges)
+    cMat = gen_cap_mat(circuit, edges)
+    lMat = gen_ind_mat(circuit, edges)
+    wJT = gen_w(circuit, edges, w_elem="J").transpose()
 
     # Set zero applied voltage
     if Cv is None:
         Qv = sym.zeros(rows=n_nodes, cols=1)
-
-    if cob is not None:
-        C_mat = sym.transpose(cob)*C_mat*cob
-        L_mat = sym.transpose(cob)*L_mat*cob
-        if Cv is not None:
-            if V is None:
-                raise ValueError("Provide Voltages for Coupling")
-            Qv = sym.transpose(cob)*Cv*V
-    elif Cv is not None:
+    else:
         Qv = Cv*V
 
+    # Obtain a transformation if none was given
+    if Z is None:
+        Z, var_types, _ = choose_Z(circuit, edges)
+    
+    # Transform C, L and Qv
+    cMat = sym.transpose(Z)*cMat*Z
+    lMat = sym.transpose(Z)*lMat*Z
+    Qv = Z.inv()*Qv
+    wJT = wJT*Z
+        
+
     # J terms shouldn't contain anything from free modes or frozen modes
-    J_terms = gen_junc_pot(circuit, edges, th_vec, cob=cob)
+    n_nd = (len(var_types.get("free", []))+
+            len(var_types.get("frozen", []))+ 
+            len(var_types.get("sigma", [])))
+    if not wJT[:, -n_nd:].is_zero_matrix:
+        breakpoint()
+        raise ValueError("Junction potential depends on nondynamical modes")
+    J_terms = gen_junc_pot(circuit, edges, th_vec, Z=Z)
 
-    # Remove any marked modes
-    C_mat_full = C_mat.copy()
-    L_mat_full = L_mat.copy()
-    # All modes to remove
-    remove_modes = free + frozen + sigma
-    if remove_modes:
-        # Go in order to make the indexing
-        # post deletion straightforward
-        n_deleted = 0
-        for n in range(n_nodes):
-            if n+1 in remove_modes:
-                # Different sympy versions do this in place
-                # or not in place so branch this off into
-                # helper function
-                Qv = _remove_row(Qv, n-n_deleted)
-                Q_vec = _remove_row(Q_vec, n-n_deleted)
-                th_vec = _remove_row(th_vec, n-n_deleted)
-                C_mat = _remove_row(C_mat, n-n_deleted)                
-                C_mat = _remove_col(C_mat, n-n_deleted)
-                L_mat = _remove_row(L_mat, n-n_deleted)
-                L_mat = _remove_col(L_mat, n-n_deleted)
-                n_deleted += 1
-    try:
-        if C_mat.shape[0] == 1:
-            C_inv = C_mat.inv()
-        else:
-            # Check for the weird all 0 issue
-            C_inv = sym.inv_quick(C_mat)
-            if C_inv == sym.zeros(rows=C_inv.shape[0],
-                                  cols=C_inv.shape[1]):
-                C_inv = C_mat.inv()
-    except Exception as exc:
-        print(exc)
-        print("circuit:", circuit)
-        print("edges:", edges)
-        print("C_mat_full:", C_mat_full)
-        print("C_mat:", C_mat)
-        return C_mat_full, L_mat_full
+    ## Remove any nondynamical modes
+    # First check they're actually nondynamical
+    for i in range(n_nd):
+        has_C = cMat[n_nodes-n_nd, n_nodes-n_nd] != 0
+        has_L = lMat[n_nodes-n_nd, n_nodes-n_nd] != 0
+        if has_C and has_L:
+            raise ValueError("Nondynamical modes are not Nondynamical")
+    # Then verify we're decoupled from them
+    Zdc = sym.eye(Z.shape[0])
+    for i in range(n_nd):
+        cTrans = Zdc.transpose()*cMat*Zdc
+        Zdc = Zdc*decoupling_transformation(cTrans, i)
+        lTrans = Zdc.transpose()*cMat*Zdc
+        Zdc = Zdc*decoupling_transformation(lTrans, i)
+    if Zdc != sym.eye(Z.shape[0]):
+        print("WARNING: Dynamical modes are coupled to defined free or frozen modes. Applying transformation to decouple")
+        Z = Z*Zdc
+    
+    # Truncate matrices
+    cMat = cMat[:-n_nd, :-n_nd]
+    lMat = lMat[:-n_nd, :-n_nd]
+    wJT = wJT[:, :-n_nd]
+    Qv = Qv[:-n_nd, :]
+    q_vec = q_vec[:-n_nd, :]
+    th_vec = th_vec[:-n_nd, :]
 
+    # Invert Capcitance Matrix
+    if cMat.shape[0] == 1:
+        C_inv = cMat.inv()
+    else:
+        # Check for the weird all 0 issue
+        C_inv = sym.inv_quick(cMat)
+        if C_inv == sym.zeros(rows=C_inv.shape[0],
+                                cols=C_inv.shape[1]):
+            C_inv = cMat.inv()
+    
     # Explicitly subtract out constant terms from coupling
-    C_terms = sym.Rational(1, 2)*sym.transpose(Q_vec - Qv)*C_inv*(Q_vec - Qv)
+    C_terms = sym.Rational(1, 2)*sym.transpose(q_vec - Qv)*C_inv*(q_vec - Qv)
     C_terms += -sym.Rational(1, 2)*sym.transpose(Qv)*C_inv*Qv
-    L_terms = sym.Rational(1, 2)*sym.transpose(th_vec)*L_mat*th_vec
+    L_terms = sym.Rational(1, 2)*sym.transpose(th_vec)*lMat*th_vec
 
     # Combine terms and group terms in H
     H = C_terms[0] + L_terms[0] + J_terms
-    H = sym.expand(sym.nsimplify(H))
+    H = sym.nsimplify(H)
     if expand_trig:
         H = sym.expand_trig(H)
-    if cob is None:
-        H, combos, combosQ = utils.collect_H_terms(H, zero_ext=False,
-                                  periodic_charge="n", periodic_phase="θ",
-                                  extended_charge="q", extended_phase="ϕ",
-                                  collect_phase = collect_phase)
-    else:
-        H, combos, combosQ = utils.collect_H_terms(H, zero_ext=False,
-                                  periodic_charge="n", periodic_phase="θ",
-                                  extended_charge="q", extended_phase="φ",
-                                  collect_phase = collect_phase)
+    H, combos, combosQ = collect_H_terms(H, zero_ext=False, collect_phase = collect_phase)
 
     to_return = (H,)
 
@@ -1668,9 +1780,9 @@ def quantize_circuit(circuit, edges, Cv=None, V=None, cob=None,
     if return_combos:
         to_return = to_return + (list(combosQ)+combos,)
     if return_mats:
-        to_return = to_return + (C_mat, L_mat)
+        to_return = to_return + (cMat, lMat, wJT)
     if return_vars:
-        to_return = to_return + (Q_vec, th_vec)
+        to_return = to_return + (q_vec, th_vec)
     if len(to_return) == 1:
         to_return = to_return[0]
 
