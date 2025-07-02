@@ -1156,6 +1156,12 @@ def test_gen_w():
 
 def test_gen_spaced_var_trans():
 
+    # Was making singular Z
+    circuit = [('J_1',), ('J_2',), ('C_1', 'L_1'), ('L_2',)]
+    edges = [(0, 2), (0, 3), (1, 3), (2, 3)]
+    trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    assert all(Z.det() != 0 for Z in trans)
+
     # Well-spaced and decoupled not possible for harmonic
     circuit, edges = ([('C', 'L'), ('L',), ('J',), ('L',)],
                       [(0, 2), (0, 3), (1, 3), (2, 3)])
@@ -1224,31 +1230,27 @@ def test_gen_spaced_var_trans():
     assert var_types["extended"] == [1]
     assert var_types["harmonic"] == [2]
     assert var_types["sigma"] == [3]
-    assert len(trans) == 4
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[2/3, 1/3, 1/2, 1],
+    Z1 = sym.nsimplify(sym.Matrix([[2/3, 1/3, 1/2, 1],
                                      [-1/3, -2/3, 1/2, 1],
                                      [-1/3, 1/3, 1/2, 1],
-                                     [2/3, 0, -1/2, 1]]), rational=True), t)
-                                     for t in trans)
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[2/3, 1/3, 1/2, 1],
+                                     [2/3, 0, -1/2, 1]]), rational=True)
+    Z2 = sym.nsimplify(sym.Matrix([[2/3, 1/3, 1/2, 1],
                                      [-1/3, 1/3, 1/2, 1],
                                      [-1/3, -2/3, 1/2, 1],
-                                     [2/3, 0, -1/2, 1]]), rational=True), t)
-                                     for t in trans)
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[2/3, 2/3, 1/2, 1],
+                                     [2/3, 0, -1/2, 1]]), rational=True)
+    # BAD det = 0 transformation
+    Z3 = sym.nsimplify(sym.Matrix([[2/3, 2/3, 1/2, 1],
                                      [-1/3, -1/3, 1/2, 1],
                                      [-1/3, -1/3, 1/2, 1],
-                                     [2/3, 0, -1/2, 1]]), rational=True), t)
-                                     for t in trans)
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[2/3, 0, 1/2, 1],
+                                     [2/3, 0, -1/2, 1]]), rational=True)
+    Z4 = sym.nsimplify(sym.Matrix([[2/3, 0, 1/2, 1],
                                      [-1/3, -1, 1/2, 1],
                                      [-1/3, 1, 1/2, 1],
-                                     [2/3, 0, -1/2, 1]]), rational=True), t)
-                                     for t in trans)
+                                     [2/3, 0, -1/2, 1]]), rational=True)
+    assert len(trans) == 3
+    for Z in [Z1, Z2, Z4]:
+        assert any(quantize._equal_up_to_column_shift_and_sign(Z, t) for t in trans)
+    assert not any(quantize._equal_up_to_column_shift_and_sign(Z3, t) for t in trans)
 
 
     edges = [(1, 2), (1, 3), (2, 3), (1, 4)]
@@ -1375,6 +1377,26 @@ def test_secondary_transformation_harm_ext():
 
 
 def test_choose_Z():
+
+    # Was making singular Z
+    circuit = [('J_1',), ('J_2',), ('C_1', 'L_1'), ('L_2',)]
+    edges = [(0, 2), (0, 3), (1, 3), (2, 3)]
+    Z, var_types, hash = quantize.choose_Z(circuit, edges)
+
+    # Transmon Molecule + cap
+    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    circuit = [("J", "C"), ("J","C"), ("C",), ("C",)]
+    Z, var_types, hash = quantize.choose_Z(circuit, edges)
+    assert var_types["compact"] == [0, 1]
+    assert var_types["free"] == [2]
+    assert var_types["sigma"] == [3]
+    assert quantize._equal_up_to_column_shift_and_sign(
+                    sym.nsimplify(sym.Matrix([[1/2, 0, 1/2, 1],
+                                     [-1/2,0, 1/2, 1],
+                                     [0, 1/2, -1/2,1],
+                                     [0, -1/2,-1/2,1]]), rational=True), Z)
+    assert hash == "200_0-0_1_0-0_1-1"
+
 
      # Transmon
     edges = [(0, 1)]
@@ -1543,22 +1565,25 @@ def test_choose_Z():
 
 
     # All three node circuits
-    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
-    # for n in range(2, 3):
-    #     df = utils.get_unique_qubits(db_path, n)
-    #     from tqdm import tqdm
-    #     for i, row in tqdm(df.iterrows(), total=df.shape[0]):
-    #         # print(row.circuit, row.edges)
-    #         circuit = row.circuit
-    #         circuit = utils.add_elem_number(circuit)
-    #         Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
-    #         # print(len(trans), "transformations")
-    #         try:
-    #             assert row.n_periodic == len(var_types.get("compact", []))
-    #             assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
-    #         except:
-    #             print("Failed", row.circuit, row.edges)
-    #             breakpoint()
+    db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    for n in range(4, 5):
+        df = utils.get_unique_qubits(db_path, n).iloc[:]
+        from tqdm import tqdm
+        order = np.arange(df.shape[0])
+        np.random.shuffle(order)
+        for i in tqdm(order[:500]):
+            # print(row.circuit, row.edges)
+            row = df.iloc[i]
+            circuit = row.circuit
+            circuit = utils.add_elem_number(circuit)
+            Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
+            # print(len(trans), "transformations")
+            try:
+                assert row.n_periodic == len(var_types.get("compact", []))
+                assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
+            except:
+                print("Failed", row.circuit, row.edges)
+                breakpoint()
                 
 def test_gen_junc_pot():
 
@@ -1713,11 +1738,11 @@ if __name__ == "__main__":
 
     x = 1
 
-    test__wT_key()
-    test__sub_equal_LC()
-    test_num_subs()
-    test_symbolic_hamiltonian()
-    test_collect_H_terms()
+    # test__wT_key()
+    # test__sub_equal_LC()
+    # test_num_subs()
+    # test_symbolic_hamiltonian()
+    # test_collect_H_terms()
 
     # test_find_islands()
     # test_decoupling_transformation()
@@ -1734,10 +1759,10 @@ if __name__ == "__main__":
     # test_unique_compact_extended()
     # test_unique_harmonic()
     # test_H_hash()
-    # test_choose_Z()
+    # test_gen_spaced_var_trans()
+    test_choose_Z()
 
     # # test__vec_space_overlap()
-    # test_gen_spaced_var_trans()
     # test__nonzero_entries_str()
     # test__sort_wT()
 

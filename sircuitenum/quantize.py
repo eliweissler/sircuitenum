@@ -217,6 +217,7 @@ def _vec_space_overlap(vecs1:Union[list[sym.Matrix], sym.Matrix],
 #     else:
 #         return overlap_vecs
 
+@profile
 def _linearly_indep_cols(X):
     rref, pivot_cols = X.rref()
     return pivot_cols
@@ -716,7 +717,7 @@ def decouple_column(v:sym.Matrix, nd_mat:sym.Matrix, mat:sym.Matrix):
         i -= 1
     return sym.simplify(Z1[:, 0])
     
-    
+
 def decoupling_transformation(X:sym.Matrix, n_d:int):
 
     # Dynamical and nondynamical blocks
@@ -742,7 +743,7 @@ def decoupling_transformation(X:sym.Matrix, n_d:int):
     # return Z2
 
 
-
+@profile
 def decoupling_transformation_3block(X:sym.Matrix, block1: Sequence[int],
                                      block2: Sequence[int], block3: Sequence[int]):
     # Transformation is
@@ -767,6 +768,9 @@ def decoupling_transformation_3block(X:sym.Matrix, block1: Sequence[int],
     #
     # when block1 = block3
 
+    # Simplify to make sure zero entries appear
+    # as zero entries
+
     # Variables in block n1 coupled to 
     # variables in block n2 for key [n1][n2]
     coupled = {}
@@ -777,13 +781,13 @@ def decoupling_transformation_3block(X:sym.Matrix, block1: Sequence[int],
     # coupled to block 3 variables
     for i in block1:
         for j in block3:
-            if X[i, j] != 0:
+            if sym.simplify(X[i, j]) != 0:
                 coupled["13"].append(i)
                 coupled["31"].append(j)
     # block 2 and block 1
     for i in block1:
         for j in block2:
-            if X[i, j] != 0:
+            if sym.simplify(X[i, j]) != 0:
                 coupled["12"].append(i)
                 coupled["21"].append(j)
     
@@ -820,7 +824,7 @@ def decoupling_transformation_3block(X:sym.Matrix, block1: Sequence[int],
     
     return sym.simplify(Z2)
 
-
+@profile
 def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
 
     if cMat is None:
@@ -955,7 +959,7 @@ def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
 
     return Z_final
 
-
+@profile
 def unique_harmonic(circuit, edges, nd_mat, cMat=None, lMat=None):
 
     if cMat is None:
@@ -1001,7 +1005,7 @@ def unique_harmonic(circuit, edges, nd_mat, cMat=None, lMat=None):
     return _unique_col_combos(harm_vec, n_harm, signs=[1, -1], shifts=shifts,
                                 li_vecs=[nd_mat[:, j] for j in range(n_nd)])
     
-
+@profile
 def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
            dyn_modes=["compact", "extended", "harmonic"],
            nd_modes=["free", "frozen", "sigma"], try_perms = True,
@@ -1028,10 +1032,20 @@ def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
         numerical (bool, optional):
         eps (float, optional): 
     """
+    
+    Z_og = Z
+
     # Numerically treat the matrices
-    C, _ = num_subs(cMat, symbol="C")
-    L, _ = num_subs(lMat, symbol="L")
+    C, cVals = num_subs(cMat, symbol="C")
+    Z, _ = num_subs(Z, symbol="C", vals_in=cVals, hermitify=False)
+    L, lVals = num_subs(lMat, symbol="L")
+    Z, _ = num_subs(Z, symbol="L", vals_in=lVals, hermitify=False)
     n_nodes = Z.shape[0]
+
+    C = np.array(C).astype(float)
+    L = np.array(L).astype(float)
+    Z = np.array(Z).astype(float)
+    wJ = np.array(wJ).astype(float)
 
     # Record number of modes
     ext_var = var_types.get("extended", [])
@@ -1059,31 +1073,36 @@ def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
         Z_perm = Z[:, perm]
     
         # Transformed capacitance and inductance matrices
-        C_tilde = Z_perm.transpose()*C*Z_perm
-        L_tilde = Z_perm.transpose()*L*Z_perm
+        C_tilde = Z_perm.T@C@Z_perm
+        L_tilde = Z_perm.T@L@Z_perm
         # Truncate to dynamical modes
-        C_tilde = np.array(C_tilde[:-n_nd, :-n_nd])
-        L_tilde = np.array(L_tilde[:-n_nd, :-n_nd])
+        C_tilde = C_tilde[:-n_nd, :-n_nd]
+        L_tilde = L_tilde[:-n_nd, :-n_nd]
+        
         # Invert capacitance matrix and trim small numerical values
-        C_tilde_inv = np.linalg.inv(np.array(C_tilde).astype(float))
-        C_tilde_inv[np.abs(C_tilde_inv)/np.abs(C_tilde_inv).max() < eps] = 0
-        if not lMat.is_zero_matrix:
-            L_tilde[np.abs(L_tilde)/np.abs(L_tilde).max() < eps] = 0
+        try:
+            C_tilde_inv = np.linalg.inv(C_tilde)
+            C_tilde_inv[np.abs(C_tilde_inv)/np.abs(C_tilde_inv).max() < eps] = 0
+        except:
+            breakpoint()
+        if np.abs(L_tilde).max() > 0:
+            try:
+                L_tilde[np.abs(L_tilde)/np.abs(L_tilde).max() < eps] = 0
+            except:
+                breakpoint()
         # Key for C, L = [n_coupled]-[nz entries of off diag]
         C_key =  _nonzero_entries_str(C_tilde_inv)
         L_key = _nonzero_entries_str(L_tilde)
 
         if wJ.shape[1] > 0:
-            wT_tilde = wJ.transpose()*Z_perm
+            wT_tilde = wJ.T@Z_perm
             wT_tilde = wT_tilde[:, :-n_nd]
             # Put wT into cananocal ordering
             wT_tilde, _, _ = _maximize_wT(_sort_wT(wT_tilde))
             # Key for wT = [n_coupled]-[nz entries of off diag]
             w_key = _wT_key(wT_tilde, equalJ = equalJ)
-            wT_full = (1+wT_tilde).astype(int).astype(str)
         else:
             w_key = "0-"+"0"*(len(L_key)-2)
-            wt_full = ""
 
         # TODO: At the end add a base 3 wT key to encode exact nonlinear form
 
@@ -1091,7 +1110,7 @@ def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
         Z_hash = "_".join([mode_str, w_key, str(int(L_key[0])+int(C_key[0])), L_key, C_key])
         if lowest_hash == "" or Z_hash < lowest_hash:
             lowest_hash = Z_hash
-            lowest_Z = Z_perm
+            lowest_Z = Z_og[:, perm]
 
     return lowest_hash, lowest_Z
 
@@ -1231,7 +1250,7 @@ def gen_w(circuit: list, edges: list, w_elem: str = "J"):
                 w_count += 1
     return w
 
-
+@profile
 def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
     """
     Generates all variable transformations that
@@ -1312,9 +1331,7 @@ def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
     # print("n_comp", n_comp, "n_harm", n_harm, "n_ext", n_ext)
     
     ## Compact -- J,C shunted islands
-    # u_comp = unique_compact(circuit, edges, nd_mat, cMat)
     u_harm = unique_harmonic(circuit, edges, nd_mat, cMat, lMat)
-    # u_ext = unique_extended(circuit, edges, nd_mat, cMat, lMat)
     u_comp_ext = unique_compact_extended(circuit, edges, nd_mat, cMat, lMat)
 
     # verify number of harmonic
@@ -1348,6 +1365,9 @@ def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
     eye = sym.eye(n_nodes)
     for dyn_cols in itertools.product(*present_modes):
         Z = sym.Matrix.hstack(*dyn_cols, nd_mat)
+        # Bad combination of extended and harmonic
+        if Z.det() == 0:
+            continue
         cTrans = Z.transpose()*cMat*Z
         lTrans = Z.transpose()*lMat*Z
         if (decoupling_transformation(cTrans, n_comp+n_ext+n_harm) != eye or
@@ -1357,7 +1377,7 @@ def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
         
     return all_Z, var_types
 
-
+@profile
 def secondary_transformation_harm_ext(Z0, var_types, cMat, lMat, wJ=sym.Matrix([[]]),
                                       tried=[False, False, False]):
 
@@ -1374,13 +1394,15 @@ def secondary_transformation_harm_ext(Z0, var_types, cMat, lMat, wJ=sym.Matrix([
     # Try each of the three possible decouplings
     Zl_eh = decoupling_transformation(lTrans, n_comp+n_ext)
     Zc_eh = decoupling_transformation(cTrans, n_comp+n_ext)
-    Zc_ce = decoupling_transformation_3block(cTrans,
-                                             var_types.get("compact", []),
-                                             var_types.get("extended", []),
-                                             var_types.get("harmonic", []))
-    decouple_trans = [Zl_eh, Zc_eh, Zc_ce]
+    Zc_ce = []
+    for i_comp in var_types.get("compact", []):
+        Zc_ce.append(decoupling_transformation_3block(cTrans,
+                                                [i_comp],
+                                                var_types.get("extended", []),
+                                                var_types.get("harmonic", [])))
+    decouple_trans = [Zl_eh, Zc_eh] + Zc_ce
     valid_trans = [Ztest != eye and len(Ztest.free_symbols) == 0
-                   for Ztest in decouple_trans]
+                   and Ztest.det() > 0 for Ztest in decouple_trans]
     best_Z = eye
     # Recursive case, there are valid transformations
     if any(valid_trans):
@@ -1398,7 +1420,7 @@ def secondary_transformation_harm_ext(Z0, var_types, cMat, lMat, wJ=sym.Matrix([
                     best_Z = Ztest*Z2
     return best_Z, H_hash(Z0*best_Z, var_types, cMat, lMat, wJ, try_perms=False)[0]
 
-
+@profile
 def choose_Z(circuit, edges) -> tuple[sym.Matrix, dict[str, list[int]], str]:
     
     # Generate capacitance matrix, susceptance matrix, and incidence matrix
@@ -1411,9 +1433,13 @@ def choose_Z(circuit, edges) -> tuple[sym.Matrix, dict[str, list[int]], str]:
     lowest_hash = ""
     lowest_Z = []
     for Z in all_Z:
+        if Z.det() == 0:
+            breakpoint()
         # Consider secondary harmonic extended transformation
         Z2, _ = secondary_transformation_harm_ext(Z, var_types,
                                                   cMat, lMat, wJ)
+        if Z2.det() == 0:
+            breakpoint()
         val, Z_perm = H_hash(Z*Z2, var_types, cMat, lMat, wJ)
         if val < lowest_hash or lowest_hash == "":
             lowest_Z = [Z_perm]
