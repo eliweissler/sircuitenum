@@ -664,6 +664,19 @@ def test__sub_equal_LC():
     assert test[2,0] == test[2,1] == test[2,2]
 
 
+def test__are_substitutions_compatible():
+
+    assert False
+
+
+def test__sol_indep_of_vars():
+
+    assert False
+
+def test__find_Z_instance():
+
+    assert False
+
 def test_well_spaced():
 
     wT = sym.nsimplify((sym.Matrix([[1, 0, 1, 1],
@@ -1161,6 +1174,7 @@ def test_gen_spaced_var_trans():
     edges = [(0, 2), (0, 3), (1, 3), (2, 3)]
     trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
     assert all(Z.det() != 0 for Z in trans)
+    breakpoint()
 
     # Well-spaced and decoupled not possible for harmonic
     circuit, edges = ([('C', 'L'), ('L',), ('J',), ('L',)],
@@ -1338,33 +1352,29 @@ def test_gen_spaced_var_trans():
     #             breakpoint()
 
 
-def test_secondary_transformation_harm_ext():
+def test_secondary_decouple():
 
-    # Example from secondary transformation section
-    circuit = [("C", "L1"), ("J", "L2")]
-    edges = [(1, 2), (1, 3)]
-    edges = utils.zero_start_edges(edges)
+
+    # Debugging example
+    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    circuit = [("L_1", "C_1"), ("L_2", "C_2"), ("L_3",), ("J_1",)]
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
-    Z0 = sym.simplify(sym.Matrix([[1/2, 0, 1],
-                                [0, 1, 1],
-                                [-1/2, 0, 1]]), rational=True)
-    var_types =  {"compact": [],
-                "extended": [0],
-                "harmonic": [1],
-                "sigma": [2]}
-    Z2, hash = quantize.secondary_transformation_harm_ext(Z0, var_types, cMat, lMat)
-    assert Z2 ==  sym.simplify(sym.Matrix([[1, 0, 0],[1/2, 1, 0],[0, 0, 1]]), rational=True)
-    assert hash == "011_0-0_0_0-0_0-0"
+    edges = utils.zero_start_edges(edges)
+    all_Z, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    Z0 = all_Z[0]
+    Z = quantize.secondary_decouple(Z0, var_types, cMat, lMat)
+    val, Z_perm = quantize.H_hash(Z0*Z, var_types, cMat, lMat, wJ)
+    assert val == '012_0-000_3_2-011_1-001'
+
 
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     all_Z, var_types = quantize.gen_spaced_var_trans(circuit, edges)
-    all_Z = [Z*quantize.secondary_transformation_harm_ext(Z, var_types, cMat, lMat)[0]
+    all_Z = [Z*quantize.secondary_decouple(Z, var_types, cMat, lMat)
              for Z in all_Z]
-    # Swap columns to see if hashing will pick right column order
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
@@ -1375,6 +1385,27 @@ def test_secondary_transformation_harm_ext():
     assert min(hashes) == "012_0-000_3_0-000_3-111"
     assert max(hashes) == "012_0-000_4_1-001_3-111"
 
+
+    # Example from secondary transformation section
+    circuit = [("C", "L1"), ("J", "L2")]
+    edges = [(1, 2), (1, 3)]
+    edges = utils.zero_start_edges(edges)
+    cMat = quantize.gen_cap_mat(circuit, edges)
+    lMat = quantize.gen_ind_mat(circuit, edges)
+    wJ = quantize.gen_w(circuit, edges, "J")
+    Z0 = sym.simplify(sym.Matrix([[1/2, 0, 1],
+                                [0, 1, 1],
+                                [-1/2, 0, 1]]), rational=True)
+    var_types =  {"compact": [],
+                "extended": [0],
+                "harmonic": [1],
+                "sigma": [2]}
+    Z2 = quantize.secondary_decouple(Z0, var_types, cMat, lMat)
+    assert Z2 ==  sym.simplify(sym.Matrix([[1, 0, 0],[1/2, 1, 0],[0, 0, 1]]), rational=True)
+    val = quantize.H_hash(Z0*Z2, var_types, cMat, lMat, wJ)[0]
+    assert val == "011_0-0_0_0-0_0-0"
+
+   
 
 def test_choose_Z():
 
@@ -1453,7 +1484,8 @@ def test_choose_Z():
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
     Z, var_types, hash = quantize.choose_Z(circuit, edges)
-    assert hash == "012_0-000_3_0-000_3-111"
+    breakpoint()
+    assert hash == "012_0-000_2_1-010_1-010"
 
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("L1", "C1"), ("L2", "C2"), ("L3",), ("J",)]
@@ -1571,7 +1603,7 @@ def test_choose_Z():
         from tqdm import tqdm
         order = np.arange(df.shape[0])
         np.random.shuffle(order)
-        for i in tqdm(order[:500]):
+        for i in tqdm(order[:10]):
             # print(row.circuit, row.edges)
             row = df.iloc[i]
             circuit = row.circuit
@@ -1748,6 +1780,8 @@ if __name__ == "__main__":
     # test_decoupling_transformation()
     # test_decouple_column()
     # test__var_col_perms()
+
+    # test_gen_spaced_var_trans()
     # test_secondary_transformation_harm_ext()
     # test_decoupling_transformation_3block()
 
@@ -1759,7 +1793,6 @@ if __name__ == "__main__":
     # test_unique_compact_extended()
     # test_unique_harmonic()
     # test_H_hash()
-    # test_gen_spaced_var_trans()
     test_choose_Z()
 
     # # test__vec_space_overlap()

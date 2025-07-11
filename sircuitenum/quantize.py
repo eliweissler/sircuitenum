@@ -16,7 +16,6 @@ from sympy import collect, expand_mul, Mul, Dummy
 from sympy.core.add import Add
 
 from sircuitenum import utils
-from sircuitenum.qpackage_interface import subgraph
 
 
 PERIODIC_CHARGE = "n"
@@ -217,7 +216,7 @@ def _vec_space_overlap(vecs1:Union[list[sym.Matrix], sym.Matrix],
 #     else:
 #         return overlap_vecs
 
-@profile
+
 def _linearly_indep_cols(X):
     rref, pivot_cols = X.rref()
     return pivot_cols
@@ -586,6 +585,139 @@ def _sub_equal_LC(X):
             X = X.subs(x, L)
     return X
 
+
+def _sol_indep_of_vars(expr, solve_vars, bad_vars):
+    """
+    Determines whether a solution to the given expr
+    exists that is not dependant on polynomial and
+    inverse polynomial powers of bad_vars.
+
+    Args:
+        expr (sym.Add): equation to be set equal to 0
+        solve_vars (list): variables to solve for
+        bad_vars (list): variables you would like no dependence on
+
+    Returns:
+        list[dict]: list of possible solutions
+    """
+    # Solve for coeffecicients of bad_vars that all go to zero
+    # Multivariable quadratic in solve vars
+    
+    # Put everything into one fraction
+    expr = sym.together(expr)
+    numer, denom = expr.as_numer_denom()
+    numer = sym.expand(numer)
+    # Identify unique products of system parameters
+    # and substitute in dummy variables
+    var_combos = _unique_products(numer, exclude=solve_vars)
+    dummies = {}
+    for i, vc in enumerate(var_combos):
+        dummies[vc] = sym.Symbol(f"d{i+1}", real=True)
+    numer = numer.subs(dummies)
+    # Create a system of equations for setting all
+    # the coefficients of dummy variables equal to 0
+    collected = sym.collect(numer, dummies.values())
+    eqs = []
+    eqs += [collected.coeff(x) for x in dummies.values()]
+    eqs += [collected.coeff(1/x) for x in dummies.values()]
+    eqs = [x for x in eqs if x != 0]
+    eqs = set(eqs)
+    
+    if any(v in expr.free_symbols for v in solve_vars):
+        # for eq in eqs:
+        test = expr
+        for v in solve_vars:
+            test = test.subs(v,1)
+        # return _sol_indep_of_vars(expr, solve_vars, bad_vars)
+        
+
+        sol = sym.solve(eqs, solve_vars, dict=True)
+
+        # verify the solution doesn't make the denominator 0
+        sol_final = []
+        for sol_i in sol:
+            if sym.simplify(denom.subs(sol_i)) != 0:
+                sol_final.append(sol_i)
+        return sol_final
+    else:
+        return []
+
+
+def _are_substitutions_compatible(subs_list: list[dict]):
+    """
+    Determines whether the given list of substitutions
+    are all "compatible," meaning they can be
+    simultaneously fulfilled.
+
+    Args:
+        subs_list (list[dict]): list of substitutions mapping
+                                sympy symbol to its value.
+
+    Returns:
+        (bool, list[dict]): first entry is whether the substitutions are compatible
+                            second entry is a refined set of substitutions that
+                            achieve them all simultaneously
+    """
+
+    if isinstance(subs_list, dict):
+        subs_list = [subs_list]
+
+    # Turn dictionary into a system of equations
+    # With a bunch of equals signs
+    equations = []
+    all_var = set()
+    for subs in subs_list:
+        for var, val in subs.items():
+            var = sym.sympify(var)
+            all_var.add(var)
+            val = sym.sympify(val)
+            equations.append(sym.Eq(var, val))
+
+    sols = sym.solve(equations, all_var, dict=True)
+
+    return len(sols)>0, sols
+
+
+def _unique_products(expr, exclude=[]):
+
+    unique_products = set()
+    # Iterate through terms
+    for term in sym.expand(expr).args:
+        # Check if the term is a Mul object or a Power of a Symbol
+        if isinstance(term, Mul) or (isinstance(term, sym.Pow) and isinstance(term.base, sym.Symbol)):
+            product_terms = []
+            if isinstance(term, Mul):
+                # Extract individual factors within the product
+                for factor in term.args:
+                    if isinstance(factor, sym.Symbol) or (isinstance(factor, sym.Pow) and isinstance(factor.base, sym.Symbol)):
+                        if factor not in exclude:
+                            product_terms.append(factor)
+            elif isinstance(term, sym.Pow):
+                product_terms.append(term)
+            
+            # Add the sorted tuple of factors to the set to ensure uniqueness
+            unique_products.add(tuple(sorted(product_terms, key=str)))
+
+    return [functools.reduce(lambda x,y: x*y, up, 1) for up in unique_products]
+
+
+def _find_Z_instance(Z: sym.Matrix, vals=[0,1,-1,2,-2], all_real=True, sort=True):
+
+    to_sub = sorted(Z.free_symbols, key=str)
+    det = sym.simplify(Z.det())
+    best_val = ""
+    best_Z = None
+    assignments = itertools.combinations_with_replacement(vals, len(to_sub))
+    if sort:
+        assignments = sorted(assignments, key=lambda x: sum(abs(xi) for xi in x))
+    for assign in assignments:
+        subs = dict(zip(to_sub, assign))
+        if det.subs(subs) != 0:
+            Zsub = Z.subs(subs)
+            if sym.im(Zsub).is_zero_matrix or not(all_real):
+                return Zsub
+    raise ValueError("No Valid Instance Present With Provided Values")
+
 def find_islands(circuit: list, edges: list, links: list):
     """
     Identifies islands in the circuit separated from the rest of the
@@ -743,7 +875,6 @@ def decoupling_transformation(X:sym.Matrix, n_d:int):
     # return Z2
 
 
-@profile
 def decoupling_transformation_3block(X:sym.Matrix, block1: Sequence[int],
                                      block2: Sequence[int], block3: Sequence[int]):
     # Transformation is
@@ -824,7 +955,7 @@ def decoupling_transformation_3block(X:sym.Matrix, block1: Sequence[int],
     
     return sym.simplify(Z2)
 
-@profile
+
 def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
 
     if cMat is None:
@@ -959,7 +1090,7 @@ def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
 
     return Z_final
 
-@profile
+
 def unique_harmonic(circuit, edges, nd_mat, cMat=None, lMat=None):
 
     if cMat is None:
@@ -1001,11 +1132,16 @@ def unique_harmonic(circuit, edges, nd_mat, cMat=None, lMat=None):
                     harm_vec.append(v)
     else:
         return []
-
-    return _unique_col_combos(harm_vec, n_harm, signs=[1, -1], shifts=shifts,
-                                li_vecs=[nd_mat[:, j] for j in range(n_nd)])
     
-@profile
+    # Now only need one
+    M = sym.Matrix.hstack(*harm_vec)
+    cols = _linearly_indep_cols(M)
+    return [M[:, cols]]
+
+    # return _unique_col_combos(harm_vec, n_harm, signs=[1, -1], shifts=shifts,
+    #                             li_vecs=[nd_mat[:, j] for j in range(n_nd)])
+    
+
 def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
            dyn_modes=["compact", "extended", "harmonic"],
            nd_modes=["free", "frozen", "sigma"], try_perms = True,
@@ -1250,7 +1386,7 @@ def gen_w(circuit: list, edges: list, w_elem: str = "J"):
                 w_count += 1
     return w
 
-@profile
+
 def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
     """
     Generates all variable transformations that
@@ -1377,51 +1513,217 @@ def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
         
     return all_Z, var_types
 
-@profile
-def secondary_transformation_harm_ext(Z0, var_types, cMat, lMat, wJ=sym.Matrix([[]]),
-                                      tried=[False, False, False]):
 
-    cTrans = Z0.transpose()*cMat*Z0
-    lTrans = Z0.transpose()*lMat*Z0
+
+
+
+
+
+
+def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
+                       cMat: sym.Matrix, lMat: sym.Matrix,
+                       return_instance: bool = False) -> sym.Matrix:
+    """
+    Performs a secondary decoupling transformation of
+    the form
+    [ I      0      0       0 ]
+    [ 0      I      0       0 ]
+    [ 0     Z_eh  Z_hh      0 ]
+    [ 0      0      0       I ]
+    and chooses the blocks Z_eh and Z_hh to maximize the
+    number of nonzero off diagonal elements in the
+    transformed susceptance and inverse capacitance matrices.
+    In case of a tie in number, prefers fewer inductive terms,
+    in line with H_hash.
+
+    Args:
+        Z0 (sym.Matrix): Initial transformation that separates circuit into different
+                         types of modes.
+        var_types (dict[str, list[int]]): Dictionary mapping mode type to a list
+                                          of indices that are that mode.
+        cMat (sym.Matrix): Capacitance matrix
+        lMat (sym.Matrix): Susceptance matrix
+        return_instance: bool
+            If there are free parameters in the final transformation,
+            substitute in a valid set of 1's and 0's to complete it,
+            which maximizes the number of 0's.
+
+    Returns:
+        sym.Matrix: Secondary transformation
+    """
+
+
     eye = sym.eye(Z0.shape[0])
-    n_comp = len(var_types.get("compact", []))
-    n_ext = len(var_types.get("extended", []))
-    n_harm = len(var_types.get("harmonic", []))
+    comp = var_types.get("compact", [])
+    n_comp = len(comp)
+    ext = var_types.get("extended", [])
+    n_ext = len(ext)
+    harm = var_types.get("harmonic", [])
+    n_harm = len(harm)
 
-    if n_harm == 0 or n_ext == 0:
-        return eye, H_hash(Z0, var_types, cMat, lMat, wJ, try_perms=False)[0]
+    # No transformation to do
+    if n_harm == 0:
+        return eye
+    
+    cTrans = sym.simplify(Z0.transpose()*cMat*Z0)
+    lTrans = sym.simplify(Z0.transpose()*lMat*Z0)
 
-    # Try each of the three possible decouplings
-    Zl_eh = decoupling_transformation(lTrans, n_comp+n_ext)
-    Zc_eh = decoupling_transformation(cTrans, n_comp+n_ext)
-    Zc_ce = []
-    for i_comp in var_types.get("compact", []):
-        Zc_ce.append(decoupling_transformation_3block(cTrans,
-                                                [i_comp],
-                                                var_types.get("extended", []),
-                                                var_types.get("harmonic", [])))
-    decouple_trans = [Zl_eh, Zc_eh] + Zc_ce
-    valid_trans = [Ztest != eye and len(Ztest.free_symbols) == 0
-                   and Ztest.det() > 0 for Ztest in decouple_trans]
+    ## Both Possible Secondary Transformations
+    # Zhe != 0
+    Z2 = sym.eye(Z0.shape[0])
+    # Zh != I
+    Z3 = sym.eye(Z0.shape[0])
+    varsZ2 = []
+    varsZ3 = []
+    for i in range(Z2.shape[0]):
+        for j in range(Z2.shape[1]):
+            if j in ext and i in harm:
+                Z2[i,j] = sym.Symbol(f"Zeh{i}{j}", real=True)
+                varsZ2.append(Z2[i,j])
+            elif j in harm and i in harm:
+                Z3[i,j] = sym.Symbol(f"Zh{i}{j}", real=True)
+                varsZ3.append(Z3[i,j])
+    Z = Z2*Z3
+    vars = varsZ2+varsZ3
+    n_vars = len(vars)
+
+    cTrans2 = Z.transpose()*cTrans*Z
+    cTransInv2 = cTrans2[:n_comp+n_ext+n_harm,:n_comp+n_ext+n_harm].inv()
+    lTrans2 = Z.transpose()*lTrans*Z
+
+    # Determine which entries are possible to decouple
+    # without depending on system parameters
+    params =  [x for x in cTransInv2.free_symbols if "C" in str(x).upper()]
+    params += [x for x in lTrans2.free_symbols if "L" in str(x).upper()]
+
+
+    # Try to set to zero as many coupling terms as possible
+    coupling_c = []
+    coupling_l = []
+    coupling_terms = {}
+    # Identify coupling terms that have
+    # Solutions Independent of circuit parameters
+    det = sym.simplify(Z.det())
+    for i1 in comp:
+        for i2 in ext + harm:
+            coupling_terms[("C", i1, i2)] = _sol_indep_of_vars(cTransInv2[i1, i2], vars, params)
+    for i1 in ext + harm:
+        for i2 in ext + harm:
+            # Symmetric coupling
+            if i2 <= i1:
+                continue
+            coupling_terms[("C", i1, i2)] = _sol_indep_of_vars(cTransInv2[i1, i2], vars, params)
+            coupling_terms[("L", i1, i2)] = _sol_indep_of_vars(lTrans2[i1, i2], vars, params)
+    # Remove empty solutions and those that make the transformation not inverible
+    for k in list(coupling_terms.keys()):
+        sols = coupling_terms[k]
+        new_sols = []
+        for sol in sols:
+            # Invertible
+            if sym.simplify(det.subs(sol)) != 0:
+                new_sols.append(sol)
+        # empty solution
+        if len(new_sols) == 0:
+            del coupling_terms[k]
+        else:
+            coupling_terms[k] = new_sols
+    
+    # Maximize the number of coupling terms that go to zero
+    n_couple = len(coupling_terms)
+    incompatible = []
+    compatible = {}
+    compatible_keys = []
     best_Z = eye
-    # Recursive case, there are valid transformations
-    if any(valid_trans):
-        best_hash = ""
-        for i, Ztest in enumerate(decouple_trans):
-            # Try each ordering of different decoupling transformations
-            if valid_trans[i] and not tried[i]:
-                new_tried = [x for x in tried]
-                new_tried[i] = True
-                Z2, hash = secondary_transformation_harm_ext(Z0*Ztest, var_types,
-                                                                  cMat, lMat, wJ,
-                                                             new_tried)
-                if best_hash == "" or hash < best_hash:
-                    best_hash = hash
-                    best_Z = Ztest*Z2
-    return best_Z, H_hash(Z0*best_Z, var_types, cMat, lMat, wJ, try_perms=False)[0]
+    best_val, _ = H_hash(best_Z, var_types, cTrans, lTrans, wJ=sym.Matrix([]))
+    for nz in range(1, n_couple):
+        # Pidgeonhole principle, is it possible to to select nz keys that
+        # might be compatible
+        if len(incompatible) > 0:
+            if nz > n_couple - max(len(incompat_keys) for incompat_keys in incompatible):
+                break
+        for keys in itertools.combinations(coupling_terms.keys(), nz):
+            # We already know a subset of the keys are incompatible
+            if any(all(k in keys for k in incompat_keys) for incompat_keys in incompatible):
+                continue
+            # Insert previous simplifications
+            all_rules = []
+            did_already = []
+            # Loop through in reverse order of adding
+            # to get bigger simplifications
+            for compat_keys in compatible_keys[::-1]:
+                if all(k in keys for k in compat_keys):
+                    all_rules.append(compatible[compat_keys])
+                    did_already += compat_keys
+            for k in keys:
+                if k not in did_already:
+                    all_rules.append(coupling_terms[k])
+            # Enumerate combinations of rules that make the relevant entries zero
+            for rules in itertools.product(*all_rules):
+                # First check if the selected rules give a zero determinant -- not invertible
+                this_det = det
+                for sub in rules:
+                    this_det = this_det.subs(sub)
+                if this_det == 0:
+                    incompatible.append(keys)
+                    continue
+                # Second, check if the selected rules can all be fulfilled simultaneously
+                is_compat, compat_subs = _are_substitutions_compatible(rules)
+                if is_compat:
+                    # Test different substitutions that
+                    # are compatible with the chosen rules
+                    good_subs = []
+                    for Z_sub in compat_subs:
+                        Ztest = sym.simplify(Z.subs(Z_sub))
+                        # Double check determinant != 0
+                        if sym.simplify(det.subs(Z_sub)) == 0:
+                            continue
+                        Z_free = list(Ztest.free_symbols)
+                        # Insert random for remaining free variables
+                        # for hashing
+                        Zhash = _find_Z_instance(Ztest, sort=False)
+                        val, Z_perm = H_hash(Zhash, var_types, cTrans, lTrans, wJ=sym.Matrix([]))
+                        if val < best_val:
+                            best_val = val
+                            best_Z = Ztest
+                        good_subs.append(Z_sub)
+                    # Save the solved compatibility (or incompatibility) for these keys
+                    if len(good_subs) > 0:
+                        compatible[keys] = good_subs
+                        compatible_keys.append(keys)
+                    else:
+                        incompatible.append(keys)
+                else:
+                    incompatible.append(keys)
 
-@profile
-def choose_Z(circuit, edges) -> tuple[sym.Matrix, dict[str, list[int]], str]:
+    if return_instance:
+        best_Z = _find_Z_instance(best_Z, vals=[0,1])
+    return best_Z
+
+
+def choose_Z(circuit: list, edges: list,
+             return_instance: bool = True) -> tuple[sym.Matrix, dict[str, list[int]], str]:
+    """
+    Chooses a transformation phi_node = Z*phi_new that separates
+    the circuit into compact, extended, harmonic, free, frozen, and cyclic modes.
+    Chooses the transformation that minimizes the H_hash function, which minimizes
+    the number of nonzero intermode coupling terms, while maintaining the
+    periodicity of the compact and extended mode junction terms.
+
+    Args:
+        circuit : list
+        A list of element labels for the desired circuit.  
+        Example: ``[["J"], ["L", "J"], ["C"]]``.
+        edges : list
+        A list of edge connections for the desired circuit.  
+        Example: ``[(0, 1), (0, 2), (1, 2)]``.
+        return_instance: bool
+        If there are free parameters in the final transformation,
+        substitute in a valid set of 1's and 0's to complete it,
+        which maximizes the number of 0's.
+
+    Returns:
+        tuple[sym.Matrix, dict[str, list[int]], str]: _description_
+    """
     
     # Generate capacitance matrix, susceptance matrix, and incidence matrix
     cMat = gen_cap_mat(circuit, utils.zero_start_edges(edges))
@@ -1432,14 +1734,14 @@ def choose_Z(circuit, edges) -> tuple[sym.Matrix, dict[str, list[int]], str]:
     all_Z, var_types = gen_spaced_var_trans(circuit, edges, cMat, lMat)
     lowest_hash = ""
     lowest_Z = []
+    # print(len(all_Z), "transformations", var_types)
+    # print("circuit=",circuit)
+    # print("edges=",edges)
     for Z in all_Z:
         if Z.det() == 0:
             breakpoint()
         # Consider secondary harmonic extended transformation
-        Z2, _ = secondary_transformation_harm_ext(Z, var_types,
-                                                  cMat, lMat, wJ)
-        if Z2.det() == 0:
-            breakpoint()
+        Z2  = secondary_decouple(Z, var_types, cMat, lMat, wJ)
         val, Z_perm = H_hash(Z*Z2, var_types, cMat, lMat, wJ)
         if val < lowest_hash or lowest_hash == "":
             lowest_Z = [Z_perm]
@@ -1458,6 +1760,9 @@ def choose_Z(circuit, edges) -> tuple[sym.Matrix, dict[str, list[int]], str]:
         if val < hash_final:
             hash_final = val
             Z_final = Z
+
+    if return_instance:
+        Z_final = _find_Z_instance(Z_final, vals=[0,1])
     
     return Z_final, var_types, lowest_hash
 
@@ -1519,7 +1824,6 @@ def gen_junc_pot(circuit, edges, flux_vars, Z=None, eps=1e-10) -> sym.Matrix:
     return j_terms
 
 
-## TODO: Make this more robust
 def num_subs(C, symbol="C", exclude = "", rand_range = (1,2), vals_in = {}, hermitify=True):
 
     vals = {}
@@ -1814,3 +2118,46 @@ def symbolic_hamiltonian(circuit, edges, Cv=None, V=None, Z=None,
 
     return to_return
 
+
+
+if __name__ == "__main__":
+
+    # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    # circuit = [("L_1", "C_1"), ("L_2", "C_2"), ("L_3",), ("J_1",)]
+    # # circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
+    # circuit= [('C_1', 'L_1'), ('C_2', 'L_2'), ('C_3', 'L_3'), ('C_4', 'L_4'), ('C_5', 'J_1', 'L_5'), ('C_6', 'J_2', 'L_6')]
+    # edges= [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    
+    circuit= [('J_1',), ('J_2',), ('J_3',), ('C_1', 'L_1'), ('C_2', 'L_2'), ('C_3', 'L_3')]
+    edges= [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    cMat = gen_cap_mat(circuit, edges)
+    lMat = gen_ind_mat(circuit, edges)
+    edges = utils.zero_start_edges(edges)
+    all_Z, var_types = gen_spaced_var_trans(circuit, edges)
+    Z0 = all_Z[0]
+    cTrans = Z0.transpose()*cMat*Z0
+    lTrans = Z0.transpose()*lMat*Z0
+    # print(Z0)
+    breakpoint()
+    # for i in range(10):
+    #     Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
+    #     # print(Z)
+
+    db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    for n in range(4, 5):
+        df = utils.get_unique_qubits(db_path, n).iloc[:]
+        from tqdm import tqdm
+        order = np.arange(df.shape[0])
+        np.random.shuffle(order)
+        import time
+        for i in tqdm(order[:]):
+            t0 = time.time()
+            row = df.iloc[i]
+            circuit = row.circuit
+            circuit = utils.add_elem_number(circuit)
+            Z, var_types, hash = choose_Z(circuit, row.edges)
+            tf = time.time()
+            if tf-t0 > 5:
+                print("LONG CIRCUIT ------")
+                print("circuit=",circuit)
+                print("edges=",row.edges)
