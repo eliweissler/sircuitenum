@@ -586,7 +586,7 @@ def _sub_equal_LC(X):
     return X
 
 
-def _sol_indep_of_vars(expr, solve_vars, bad_vars):
+def __sol_indep_of_vars(expr, solve_vars, bad_vars):
     """
     Determines whether a solution to the given expr
     exists that is not dependant on polynomial and
@@ -641,6 +641,50 @@ def _sol_indep_of_vars(expr, solve_vars, bad_vars):
         return sol_final
     else:
         return []
+    
+def _sol_indep_of_vars(expr, solve_vars, bad_vars):
+    """
+    Determines whether a solution to the given expr exists that is independent
+    of bad_vars (in polynomial or inverse polynomial dependence).
+
+    Args:
+        expr (sym.Expr): Expression to be set to 0
+        solve_vars (list): Variables to solve for
+        bad_vars (list): Variables you want no dependence on
+
+    Returns:
+        list[dict]: list of solutions that do not depend on bad_vars
+    """
+    # Simplify to rational form
+    expr = sym.together(expr, deep=True)
+    numer, denom = expr.as_numer_denom()
+    numer = sym.expand(numer)
+
+    # Get unique symbolic products (excluding solve_vars)
+    var_combos = _unique_products(numer, exclude=solve_vars)
+    
+    # Build equations by collecting coefficients of var combos
+    eqs = []
+    collected = sym.collect(numer, var_combos, evaluate=False)
+
+    for v in var_combos:
+        eqs.append(collected.get(v, 0))
+        eqs.append(collected.get(1 / v, 0))
+
+    eqs = [eq for eq in eqs if eq != 0]
+    eqs = list(set(eqs))  # Remove duplicates
+
+    # If solve_vars appear in the expression, try solving
+    if any(v in numer.free_symbols for v in solve_vars):
+
+        sol = sym.solve(eqs, solve_vars, dict=True)
+
+        # Filter out any solution that causes denominator to vanish
+        return [s for s in sol if sym.simplify(denom.subs(s)) != 0]
+    else:
+        return []
+
+
 
 
 def _are_substitutions_compatible(subs_list: list[dict]):
@@ -677,28 +721,32 @@ def _are_substitutions_compatible(subs_list: list[dict]):
 
     return len(sols)>0, sols
 
+def _unique_products(expr: sym.Expr, exclude: list[sym.Symbol] = []):
+    """
+    Return a list of unique products of free symbols
+    from an expanded expression, excluding specified symbols.
+    """
+    expr = sym.expand(expr)
+    products = set()
 
-def _unique_products(expr, exclude=[]):
+    for term in expr.as_ordered_terms():
+        # Extract multiplicative factors
+        if isinstance(term, Mul):
+            factors = [f for f in term.args
+                       if isinstance(f, (sym.Symbol, sym.Pow)) and f not in exclude]
+        elif isinstance(term, sym.Pow) and isinstance(term.base, sym.Symbol):
+            factors = [term] if term not in exclude else []
+        elif isinstance(term, sym.Symbol):
+            factors = [term] if term not in exclude else []
+        else:
+            factors = []
 
-    unique_products = set()
-    # Iterate through terms
-    for term in sym.expand(expr).args:
-        # Check if the term is a Mul object or a Power of a Symbol
-        if isinstance(term, Mul) or (isinstance(term, sym.Pow) and isinstance(term.base, sym.Symbol)):
-            product_terms = []
-            if isinstance(term, Mul):
-                # Extract individual factors within the product
-                for factor in term.args:
-                    if isinstance(factor, sym.Symbol) or (isinstance(factor, sym.Pow) and isinstance(factor.base, sym.Symbol)):
-                        if factor not in exclude:
-                            product_terms.append(factor)
-            elif isinstance(term, sym.Pow):
-                product_terms.append(term)
-            
-            # Add the sorted tuple of factors to the set to ensure uniqueness
-            unique_products.add(tuple(sorted(product_terms, key=str)))
+        if factors:
+            # Use frozenset to hash without sorting
+            products.add(frozenset(factors))
 
-    return [functools.reduce(lambda x,y: x*y, up, 1) for up in unique_products]
+    return [functools.reduce(lambda a, b: a * b, p, sym.S.One) for p in products]
+
 
 
 def _find_Z_instance(Z: sym.Matrix, vals=[0,1,-1,2,-2], all_real=True, sort=True):
@@ -1073,7 +1121,6 @@ def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
     # Now consider ''Center-ing'' the compact variables
     # on different junctions to generate unique choices of
     # compact variable to combine with the extended
-    
     wJtrans = sym.simplify(wJ.transpose()*sym.Matrix.hstack(*comp_vars_base))
     for Zc in compact_alignment_transformation(wJtrans, n_comp):
         comp_vars = sym.Matrix.hstack(*comp_vars_base)*Zc
@@ -1083,7 +1130,7 @@ def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
             if len(_find_equiv_mats(Z, Z_final, shifts=sigma_vec)) == 0:
                     Z_final.append(Z)
         else:
-            for ext_coupled in itertools.product(*ext_vec_coupled):
+            for ext_coupled in list(itertools.product(*ext_vec_coupled)):
                 Z = sym.Matrix.hstack(comp_vars, *ext_coupled, *ext_vec_uncoupled)
                 if len(_find_equiv_mats(Z, Z_final, shifts=sigma_vec)) == 0:
                     Z_final.append(Z)
@@ -2122,14 +2169,18 @@ def symbolic_hamiltonian(circuit, edges, Cv=None, V=None, Z=None,
 
 if __name__ == "__main__":
 
+    import time
+
     # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     # circuit = [("L_1", "C_1"), ("L_2", "C_2"), ("L_3",), ("J_1",)]
-    # # circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
-    # circuit= [('C_1', 'L_1'), ('C_2', 'L_2'), ('C_3', 'L_3'), ('C_4', 'L_4'), ('C_5', 'J_1', 'L_5'), ('C_6', 'J_2', 'L_6')]
-    # edges= [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
     
-    circuit= [('J_1',), ('J_2',), ('J_3',), ('C_1', 'L_1'), ('C_2', 'L_2'), ('C_3', 'L_3')]
+    # # circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
+    circuit= [('C_1', 'L_1'), ('C_2', 'L_2'), ('C_3', 'L_3'), ('C_4', 'L_4'), ('C_5', 'J_1', 'L_5'), ('C_6', 'J_2', 'L_6')]
     edges= [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    
+    # circuit= [('J_1',), ('J_2',), ('J_3',), ('C_1', 'L_1'), ('C_2', 'L_2'), ('C_3', 'L_3')]
+    # edges= [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+
     cMat = gen_cap_mat(circuit, edges)
     lMat = gen_ind_mat(circuit, edges)
     edges = utils.zero_start_edges(edges)
@@ -2137,27 +2188,35 @@ if __name__ == "__main__":
     Z0 = all_Z[0]
     cTrans = Z0.transpose()*cMat*Z0
     lTrans = Z0.transpose()*lMat*Z0
-    # print(Z0)
-    breakpoint()
-    # for i in range(10):
-    #     Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
-    #     # print(Z)
+    print(Z0)
+    
+    times = []
+    for i in range(10):
+        t0 = time.time()
+        Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
+        # print(Z)
+        tf = time.time()
+        times.append(tf-t0)
 
-    db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
-    for n in range(4, 5):
-        df = utils.get_unique_qubits(db_path, n).iloc[:]
-        from tqdm import tqdm
-        order = np.arange(df.shape[0])
-        np.random.shuffle(order)
-        import time
-        for i in tqdm(order[:]):
-            t0 = time.time()
-            row = df.iloc[i]
-            circuit = row.circuit
-            circuit = utils.add_elem_number(circuit)
-            Z, var_types, hash = choose_Z(circuit, row.edges)
-            tf = time.time()
-            if tf-t0 > 5:
-                print("LONG CIRCUIT ------")
-                print("circuit=",circuit)
-                print("edges=",row.edges)
+    print("Mean:", np.mean(times), "+/-", np.std(times))
+
+    # breakpoint()
+
+    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    # for n in range(4, 5):
+    #     df = utils.get_unique_qubits(db_path, n).iloc[:]
+    #     from tqdm import tqdm
+    #     order = np.arange(df.shape[0])
+    #     np.random.shuffle(order)
+    #     import time
+    #     for i in tqdm(order[:]):
+    #         t0 = time.time()
+    #         row = df.iloc[i]
+    #         circuit = row.circuit
+    #         circuit = utils.add_elem_number(circuit)
+    #         Z, var_types, hash = choose_Z(circuit, row.edges)
+    #         tf = time.time()
+    #         if tf-t0 > 5:
+    #             print("LONG CIRCUIT ------")
+    #             print("circuit=",circuit)
+    #             print("edges=",row.edges)

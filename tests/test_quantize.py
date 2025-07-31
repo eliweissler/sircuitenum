@@ -1484,7 +1484,6 @@ def test_choose_Z():
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
     Z, var_types, hash = quantize.choose_Z(circuit, edges)
-    breakpoint()
     assert hash == "012_0-000_2_1-010_1-010"
 
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
