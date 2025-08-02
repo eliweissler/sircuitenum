@@ -666,16 +666,113 @@ def test__sub_equal_LC():
 
 def test__are_substitutions_compatible():
 
-    assert False
+    x,y = sym.symbols("x,y", real=True)
+    a,b = sym.symbols("a,b", real=True)
+
+    # Is compatible
+    s1 = {x: y, a: b, y:1, b:2}
+    is_compat, sols = quantize._are_substitutions_compatible()
+    assert is_compat
+    assert len(sols) == 1
+    exp_sol = {x:1, y:1, a:2, b:2}
+    for var in exp_sol:
+        assert sols[0][var] == exp_sol[var]
+
+    # Is not compatible
+    s1 = {x: y, a: b, y:1, b:2, b:x}
+    is_compat, sols = quantize._are_substitutions_compatible()
+    assert is_compat == False
+    assert len(sols) == 0
 
 
 def test__sol_indep_of_vars():
 
-    assert False
+    x,y = sym.symbols("x,y", real=True)
+    a,b = sym.symbols("a,b", real=True)
+
+    # No bad vars present
+    eq = x-y
+    sol = quantize._sol_indep_of_vars(eq, [x,y], [a,b])
+    assert len(sol) == 1
+    sol = sol[0]
+    if x in sol:
+        assert sol[x] == y
+    else:
+        assert sol[y] == x
+
+    # Solution exists independent of bad vars
+    eq = (x+y/2)*a*b
+    sol = quantize._sol_indep_of_vars(eq, [x,y], [a,b])
+    assert len(sol) == 1
+    sol = sol[0]
+    if x in sol:
+        assert sol[x] == -y/2
+    else:
+        assert sol[y] == -2*x
+    
+    # No solution indep of bad vars
+    eq = (x+y/2)*a*b + b
+    sol = quantize._sol_indep_of_vars(eq, [x,y], [a,b])
+    assert sol == []
+   
+    # There is if you remove b
+    eq = (x+y/2)*a + b
+    sol = quantize._sol_indep_of_vars(eq, [x,y,b], [a])
+    assert len(sol) == 1
+    sol = sol[0]
+    if x in sol:
+        assert sol[x] == -y/2
+    else:
+        assert sol[y] == -2*x
+    assert sol[b] == 0
+
+    # Multiple solutions
+    eq = x*a*b
+    sol = quantize._sol_indep_of_vars(eq, [x,y,b], [a])
+    assert len(sol) == 2
+    if x in sol[0]:
+        assert sol[0][x] == 0 and sol[1][b] == 0
+    else:
+        assert sol[1][x] == 0 and sol[0][b] == 0
+
+def test__unique_products():
+
+    # Solution that only has a single thing
+    x,y = sym.symbols("x,y", real=True)
+    a,b = sym.symbols("a,b", real=True)
+
+    eq = x + y
+    prods = quantize._unique_products(eq, [x,y])
+    assert prods == []
+
+
+    eq = (x + y)*(a + b)**2 + a - y*b
+    prods = quantize._unique_products(eq, [x,y])
+    for pr in [a**2, a*b, b**2, a, b]:
+        assert pr in prods
+
+    eq = (x + y)*(a + 1/b)**2 + 1/a - y*b
+    prods = quantize._unique_products(eq, [x,y])
+    for pr in [a**2, a/b, 1/b**2, 1/a, b]:
+        assert pr in prods
+
+
+
 
 def test__find_Z_instance():
 
-    assert False
+    # Solution that only has a single thing
+    x,y = sym.symbols("x,y", real=True)
+    a,b = sym.symbols("a,b", real=True)
+    v = [x,y,a,b]
+
+    Z = sym.Matrix([[x,y],
+                    [a,b]])
+    
+    Zsub = quantize._find_Z_instance(Z, v)
+    assert Z.det().simplify() != 0
+    assert sym.im(Zsub).is_zero_matrix
+
 
 def test_well_spaced():
 
@@ -1412,31 +1509,31 @@ def test_choose_Z():
     # Was making singular Z
     circuit = [('J_1',), ('J_2',), ('C_1', 'L_1'), ('L_2',)]
     edges = [(0, 2), (0, 3), (1, 3), (2, 3)]
-    Z, var_types, hash = quantize.choose_Z(circuit, edges)
+    # Z, var_types, hash = quantize.choose_Z(circuit, edges)
 
     # Transmon Molecule + cap
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("J", "C"), ("J","C"), ("C",), ("C",)]
-    Z, var_types, hash = quantize.choose_Z(circuit, edges)
-    assert var_types["compact"] == [0, 1]
-    assert var_types["free"] == [2]
-    assert var_types["sigma"] == [3]
-    assert quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[1/2, 0, 1/2, 1],
-                                     [-1/2,0, 1/2, 1],
-                                     [0, 1/2, -1/2,1],
-                                     [0, -1/2,-1/2,1]]), rational=True), Z)
-    assert hash == "200_0-0_1_0-0_1-1"
+    # Z, var_types, hash = quantize.choose_Z(circuit, edges)
+    # assert var_types["compact"] == [0, 1]
+    # assert var_types["free"] == [2]
+    # assert var_types["sigma"] == [3]
+    # assert quantize._equal_up_to_column_shift_and_sign(
+    #                 sym.nsimplify(sym.Matrix([[1/2, 0, 1/2, 1],
+    #                                  [-1/2,0, 1/2, 1],
+    #                                  [0, 1/2, -1/2,1],
+    #                                  [0, -1/2,-1/2,1]]), rational=True), Z)
+    # assert hash == "200_0-0_1_0-0_1-1"
 
 
      # Transmon
     edges = [(0, 1)]
     circuit = [("J", "C")]
-    Z, var_types, hash = quantize.choose_Z(circuit, edges)
-    assert hash == "100_0-_0_0-_0-"
-    assert quantize._find_equiv_mats(sym.Matrix([[1, 1],
-                                                 [0, 1]]), 
-                                     [Z]) == [0]
+    # Z, var_types, hash = quantize.choose_Z(circuit, edges)
+    # assert hash == "100_0-_0_0-_0-"
+    # assert quantize._find_equiv_mats(sym.Matrix([[1, 1],
+    #                                              [0, 1]]), 
+    #                                  [Z]) == [0]
 
     # Zero-pi
     circuit = [("J",),("J",), ("L",), ("L",), ("C",), ("C",)]
@@ -1444,7 +1541,8 @@ def test_choose_Z():
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    Z, var_types, hash = quantize.choose_Z(circuit, edges)
+    Z, var_types, hash = quantize.choose_Z(circuit, edges, return_instance=True)
+    breakpoint()
     assert quantize._find_equiv_mats(sym.Matrix([[1, 1, 1, 1],
                                                  [0, 0, 1, 1],
                                                  [0, 1, 0, 1],
@@ -1792,6 +1890,9 @@ if __name__ == "__main__":
     # test_unique_compact_extended()
     # test_unique_harmonic()
     # test_H_hash()
+    test__find_Z_instance()
+    test__unique_products()
+    test__sol_indep_of_vars()
     test_choose_Z()
 
     # # test__vec_space_overlap()

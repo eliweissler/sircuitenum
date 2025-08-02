@@ -661,16 +661,18 @@ def _sol_indep_of_vars(expr, solve_vars, bad_vars):
     numer = sym.expand(numer)
 
     # Get unique symbolic products (excluding solve_vars)
+    # No bad_vars in the expression
     var_combos = _unique_products(numer, exclude=solve_vars)
     
     # Build equations by collecting coefficients of var combos
     eqs = []
     collected = sym.collect(numer, var_combos, evaluate=False)
 
+    # Anything without a bad var multiplied by it
+    eqs.append(collected.get(1,0))
     for v in var_combos:
         eqs.append(collected.get(v, 0))
         eqs.append(collected.get(1 / v, 0))
-
     eqs = [eq for eq in eqs if eq != 0]
     eqs = list(set(eqs))  # Remove duplicates
 
@@ -687,11 +689,15 @@ def _sol_indep_of_vars(expr, solve_vars, bad_vars):
 
 
 
-def _are_substitutions_compatible(subs_list: list[dict]):
+def _are_substitutions_compatible(subs_list: list[dict],
+                                  valid_expr: list[sym.Expr] = []):
     """
     Determines whether the given list of substitutions
     are all "compatible," meaning they can be
     simultaneously fulfilled.
+
+    Optionally include a sympy expression or matrix that must not
+    have undefined values with the specified substitutions.
 
     Args:
         subs_list (list[dict]): list of substitutions mapping
@@ -707,7 +713,7 @@ def _are_substitutions_compatible(subs_list: list[dict]):
         subs_list = [subs_list]
 
     # Turn dictionary into a system of equations
-    # With a bunch of equals signs
+    # that solves for all substitutions simultaneously
     equations = []
     all_var = set()
     for subs in subs_list:
@@ -719,7 +725,15 @@ def _are_substitutions_compatible(subs_list: list[dict]):
 
     sols = sym.solve(equations, all_var, dict=True)
 
-    return len(sols)>0, sols
+    # Assert the solutions don't result in undefined values
+    final_sols = []
+    for sol in sols:
+        is_finite = [x.subs(sol).simplify().is_finite for x in valid_expr]
+        is_finite = [x for x in is_finite if not x is None]
+        if all(is_finite) or valid_expr == []:
+            final_sols.append(sol)
+
+    return len(final_sols)>0, final_sols
 
 def _unique_products(expr: sym.Expr, exclude: list[sym.Symbol] = []):
     """
@@ -749,9 +763,11 @@ def _unique_products(expr: sym.Expr, exclude: list[sym.Symbol] = []):
 
 
 
-def _find_Z_instance(Z: sym.Matrix, vals=[0,1,-1,2,-2], all_real=True, sort=True):
+def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
+                     vals=[0,1,-1,2,-2], all_real=True, sort=True):
 
-    to_sub = sorted(Z.free_symbols, key=str)
+    # Variables to substitute concrete values in for
+    to_sub = [x for x in sorted(Z.free_symbols, key=str) if x in var_list]
     det = sym.simplify(Z.det())
     best_val = ""
     best_Z = None
@@ -1130,7 +1146,9 @@ def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
             if len(_find_equiv_mats(Z, Z_final, shifts=sigma_vec)) == 0:
                     Z_final.append(Z)
         else:
-            for ext_coupled in list(itertools.product(*ext_vec_coupled)):
+            # for ext_coupled in list(itertools.product(*ext_vec_coupled)):
+            # TOD0: Keep same or revert
+            for ext_coupled in list(itertools.product(*ext_vec_coupled))[:1]:
                 Z = sym.Matrix.hstack(comp_vars, *ext_coupled, *ext_vec_uncoupled)
                 if len(_find_equiv_mats(Z, Z_final, shifts=sigma_vec)) == 0:
                     Z_final.append(Z)
@@ -1546,6 +1564,7 @@ def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
     all_Z = []
     present_modes = [x for x in (u_comp_ext, u_harm) if len(x) > 0]
     eye = sym.eye(n_nodes)
+    # for dyn_cols in itertools.product(*present_modes):
     for dyn_cols in itertools.product(*present_modes):
         Z = sym.Matrix.hstack(*dyn_cols, nd_mat)
         # Bad combination of extended and harmonic
@@ -1559,12 +1578,6 @@ def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
         all_Z.append(Z)
         
     return all_Z, var_types
-
-
-
-
-
-
 
 
 def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
@@ -1617,22 +1630,35 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
 
     ## Both Possible Secondary Transformations
     # Zhe != 0
-    Z2 = sym.eye(Z0.shape[0])
+    # Z2 = sym.eye(Z0.shape[0])
     # Zh != I
-    Z3 = sym.eye(Z0.shape[0])
-    varsZ2 = []
-    varsZ3 = []
-    for i in range(Z2.shape[0]):
-        for j in range(Z2.shape[1]):
-            if j in ext and i in harm:
-                Z2[i,j] = sym.Symbol(f"Zeh{i}{j}", real=True)
-                varsZ2.append(Z2[i,j])
-            elif j in harm and i in harm:
-                Z3[i,j] = sym.Symbol(f"Zh{i}{j}", real=True)
-                varsZ3.append(Z3[i,j])
-    Z = Z2*Z3
-    vars = varsZ2+varsZ3
-    n_vars = len(vars)
+    # Z3 = sym.eye(Z0.shape[0])
+    # Ze != I
+    # Z4 = sym.eye(Z0.shape[0])
+    # varsZ2 = []
+    # varsZ3 = []
+    # varsZ4 = []
+    Z = sym.eye(Z0.shape[0])
+    var_list = []
+    for i in range(Z.shape[0]):
+        for j in range(Z.shape[1]):
+            if ((i in comp and j in ext) or 
+                (i in ext and j in ext) or 
+                (i in harm and j in ext+harm)):
+                Z[i,j] = sym.Symbol(f"Z{i}{j}", real=True)
+                var_list.append(Z[i,j])
+            # if j in ext and i in harm:
+            #     Z2[i,j] = sym.Symbol(f"Zeh{i}{j}", real=True)
+            #     varsZ2.append(Z2[i,j])
+            # elif j in harm and i in harm:
+            #     Z3[i,j] = sym.Symbol(f"Zh{i}{j}", real=True)
+            #     varsZ3.append(Z3[i,j])
+            # elif j in ext and i in ext:
+            #     Z4[i,j] = sym.Symbol(f"Ze{i}{j}", real=True)
+            #     varsZ4.append(Z4[i,j])
+    # Z = Z2*Z3*Z4
+    # vars = varsZ2+varsZ3+varsZ4
+    n_vars = len(var_list)
 
     cTrans2 = Z.transpose()*cTrans*Z
     cTransInv2 = cTrans2[:n_comp+n_ext+n_harm,:n_comp+n_ext+n_harm].inv()
@@ -1653,14 +1679,14 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
     det = sym.simplify(Z.det())
     for i1 in comp:
         for i2 in ext + harm:
-            coupling_terms[("C", i1, i2)] = _sol_indep_of_vars(cTransInv2[i1, i2], vars, params)
+            coupling_terms[("C", i1, i2)] = _sol_indep_of_vars(cTransInv2[i1, i2], var_list, params)
     for i1 in ext + harm:
         for i2 in ext + harm:
             # Symmetric coupling
             if i2 <= i1:
                 continue
-            coupling_terms[("C", i1, i2)] = _sol_indep_of_vars(cTransInv2[i1, i2], vars, params)
-            coupling_terms[("L", i1, i2)] = _sol_indep_of_vars(lTrans2[i1, i2], vars, params)
+            coupling_terms[("C", i1, i2)] = _sol_indep_of_vars(cTransInv2[i1, i2], var_list, params)
+            coupling_terms[("L", i1, i2)] = _sol_indep_of_vars(lTrans2[i1, i2], var_list, params)
     # Remove empty solutions and those that make the transformation not inverible
     for k in list(coupling_terms.keys()):
         sols = coupling_terms[k]
@@ -1674,6 +1700,9 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
             del coupling_terms[k]
         else:
             coupling_terms[k] = new_sols
+    
+
+    breakpoint()
     
     # Maximize the number of coupling terms that go to zero
     n_couple = len(coupling_terms)
@@ -1714,7 +1743,7 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
                     incompatible.append(keys)
                     continue
                 # Second, check if the selected rules can all be fulfilled simultaneously
-                is_compat, compat_subs = _are_substitutions_compatible(rules)
+                is_compat, compat_subs = _are_substitutions_compatible(rules, list(cTransInv2)+list(lTrans2))
                 if is_compat:
                     # Test different substitutions that
                     # are compatible with the chosen rules
@@ -1727,7 +1756,7 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
                         Z_free = list(Ztest.free_symbols)
                         # Insert random for remaining free variables
                         # for hashing
-                        Zhash = _find_Z_instance(Ztest, sort=False)
+                        Zhash = _find_Z_instance(Ztest, var_list, sort=False)
                         val, Z_perm = H_hash(Zhash, var_types, cTrans, lTrans, wJ=sym.Matrix([]))
                         if val < best_val:
                             best_val = val
@@ -1743,7 +1772,7 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
                     incompatible.append(keys)
 
     if return_instance:
-        best_Z = _find_Z_instance(best_Z, vals=[0,1])
+        best_Z = _find_Z_instance(best_Z, var_list,vals=[0,1])
     return best_Z
 
 
@@ -1788,7 +1817,7 @@ def choose_Z(circuit: list, edges: list,
         if Z.det() == 0:
             breakpoint()
         # Consider secondary harmonic extended transformation
-        Z2  = secondary_decouple(Z, var_types, cMat, lMat, wJ)
+        Z2 = secondary_decouple(Z, var_types, cMat, lMat, wJ)
         val, Z_perm = H_hash(Z*Z2, var_types, cMat, lMat, wJ)
         if val < lowest_hash or lowest_hash == "":
             lowest_Z = [Z_perm]
@@ -1809,7 +1838,8 @@ def choose_Z(circuit: list, edges: list,
             Z_final = Z
 
     if return_instance:
-        Z_final = _find_Z_instance(Z_final, vals=[0,1])
+        to_sub = [v for v in Z_final.free_symbols if "Z" in str(v).upper()] 
+        Z_final = _find_Z_instance(Z_final, to_sub, vals=[0,1])
     
     return Z_final, var_types, lowest_hash
 
