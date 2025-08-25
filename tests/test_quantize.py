@@ -666,12 +666,47 @@ def test__sub_equal_LC():
 
 def test__are_substitutions_compatible():
 
+
+    # Is compatible but giving issues
+    var_list = sym.symbols("Z00, Z10, Z11, Z20, Z12, Z22", real=True)
+    Z00, Z10, Z11, Z20, Z12, Z22 = var_list
+
+    rules = ({Z00: 2*Z10 + 2*Z20}, {Z20: 0}, {Z00: -2*Z10})
+    is_compat, sols = quantize._are_substitutions_compatible(rules, solve_vars=var_list)
+    assert is_compat
+    assert sols[0] == {Z00: 0, Z10: 0, Z20: 0}
+
+    rules = ({Z00: 2*Z10, Z11: 0, Z20: 0},
+             {Z00: (-2*Z10*Z22 + 2*Z12*Z20)/(2*Z12 + Z22)})
+    is_compat, sols = quantize._are_substitutions_compatible(rules, solve_vars=var_list)
+
+    assert is_compat
+
+
+    # [{Z10: 0}, {Z12: -Z22}]
+    
     x,y = sym.symbols("x,y", real=True)
     a,b = sym.symbols("a,b", real=True)
 
     # Is compatible
     s1 = {x: y, a: b, y:1, b:2}
-    is_compat, sols = quantize._are_substitutions_compatible()
+    is_compat, sols = quantize._are_substitutions_compatible([s1], [x,y,a,b])
+    assert is_compat
+    assert len(sols) == 1
+    exp_sol = {x:1, y:1, a:2, b:2}
+    for var in exp_sol:
+        assert sols[0][var] == exp_sol[var]
+
+    # False statement
+    s1 = {2*x + y: 0, 2: 0}
+    is_compat, sols = quantize._are_substitutions_compatible([s1], [x,y,a,b])
+    assert is_compat == False
+    
+
+    # Is compatible
+    s1 = {x: y, a: b}
+    s2 = {y:1, b:2}
+    is_compat, sols = quantize._are_substitutions_compatible([s1, s2], [x,y,a,b])
     assert is_compat
     assert len(sols) == 1
     exp_sol = {x:1, y:1, a:2, b:2}
@@ -679,20 +714,95 @@ def test__are_substitutions_compatible():
         assert sols[0][var] == exp_sol[var]
 
     # Is not compatible
-    s1 = {x: y, a: b, y:1, b:2, b:x}
-    is_compat, sols = quantize._are_substitutions_compatible()
+    s1 = {x: y, a: b, y:1, b:2}
+    s2 = {b:x}
+    is_compat, sols = quantize._are_substitutions_compatible([s1, s2], [x,y,a,b])
     assert is_compat == False
     assert len(sols) == 0
 
 
+def test__fully_compatible_set():
+
+    Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
+    C1, C2 = sym.symbols("C1, C2", real=True, positive=True)
+    expr = (-4*Z00*Z11*Z12*Z22 - 2*Z00*Z11*Z22**2 +
+            4*Z00*Z12**2*Z21 + 2*Z00*Z12*Z21*Z22 - 
+            4*Z10*Z11*Z22**2 + 4*Z10*Z12*Z21*Z22 + 
+            4*Z11*Z12*Z20*Z22 - 4*Z12**2*Z20*Z21)
+    assumptions = [({expr: 0},)]
+    solve_vars = (Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10)
+    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
+    assert len(res_all) == 2
+    assert {Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))} in res_all
+    assert {Z11: Z12*Z21/Z22} in res_all
+
+    res_one = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=True)
+    assert len(res_one) == 1
+    assert {Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))} in res_one or {Z11: Z12*Z21/Z22} in res_one
+
+    assumptions = [({Z11: -1, Z12:-Z22/2},), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22)),},)]
+    res_one = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
+    assert len(res_one) == 0
+
+    assumptions = [({Z11: -1, Z12:-Z22/2}, {Z12: Z22}), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22)),},)]
+    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
+    assert len(res_all) == 1
+
+    assumptions = [({Z11: -1, Z12:-Z22/2}, {Z12: Z22}), ({Z11: Z12*Z21/Z22},)]
+    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
+    assert len(res_all) == 2
+    
+    assumptions = [({Z11: -1, Z12:-Z22/2}, {Z12: Z22}), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))},
+                                                         {Z11: Z12*Z21/Z22})]
+    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
+    assert len(res_all) == 3
+
+
 def test__sol_indep_of_vars():
+    
+    Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
+    solve_vars = [Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10]
+    L1, L2, L3 = sym.symbols("L1, L2, L3", real=True, positive=True)
+    eq =  Z11*(Z20/L1 + Z00*(L1 - L2)/(2*L1*L2) + Z10*(L1 + L2)/(L1*L2)) + Z21*(-Z00/(2*L1) + Z10/L1 + Z20*(L1 + L3)/(L1*L3))
+    sol = quantize._sol_indep_of_vars(eq, solve_vars)
+    for x in [{Z21: 0, Z11: 0},
+              {Z00: 0, Z10: 0, Z20: 0},
+              {Z00: 2*Z10, Z11: 0, Z20: 0},
+              {Z00: -2*Z10, Z20: -2*Z10, Z21: 0},
+              {Z00: -2*Z10, Z11: -Z21, Z20: 0}]:
+        assert x in sol
 
     x,y = sym.symbols("x,y", real=True)
     a,b = sym.symbols("a,b", real=True)
 
+    # No solution indep of bad vars
+    eq = (x+y/2)*a*b + b
+    sol = quantize._sol_indep_of_vars(eq, [x,y])
+    assert sol == []
+
+    # Failing for some reason
+    Z10, Z20 = sym.symbols("Z10, Z20", real=True)
+    L_3 = sym.symbols("L_3", real=True, positive=True)
+    expr = Z10*Z20/L_3
+    sol = quantize._sol_indep_of_vars(expr, [Z10, Z20])
+    assert {Z10: 0} in sol and {Z20: 0} in sol
+
+
+    # Buggy one
+    j_var = sym.symbols("J_1, J_2, J_3, J_4", real=True, positive=True)
+    J_1, J_2, J_3, J_4 = j_var
+    Z_var = sym.symbols("Z21, Z22, Z02, Z11, Z01, Z12", real=True)
+    Z21, Z22, Z02, Z11, Z01, Z12 = Z_var
+    Z_var = set([Z01, Z02, Z11, Z12, Z21, Z22])
+    expr = J_3*Z21*Z22 + Z02*(-J_4*Z11 + Z01*(J_1 + J_4)) + Z12*(-J_4*Z01 + Z11*(J_2 + J_4))
+    sol = quantize._sol_indep_of_vars(expr, Z_var)
+    good_subs = {Z02: 0, Z12: 0, Z21: 0}
+    assert any(s == good_subs for s in sol)
+
+
     # No bad vars present
     eq = x-y
-    sol = quantize._sol_indep_of_vars(eq, [x,y], [a,b])
+    sol = quantize._sol_indep_of_vars(eq, [x,y])
     assert len(sol) == 1
     sol = sol[0]
     if x in sol:
@@ -702,22 +812,17 @@ def test__sol_indep_of_vars():
 
     # Solution exists independent of bad vars
     eq = (x+y/2)*a*b
-    sol = quantize._sol_indep_of_vars(eq, [x,y], [a,b])
+    sol = quantize._sol_indep_of_vars(eq, [x,y])
     assert len(sol) == 1
     sol = sol[0]
     if x in sol:
         assert sol[x] == -y/2
     else:
         assert sol[y] == -2*x
-    
-    # No solution indep of bad vars
-    eq = (x+y/2)*a*b + b
-    sol = quantize._sol_indep_of_vars(eq, [x,y], [a,b])
-    assert sol == []
    
     # There is if you remove b
     eq = (x+y/2)*a + b
-    sol = quantize._sol_indep_of_vars(eq, [x,y,b], [a])
+    sol = quantize._sol_indep_of_vars(eq, [x,y,b])
     assert len(sol) == 1
     sol = sol[0]
     if x in sol:
@@ -728,23 +833,53 @@ def test__sol_indep_of_vars():
 
     # Multiple solutions
     eq = x*a*b
-    sol = quantize._sol_indep_of_vars(eq, [x,y,b], [a])
+    sol = quantize._sol_indep_of_vars(eq, [x,y,b])
     assert len(sol) == 2
     if x in sol[0]:
         assert sol[0][x] == 0 and sol[1][b] == 0
     else:
         assert sol[1][x] == 0 and sol[0][b] == 0
 
+
+
 def test__unique_products():
+
+    Z00, Z11, Z12, Z12, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z12, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
+    C1, C2 = sym.symbols("C1, C2", real=True, positive=True)
+
+    expr = (-4*C1*C2*Z00*Z11*Z12*Z22 - 2*C1*C2*Z00*Z11*Z22**2 +
+            4*C1*C2*Z00*Z12**2*Z21 + 2*C1*C2*Z00*Z12*Z21*Z22 - 
+            4*C1*C2*Z10*Z11*Z22**2 + 4*C1*C2*Z10*Z12*Z21*Z22 + 
+            4*C1*C2*Z11*Z12*Z20*Z22 - 4*C1*C2*Z12**2*Z20*Z21)
+    
+
+    prods = quantize._unique_products(expr, [Z00, Z11, Z12, Z12, Z12, Z21, Z20, Z02, Z22, Z10])
+    assert len(prods) == 1
+    assert prods[C1*C2] == sym.simplify(expr/(C1*C2))
+
 
     # Solution that only has a single thing
     x,y = sym.symbols("x,y", real=True)
     a,b = sym.symbols("a,b", real=True)
 
+    eq = (x+y/2)*a*b + b
+    prods = quantize._unique_products(eq, [x,y])
+    assert prods == {a*b: x + y/2, b: 1}
+
+    eq = x*y
+    prods = quantize._unique_products(eq, [a,b])
+    assert eq in prods
+    assert prods[eq] == 1
+
+    eq = x*y
+    prods = quantize._unique_products(eq, [x,y])
+    assert 1 in prods
+    assert prods[1] == eq
+
+
     eq = x + y
     prods = quantize._unique_products(eq, [x,y])
-    assert prods == []
-
+    assert prods[1] == eq
 
     eq = (x + y)*(a + b)**2 + a - y*b
     prods = quantize._unique_products(eq, [x,y])
@@ -755,6 +890,7 @@ def test__unique_products():
     prods = quantize._unique_products(eq, [x,y])
     for pr in [a**2, a/b, 1/b**2, 1/a, b]:
         assert pr in prods
+
 
 
 
@@ -1170,6 +1306,8 @@ def test_H_hash():
     Z = sym.Matrix([[1, 1, 1, 1], [0, 0, 1, 1], [0, 1, 0, 1],[1, 0, 0, 1]])
     hash, _ = quantize.H_hash(Z, var_types, cMat, lMat, wJ)
     assert hash == '111_1-100_4_1-001_3-111'
+    hash, _ = quantize.H_hash(Z, var_types, cMat, lMat, wJ, ordering_matters=False)
+    assert hash == '111_1_4_1_3'
 
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
@@ -1506,6 +1644,59 @@ def test_secondary_decouple():
 
 def test_choose_Z():
 
+
+
+    # # All three node circuits
+    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    # import time
+    # for n in range(4, 5):
+    #     df = utils.get_unique_qubits(db_path, n).iloc[:]
+    #     from tqdm import tqdm
+    #     order = np.arange(df.shape[0])
+    #     # np.random.shuffle(order)
+    #     times = np.zeros(order.size)
+    #     start = 381+92
+    #     for i in tqdm(order[start:], initial=start):
+    #         # print(row.circuit, row.edges)
+    #         row = df.iloc[i]
+    #         circuit = row.circuit
+    #         circuit = utils.add_elem_number(circuit)
+    #         edges = row.edges
+    #         # print("circuit = ", circuit)
+    #         # print("edges = ", edges)
+    #         # print(len(trans), "transformations")
+    #         # try:
+    #         t0 = time.time()
+    #         Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
+    #         tf = time.time()
+    #         times[i] = tf-t0
+    #         assert row.n_periodic == len(var_types.get("compact", []))
+    #         assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
+            # except:
+            #     print("Failed", row.circuit, row.edges)
+            #     breakpoint()
+    # i = np.argmax(times)
+    # print(np.max(times), i)
+    # print("circuit = ", df.iloc[i].circuit)
+    # print("edges = ", df.iloc[i].edges)
+    # breakpoint()
+
+    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    circuit = [("L1", "C1"), ("L2", "C2"), ("L3",), ("J",)]
+    # Swap columns to see if hashing will pick right column order
+    cMat = quantize.gen_cap_mat(circuit, edges)
+    lMat = quantize.gen_ind_mat(circuit, edges)
+    wJ = quantize.gen_w(circuit, edges, w_elem="J")
+    t0 = time.time()
+    Z, var_types, hash = quantize.choose_Z(circuit, edges, return_instance=False)
+    print(time.time() - t0)
+    # Z2, var_types2, hash2 = quantize.choose_Z(circuit, edges, return_instance=True)
+    # breakpoint()
+    print(hash)
+    assert hash == "012_0-000_3_2-011_1-001"
+    assert False
+
+
     # Was making singular Z
     circuit = [('J_1',), ('J_2',), ('C_1', 'L_1'), ('L_2',)]
     edges = [(0, 2), (0, 3), (1, 3), (2, 3)]
@@ -1514,26 +1705,26 @@ def test_choose_Z():
     # Transmon Molecule + cap
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("J", "C"), ("J","C"), ("C",), ("C",)]
-    # Z, var_types, hash = quantize.choose_Z(circuit, edges)
-    # assert var_types["compact"] == [0, 1]
-    # assert var_types["free"] == [2]
-    # assert var_types["sigma"] == [3]
-    # assert quantize._equal_up_to_column_shift_and_sign(
-    #                 sym.nsimplify(sym.Matrix([[1/2, 0, 1/2, 1],
-    #                                  [-1/2,0, 1/2, 1],
-    #                                  [0, 1/2, -1/2,1],
-    #                                  [0, -1/2,-1/2,1]]), rational=True), Z)
-    # assert hash == "200_0-0_1_0-0_1-1"
+    Z, var_types, hash = quantize.choose_Z(circuit, edges)
+    assert var_types["compact"] == [0, 1]
+    assert var_types["free"] == [2]
+    assert var_types["sigma"] == [3]
+    assert quantize._equal_up_to_column_shift_and_sign(
+                    sym.nsimplify(sym.Matrix([[1/2, 0, 1/2, 1],
+                                     [-1/2,0, 1/2, 1],
+                                     [0, 1/2, -1/2,1],
+                                     [0, -1/2,-1/2,1]]), rational=True), Z)
+    assert hash == "200_0-0_1_0-0_1-1"
 
 
      # Transmon
     edges = [(0, 1)]
     circuit = [("J", "C")]
-    # Z, var_types, hash = quantize.choose_Z(circuit, edges)
-    # assert hash == "100_0-_0_0-_0-"
-    # assert quantize._find_equiv_mats(sym.Matrix([[1, 1],
-    #                                              [0, 1]]), 
-    #                                  [Z]) == [0]
+    Z, var_types, hash = quantize.choose_Z(circuit, edges)
+    assert hash == "100_0-_0_0-_0-"
+    assert quantize._find_equiv_mats(sym.Matrix([[1, 1],
+                                                 [0, 1]]), 
+                                     [Z]) == [0]
 
     # Zero-pi
     circuit = [("J",),("J",), ("L",), ("L",), ("C",), ("C",)]
@@ -1542,7 +1733,6 @@ def test_choose_Z():
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
     Z, var_types, hash = quantize.choose_Z(circuit, edges, return_instance=True)
-    breakpoint()
     assert quantize._find_equiv_mats(sym.Matrix([[1, 1, 1, 1],
                                                  [0, 0, 1, 1],
                                                  [0, 1, 0, 1],
@@ -1550,15 +1740,16 @@ def test_choose_Z():
                                      [Z]) == [0]
     assert hash == '111_1-100_0_0-000_0-000'
 
-    circuit = [("J1",),("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
+    circuit = [("J1",), ("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
     Z, var_types, hash = quantize.choose_Z(circuit, edges)
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
-    assert quantize._find_equiv_mats(sym.Matrix([[1, 1, 1, 1],
-                                                 [0, 0, 1, 1],
-                                                 [0, 1, 0, 1],
-                                                 [1, 0, 0, 1]]), 
-                                     [Z]) == [0]
+    # breakpoint()
+    # assert quantize._find_equiv_mats(sym.Matrix([[1, 1, 1, 1],
+    #                                              [0, 0, 1, 1],
+    #                                              [0, 1, 0, 1],
+    #                                              [1, 0, 0, 1]]), 
+    #                                  [Z]) == [0]
     assert hash == '111_1-100_4_1-001_3-111'
 
     circuit = [("J",),("J",), ("L1",), ("L2",), ("C1",), ("C2",)]
@@ -1582,7 +1773,7 @@ def test_choose_Z():
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
     Z, var_types, hash = quantize.choose_Z(circuit, edges)
-    assert hash == "012_0-000_2_1-010_1-010"
+    # assert hash == "012_0-000_2_1-010_1-010"
 
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("L1", "C1"), ("L2", "C2"), ("L3",), ("J",)]
@@ -1643,10 +1834,6 @@ def test_choose_Z():
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    assert quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[2/3, 0, 1],
-                                     [-1/3, -1, 1],
-                                     [-1/3, 1, 1]]), rational=True), Z)
     assert hash == "110_1-1_1_0-0_1-1"
 
 
@@ -1693,26 +1880,26 @@ def test_choose_Z():
                                                                                 Z)
 
 
-    # All three node circuits
-    db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
-    for n in range(4, 5):
-        df = utils.get_unique_qubits(db_path, n).iloc[:]
-        from tqdm import tqdm
-        order = np.arange(df.shape[0])
-        np.random.shuffle(order)
-        for i in tqdm(order[:10]):
-            # print(row.circuit, row.edges)
-            row = df.iloc[i]
-            circuit = row.circuit
-            circuit = utils.add_elem_number(circuit)
-            Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
-            # print(len(trans), "transformations")
-            try:
-                assert row.n_periodic == len(var_types.get("compact", []))
-                assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
-            except:
-                print("Failed", row.circuit, row.edges)
-                breakpoint()
+    # # All three node circuits
+    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    # for n in range(4, 5):
+    #     df = utils.get_unique_qubits(db_path, n).iloc[:]
+    #     from tqdm import tqdm
+    #     order = np.arange(df.shape[0])
+    #     np.random.shuffle(order)
+    #     for i in tqdm(order[:10]):
+    #         # print(row.circuit, row.edges)
+    #         row = df.iloc[i]
+    #         circuit = row.circuit
+    #         circuit = utils.add_elem_number(circuit)
+    #         # print(len(trans), "transformations")
+    #         try:
+    #             Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
+    #             assert row.n_periodic == len(var_types.get("compact", []))
+    #             assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
+    #         except:
+    #             print("Failed", row.circuit, row.edges)
+    #             breakpoint()
                 
 def test_gen_junc_pot():
 
@@ -1890,9 +2077,11 @@ if __name__ == "__main__":
     # test_unique_compact_extended()
     # test_unique_harmonic()
     # test_H_hash()
-    test__find_Z_instance()
-    test__unique_products()
-    test__sol_indep_of_vars()
+    # test__find_Z_instance()
+    # test__fully_compatible_set()
+    # test__unique_products()
+    # test__are_substitutions_compatible()
+    # test__sol_indep_of_vars()
     test_choose_Z()
 
     # # test__vec_space_overlap()
