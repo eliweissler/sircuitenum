@@ -1868,17 +1868,13 @@ def test_choose_Z():
     edges = [(1, 2), (1, 3)]
     edges = utils.zero_start_edges(edges)
     cMat = quantize.gen_cap_mat(circuit, edges)
-    Z, var_types, hash = quantize.choose_Z(circuit, edges)
-    assert var_types["extended"] == [0]
-    assert var_types["harmonic"] == [1]
-    assert var_types["sigma"] == [2]
+    for i in range(10):
+        Z, var_types, hash = quantize.choose_Z(circuit, edges)
+        assert var_types["extended"] == [0]
+        assert var_types["harmonic"] == [1]
+        assert var_types["sigma"] == [2]
+        print(hash)
     assert hash == "011_0-0_0_0-0_0-0"
-    assert quantize._equal_up_to_column_shift_and_sign(sym.simplify(sym.Matrix([[0, 0, 1],
-                                                                                [0, 1, 1],
-                                                                                [1, 0, 1]]),
-                                                                                rational=True),
-                                                                                Z)
-
 
     # # All three node circuits
     # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"

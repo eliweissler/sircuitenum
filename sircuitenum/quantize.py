@@ -666,43 +666,51 @@ def _cached_solve(all_eq, solve_vars, pre_simplify=True):
     # 3) how many terms are present in the shorter of lhs/rhs
     # 4) random number for tiebreaker -- this won't catch all
     #    equtions, but it will get more than a simple substitution
-    if pre_simplify:
-        all_eq = [sym.simplify(eq) for eq in all_eq]
-    all_eq = sorted(all_eq,
-                    key=lambda eq: (len(eq.free_symbols),
-                                    len(eq.lhs.as_ordered_terms()) + len(eq.rhs.as_ordered_terms()),
-                                    min(len(eq.lhs.as_ordered_terms()), len(eq.rhs.as_ordered_terms())),
-                                    max(len(eq.lhs.as_ordered_terms()), len(eq.rhs.as_ordered_terms())),
-                                    np.random.random()
-                                    ))
+    # if pre_simplify:
+    #     all_eq = [sym.expand(eq) for eq in all_eq]
+    # all_eq = sorted(all_eq,
+    #                 key=lambda eq: (len(eq.free_symbols),
+    #                                 len(eq.lhs.as_ordered_terms()) + len(eq.rhs.as_ordered_terms()),
+    #                                 min(len(eq.lhs.as_ordered_terms()), len(eq.rhs.as_ordered_terms())),
+    #                                 max(len(eq.lhs.as_ordered_terms()), len(eq.rhs.as_ordered_terms())),
+    #                                 np.random.random()
+    #                                 ))
 
     # Put variables in a canonical order for dummy substitution
     # 1) how many equations does the variable appear in
     # 2) how many appearances in each equation
     var_by_eq = [[s for s in eq.free_symbols if s in solve_vars] for eq in all_eq]
-    all_var = set(itertools.chain.from_iterable(var_by_eq))
-    n_eq = len(var_by_eq)
-    n_var = len(all_var)
-    var_count = {}
-    for var in all_var:
-        var_count[var] = np.zeros(n_eq, dtype=int)
-    for i, eq in enumerate(var_by_eq):
-        for var in eq:
-            var_count[var][i] += 1
-    vars_present = sorted(var_count.keys(),
-                          key=lambda var: (sum(var_count[var]),) + tuple(var_count[var]) + (np.random.random(),))
+    all_var = list(set(itertools.chain.from_iterable(var_by_eq)))
+    # n_eq = len(var_by_eq)
+    # n_var = len(all_var)
+    # var_count = {}
+    # for var in all_var:
+    #     var_count[var] = np.zeros(n_eq, dtype=int)
+    # for i, eq in enumerate(var_by_eq):
+    #     for var in eq:
+    #         var_count[var][i] += 1
+    # vars_present = sorted(all_var,
+    #                       key=lambda var: (sum(var_count[var]),) + tuple(var_count[var]) + (np.random.random(),))
+    vars_present = all_var
+
 
     # Dummy variable mapping
     dummies = CACHE_VARS[:len(vars_present)]
     mapping = dict(zip(vars_present, dummies))
-    inv_mapping = dict(zip(vars_present, dummies))
-    eq_set = frozenset(frozenset(eq.subs(mapping) for eq in all_eq))
+    inv_mapping = dict(zip(dummies, vars_present))
+    eq_set = frozenset(frozenset((eq.lhs.subs(mapping), eq.rhs.subs(mapping))) for eq in all_eq)
+    # eq_set = frozenset(frozenset((eq.lhs, eq.rhs)) for eq in all_eq)
 
     # Check to see if we've solved this before, or if an equation
     # with a strict subset of these equations was deemed impossible
+    # sols = None
     for solved, solved_sols in SOLVE_CACHE.items():
         if (eq_set == solved) or (all(eq in eq_set for eq in eq_set) and solved_sols == []):
             sols = solved_sols
+            break
+    # if eq_set in SOLVE_CACHE:
+    #     sols = SOLVE_CACHE[eq_set]
+    # if sols is None:
     else:
         sols = sym.solve(all_eq, solve_vars, dict=True, simplify=True)
         SOLVE_CACHE[eq_set] = sols
@@ -712,9 +720,12 @@ def _cached_solve(all_eq, solve_vars, pre_simplify=True):
     for sol in sols:
         final_sol = {}
         for var, val in sol.items():
-            final_sol[var.subs(inv_mapping)] = val.subs(mapping)
+            final_sol[var.subs(inv_mapping)] = val.subs(inv_mapping)
+            # final_sol[var] = val
         final_sols.append(final_sol)
-    return sols
+    
+    # breakpoint()
+    return final_sols
         # Save results in cache
         # for perm in itertools.permutations(dummies, len(vars_present)):
         #     mapping = dict(zip(vars_present, perm))
@@ -2151,6 +2162,10 @@ def choose_Z(circuit: list, edges: list,
     Returns:
         tuple[sym.Matrix, dict[str, list[int]], str]: _description_
     """
+
+    # Reset solve cache
+    global SOLVE_CACHE
+    SOLVE_CACHE = {}
      
     t0 = time.time()
 
