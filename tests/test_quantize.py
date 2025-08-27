@@ -1694,7 +1694,7 @@ def test_choose_Z():
     # breakpoint()
     print(hash)
     assert hash == "012_0-000_3_2-011_1-001"
-    assert False
+    # assert False
 
 
     # Was making singular Z
