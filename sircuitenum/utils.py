@@ -5,6 +5,7 @@ __all__ = ['get_circuit_data_batch', 'find_circuit_in_db', "get_equiv_circuits",
 
 import itertools
 import functools
+import multiprocessing
 from typing import Union
 from pathlib import Path
 from time import sleep
@@ -489,7 +490,7 @@ def get_num_nodes(edges: list):
     return np.unique(np.concatenate(edges)).size
 
 
-def renumber_nodes(edges: list):
+def renumber_nodes(edges: list, return_mapping=False):
     """
     Renumbers nodes so that there is a continuous range
     of integers between 0 and the max number
@@ -504,15 +505,20 @@ def renumber_nodes(edges: list):
     """
     new_edges = edges[:]
     nodes = np.unique(np.concatenate(new_edges))
+    relabel_map = {}
     if nodes[-1] != nodes.shape[0]-1:
-        relabel_map = {}
         for i in range(len(nodes)):
             relabel_map[nodes[i]] = i
         for i in range(len(new_edges)):
             edge = new_edges[i]
             new_edges[i] = tuple([relabel_map[x] for x in edge])
-
-    return new_edges
+    else:
+        relabel_map = {i: i for i in range(len(nodes))}
+    
+    if return_mapping:
+        return new_edges, relabel_map
+    else:
+        return new_edges
 
 
 def combine_redundant_edges(circuit: list, edges: list):
@@ -971,24 +977,39 @@ def list_all_columns(db_file: str, table_name: str):
     return cols
 
 
-def zero_start_edges(edges):
-    """
-    Helper function to convert a list of edges from 1
-    indexing to 0 indexing of the nodes
+def _worker(func, args, kwargs, q):
+    """Runs the target function and puts result/exception in a queue."""
+    try:
+        q.put(func(*args, **kwargs))
+    except Exception as e:
+        q.put(e)
 
-    Args:
-        edges (list of tuples of ints): a list of edge connections for the
-                                        desired circuit
-                                        (i.e., [(0,1),(1,2),(2,3),(3,0)])
 
-    Returns:
-         list[tuple[int]]: edges modified to have zero as the lowest
-                           index
-    """
-    min_node = min([min(edge) for edge in edges])
-    if min_node > 0:
-        edges = [(edge[0] - min_node, edge[1] - min_node) for edge in edges]
-    return edges
+def run_with_timeout(func, args=(), kwargs=None, timeout=1, interval=50):
+    if kwargs is None:
+        kwargs = {}
+
+    q = multiprocessing.Queue()
+    p = multiprocessing.Process(target=_worker, args=(func, args, kwargs, q))
+    p.start()
+    for i in range(interval+1,1,-1):
+        p.join(float(timeout)/i)
+
+        # Alive - return None
+        if p.is_alive() and i == 1:
+            p.terminate()
+            p.join()
+            return None
+
+        elif not p.is_alive():
+            result = q.get()
+            # Exception - raise it
+            if isinstance(result, Exception):
+                raise result
+            else:
+                # Normal - return
+                return result
+    return None
 
 
 def set_enum_params(char_to_combo = {'0': ('C',),

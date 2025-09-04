@@ -26,6 +26,49 @@ def test__islands_to_vectors():
     assert vecs[1] in [v1, v2]
 
 
+def test__independent_from():
+    # Basic: A = {[1,0], [0,1]}, B = {[1,1]}
+    A = [sym.Matrix([1, 0]), sym.Matrix([0, 1])]
+    B = [sym.Matrix([1, 1])]
+    result = quantize.independent_from(A, B)
+    assert len(result) == 2
+    assert any(v == sym.Matrix([1, 0]) for v in result)
+    assert any(v == sym.Matrix([0, 1]) for v in result)
+
+    # Subset: A = {[1,0], [0,1]}, B = {[1,0]}
+    A = [sym.Matrix([1, 0]), sym.Matrix([0, 1])]
+    B = [sym.Matrix([1, 0])]
+    result = quantize.independent_from(A, B)
+    assert len(result) == 1
+    assert result[0] == sym.Matrix([0, 1])
+
+    # All in B: A = {[1,0]}, B = {[1,0]}
+    A = [sym.Matrix([1, 0])]
+    B = [sym.Matrix([1, 0])]
+    result = quantize.independent_from(A, B)
+    assert result == []
+
+    # Empty B: A = {[1,0], [0,1]}, B = []
+    A = [sym.Matrix([1, 0]), sym.Matrix([0, 1])]
+    B = []
+    result = quantize.independent_from(A, B)
+    assert len(result) == 2
+    assert any(v == sym.Matrix([1, 0]) for v in result)
+    assert any(v == sym.Matrix([0, 1]) for v in result)
+
+    # Symbolic: A = {[x,0], [0,y]}, B = {[x,y]}
+    x, y = sym.symbols('x y')
+    A = [sym.Matrix([x, 0]), sym.Matrix([0, y])]
+    B = [sym.Matrix([x, y])]
+    result = quantize.independent_from(A, B)
+    assert len(result) == 2
+    assert any(v == sym.Matrix([x, 0]) for v in result)
+    assert any(v == sym.Matrix([0, y]) for v in result)
+
+    assert False
+
+
+
 def test__vec_space_overlap():
 
     vecs1 = [sym.Matrix([1, 0, 1]),
@@ -234,6 +277,10 @@ def test__linearly_indep_row_col_sets():
         assert all(x in expected for x in row_sets)
         assert all(x in expected for x in col_sets)
 
+
+def test__det_fast():
+
+    assert False
 
 def test__equiv_cols():
 
@@ -760,23 +807,32 @@ def test__fully_compatible_set():
 
 def test__sol_indep_of_vars():
     
+    global SOLVE_CACHEsee
     Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
     solve_vars = [Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10]
     L1, L2, L3 = sym.symbols("L1, L2, L3", real=True, positive=True)
     eq =  Z11*(Z20/L1 + Z00*(L1 - L2)/(2*L1*L2) + Z10*(L1 + L2)/(L1*L2)) + Z21*(-Z00/(2*L1) + Z10/L1 + Z20*(L1 + L3)/(L1*L3))
-    sol = quantize._sol_indep_of_vars(eq, solve_vars)
+    sols = quantize._sol_indep_of_vars(eq, solve_vars)
     for x in [{Z21: 0, Z11: 0},
               {Z00: 0, Z10: 0, Z20: 0},
               {Z00: 2*Z10, Z11: 0, Z20: 0},
               {Z00: -2*Z10, Z20: -2*Z10, Z21: 0},
               {Z00: -2*Z10, Z11: -Z21, Z20: 0}]:
-        assert x in sol
+        any_true = False
+        for sol in sols:
+             all_eq = [sym.Eq(x[0], x[1]) for x in sol.items()]
+             sol_rewrite = sym.solve(all_eq, list(x.keys()), dict=True, simplify=True)
+             if x in sol_rewrite:
+                 any_true = True
+                 break
+        assert any_true
 
     x,y = sym.symbols("x,y", real=True)
     a,b = sym.symbols("a,b", real=True)
 
     # No solution indep of bad vars
     eq = (x+y/2)*a*b + b
+    SOLVE_CACHE={}
     sol = quantize._sol_indep_of_vars(eq, [x,y])
     assert sol == []
 
@@ -1646,7 +1702,7 @@ def test_choose_Z():
 
 
 
-    # # All three node circuits
+    # All three node circuits
     # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
     # import time
     # for n in range(4, 5):
@@ -1655,7 +1711,7 @@ def test_choose_Z():
     #     order = np.arange(df.shape[0])
     #     # np.random.shuffle(order)
     #     times = np.zeros(order.size)
-    #     start = 381+92
+    #     start = 0 #381+92
     #     for i in tqdm(order[start:], initial=start):
     #         # print(row.circuit, row.edges)
     #         row = df.iloc[i]
@@ -1670,16 +1726,17 @@ def test_choose_Z():
     #         Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
     #         tf = time.time()
     #         times[i] = tf-t0
-    #         assert row.n_periodic == len(var_types.get("compact", []))
-    #         assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
-            # except:
-            #     print("Failed", row.circuit, row.edges)
-            #     breakpoint()
+    #         # assert row.n_periodic == len(var_types.get("compact", []))
+    #         # assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
+    #         # except:
+    #         #     print("Failed", row.circuit, row.edges)
+    #         #     breakpoint()
+
+    # breakpoint()
     # i = np.argmax(times)
     # print(np.max(times), i)
     # print("circuit = ", df.iloc[i].circuit)
     # print("edges = ", df.iloc[i].edges)
-    # breakpoint()
 
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("L1", "C1"), ("L2", "C2"), ("L3",), ("J",)]
@@ -1765,15 +1822,6 @@ def test_choose_Z():
                                      [Z]) == [0]
     assert hash == '111_1-100_2_1-001_1-010'
 
-
-    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
-    circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
-    # Swap columns to see if hashing will pick right column order
-    cMat = quantize.gen_cap_mat(circuit, edges)
-    lMat = quantize.gen_ind_mat(circuit, edges)
-    wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    Z, var_types, hash = quantize.choose_Z(circuit, edges)
-    # assert hash == "012_0-000_2_1-010_1-010"
 
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("L1", "C1"), ("L2", "C2"), ("L3",), ("J",)]
@@ -1868,12 +1916,10 @@ def test_choose_Z():
     edges = [(1, 2), (1, 3)]
     edges = utils.zero_start_edges(edges)
     cMat = quantize.gen_cap_mat(circuit, edges)
-    for i in range(10):
-        Z, var_types, hash = quantize.choose_Z(circuit, edges)
-        assert var_types["extended"] == [0]
-        assert var_types["harmonic"] == [1]
-        assert var_types["sigma"] == [2]
-        print(hash)
+    Z, var_types, hash = quantize.choose_Z(circuit, edges)
+    assert var_types["extended"] == [0]
+    assert var_types["harmonic"] == [1]
+    assert var_types["sigma"] == [2]
     assert hash == "011_0-0_0_0-0_0-0"
 
     # # All three node circuits

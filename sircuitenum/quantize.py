@@ -30,7 +30,8 @@ EXT_PHASE = "_{ext}"
 
 
 # Cache of solved equations
-CACHE_VARS = sym.symbols(",".join([f'x{i}' for i in range(100)]))
+CACHE_VARS = sym.symbols(",".join([f'x{i}' for i in range(100)]), real=True)
+CACHE_CONST = sym.symbols(",".join([f'c{i}' for i in range(100)]), real=True)
 SOLVE_CACHE = {}
 
 
@@ -69,6 +70,40 @@ def _islands_to_vectors(circuit, edges, links):
     for i in range(len(ind)):
         vecs.append(_indices_to_arr(n_nodes, ind[i]))
     return vecs
+
+
+def _independent_from(A, B):
+    """
+    Returns a basis for elements in the span of A that are not in the span of B.
+    Assumes A and B are sets of linearly independent column vectors.
+
+    Args:
+        A (list[sym.Matrix] or sym.Matrix): Set of linearly independent column vectors.
+        B (list[sym.Matrix] or sym.Matrix): Set of linearly independent column vectors.
+
+    Returns:
+        list[sym.Matrix]: Basis vectors in span(A) not in span(B).
+    """
+    # Convert to list of column vectors if needed
+    if isinstance(A, sym.Matrix):
+        A = [A[:, j] for j in range(A.shape[1])]
+    if isinstance(B, sym.Matrix):
+        B = [B[:, j] for j in range(B.shape[1])]
+
+    # If B is empty, all of A is independent
+    if not B:
+        return [v for v in A]
+
+    # Stack B and A, get linearly independent columns
+    mat = sym.Matrix.hstack(*B, *A)
+    li_cols = _linearly_indep_cols(mat)
+    # Only keep those columns that come from A
+    offset = len(B)
+    result = []
+    for idx in li_cols:
+        if idx >= offset:
+            result.append(mat[:, idx])
+    return result
 
 
 def _vec_space_overlap(vecs1:Union[list[sym.Matrix], sym.Matrix],
@@ -254,6 +289,44 @@ def _linearly_indep_row_sets(X):
     return _linearly_indep_col_sets(X.transpose())
 
 
+def _fast_det(M):
+    """
+    Hardcoded determinant for small sympy matrices (up to 4x4)
+
+    Falls back to M.det() for larger
+    """
+    n = M.shape[0]
+    if M.shape[0] != M.shape[1]:
+        raise ValueError("Matrix must be square")
+
+    if n == 1:
+        return M[0,0]
+
+    elif n == 2:
+        return M[0,0]*M[1,1] - M[0,1]*M[1,0]
+
+    elif n == 3:
+        return (M[0,0]*(M[1,1]*M[2,2] - M[1,2]*M[2,1])
+              - M[0,1]*(M[1,0]*M[2,2] - M[1,2]*M[2,0])
+              + M[0,2]*(M[1,0]*M[2,1] - M[1,1]*M[2,0]))
+    elif n == 4:
+        return (
+            M[0,0]*(M[1,1]*(M[2,2]*M[3,3] - M[2,3]*M[3,2])
+                   -M[1,2]*(M[2,1]*M[3,3] - M[2,3]*M[3,1])
+                   +M[1,3]*(M[2,1]*M[3,2] - M[2,2]*M[3,1]))
+          - M[0,1]*(M[1,0]*(M[2,2]*M[3,3] - M[2,3]*M[3,2])
+                   -M[1,2]*(M[2,0]*M[3,3] - M[2,3]*M[3,0])
+                   +M[1,3]*(M[2,0]*M[3,2] - M[2,2]*M[3,0]))
+          + M[0,2]*(M[1,0]*(M[2,1]*M[3,3] - M[2,3]*M[3,1])
+                   -M[1,1]*(M[2,0]*M[3,3] - M[2,3]*M[3,0])
+                   +M[1,3]*(M[2,0]*M[3,1] - M[2,1]*M[3,0]))
+          - M[0,3]*(M[1,0]*(M[2,1]*M[3,2] - M[2,2]*M[3,1])
+                   -M[1,1]*(M[2,0]*M[3,2] - M[2,2]*M[3,0])
+                   +M[1,2]*(M[2,0]*M[3,1] - M[2,1]*M[3,0]))
+        )
+    else:
+        return M.det()
+
 def _equiv_cols(c1, c2, shifts=None):
     if shifts is None:
         # Just the global shift
@@ -378,7 +451,8 @@ def _unique_vals(X):
                 vals.append(v)
     return vals
 
-def _unique_col_combos(basis, n_elem, signs=[1,-1], li_vecs=[], valid=lambda v: True, shifts=None):
+def _unique_col_combos(basis, n_elem, signs=[1,-1], li_vecs=[], valid=lambda v: True, shifts=None,
+                       only_one=False):
 
 
     # Possible combinations of signs plus 0 -- ignore the all 0 combo
@@ -387,7 +461,7 @@ def _unique_col_combos(basis, n_elem, signs=[1,-1], li_vecs=[], valid=lambda v: 
     # Unique permutations of each combination
     perms = list(itertools.chain(*[list(set(itertools.permutations(c)))for c in combos]))
 
-    # Turn the permutations into vectors
+    # Turn the permutations of signs into vectors
     basis_mat = sym.Matrix.hstack(*basis)
     possible_vecs = []
     for p in perms:
@@ -412,7 +486,10 @@ def _unique_col_combos(basis, n_elem, signs=[1,-1], li_vecs=[], valid=lambda v: 
             # Is it equivalent to a matrix we've seen yet
             M = sym.Matrix.hstack(*combo)
             if not len(_find_equiv_mats(M, possible_combos, shifts)) > 0:
-                possible_combos.append(M)
+                if only_one:
+                    return [M]
+                else:
+                    possible_combos.append(M)
     
     return possible_combos
 
@@ -586,8 +663,12 @@ def _sub_equal_LC(X):
         if "l" in str(x).lower():
             X = X.subs(x, L)
     return X
-    
 
+def _to_frozenset(eqs):
+    return frozenset(frozenset((x.lhs, x.rhs)) for x in eqs)
+
+COMPATIBLE_CACHE = {}
+# TODO: ADD CACHE?
 def _fully_compatible_set(assumptions, solve_vars, starting={}, nonzero=[], depth_first=False):
     """
     Returns all sets of assumptions fully compatible with
@@ -600,6 +681,12 @@ def _fully_compatible_set(assumptions, solve_vars, starting={}, nonzero=[], dept
     Returns:
         _type_: _description_
     """
+    # ASS_KEY = []
+    # starting_eq = _to_eq_list(starting)
+    # ASS_KEY += _to_frozenset(starting_eq)
+    # for ass_set in assumptions:
+    #     ASS_KEY += _to_frozenset(ass)
+
     # Record fixed substitutions for the starting assumptions
     old_eq = []
     const_subs = {}
@@ -638,8 +725,8 @@ def _fully_compatible_set(assumptions, solve_vars, starting={}, nonzero=[], dept
 
             # If it's not obviously wrong, then solve
             new_eq = [sym.Eq(x[0], x[1]) for x in ass.items()]
-            all_eq = new_eq + old_eq
-            sols = _cached_solve(all_eq, solve_vars)
+            # sols = _cached_solve_dummy(new_eq + old_eq, solve_vars)
+            sols = _cached_solve(new_eq + old_eq, solve_vars)
             # eq_set = frozenset(frozenset(x.))
             # sols = sym.solve(all_eq, solve_vars, dict=True, simplify=True)
             is_compat = len(sols) > 0
@@ -654,90 +741,121 @@ def _fully_compatible_set(assumptions, solve_vars, starting={}, nonzero=[], dept
                         if depth_first:
                             return res
                         else:
-                            all_res += res        
+                            all_res += res    
         return all_res
 
 
-def _cached_solve(all_eq, solve_vars, pre_simplify=True):
-    
-    # Put equations in a canonical order based on
-    # 1) how many variables appear
-    # 2) how many terms are present in the longer of lhs/rhs
-    # 3) how many terms are present in the shorter of lhs/rhs
-    # 4) random number for tiebreaker -- this won't catch all
-    #    equtions, but it will get more than a simple substitution
-    # if pre_simplify:
-    #     all_eq = [sym.expand(eq) for eq in all_eq]
-    # all_eq = sorted(all_eq,
-    #                 key=lambda eq: (len(eq.free_symbols),
-    #                                 len(eq.lhs.as_ordered_terms()) + len(eq.rhs.as_ordered_terms()),
-    #                                 min(len(eq.lhs.as_ordered_terms()), len(eq.rhs.as_ordered_terms())),
-    #                                 max(len(eq.lhs.as_ordered_terms()), len(eq.rhs.as_ordered_terms())),
-    #                                 np.random.random()
-    #                                 ))
+def _to_eq_list(all_eq):
+    # print(all_eq)
+    # Convert dictionary to equation
+    if isinstance(all_eq, dict):
+        all_eq = [sym.Eq(x[0], x[1]) for x in all_eq.items()]
+    # Convert list or frozenset or tuple of frozensets or expressions to equation
+    elif isinstance(all_eq, list) or isinstance(all_eq, frozenset) or isinstance(all_eq, tuple):
+        all_eq = list(all_eq)
+        # Frozen set
+        if isinstance(all_eq[0], frozenset):
+            all_eq = [list(x) for x in all_eq]
+            all_eq = [sym.Eq(x[0], x[1]) for x in all_eq if len(x) == 2]
+        elif isinstance(all_eq[0], dict):
+            all_eq = functools.reduce(lambda a,b: a+b, [[sym.Eq(x[0], x[1]) for x in eq.items()] for eq in all_eq], [])
+        # expression
+        elif not isinstance(all_eq[0], sym.Eq):
+            new_eq = []
+            for eq in all_eq:
+                if eq.is_number:
+                    if eq != 0:
+                        return []
+                else:
+                    new_eq.append(sym.Eq(eq, 0))
+            all_eq = new_eq
 
-    # Put variables in a canonical order for dummy substitution
-    # 1) how many equations does the variable appear in
-    # 2) how many appearances in each equation
-    var_by_eq = [[s for s in eq.free_symbols if s in solve_vars] for eq in all_eq]
-    all_var = list(set(itertools.chain.from_iterable(var_by_eq)))
-    # n_eq = len(var_by_eq)
-    # n_var = len(all_var)
-    # var_count = {}
-    # for var in all_var:
-    #     var_count[var] = np.zeros(n_eq, dtype=int)
-    # for i, eq in enumerate(var_by_eq):
-    #     for var in eq:
-    #         var_count[var][i] += 1
-    # vars_present = sorted(all_var,
-    #                       key=lambda var: (sum(var_count[var]),) + tuple(var_count[var]) + (np.random.random(),))
-    vars_present = all_var
+    return all_eq
+
+
+
+def _cached_solve_dummy(all_eq, solve_vars, simplify=True):
+
+
+    all_eq = _to_eq_list(all_eq)
+    
+    # Recursive base case
+    if len(all_eq) == 0:
+        return []
+    
+    var_by_eq = [[s for s in eq.free_symbols] for eq in all_eq]
+    solve_var_present = [x for x in set(itertools.chain.from_iterable(var_by_eq)) if x in solve_vars]
+    other_var_present = [x for x in set(itertools.chain.from_iterable(var_by_eq)) if x not in solve_vars]
 
 
     # Dummy variable mapping
-    dummies = CACHE_VARS[:len(vars_present)]
-    mapping = dict(zip(vars_present, dummies))
-    inv_mapping = dict(zip(dummies, vars_present))
-    eq_set = frozenset(frozenset((eq.lhs.subs(mapping), eq.rhs.subs(mapping))) for eq in all_eq)
-    # eq_set = frozenset(frozenset((eq.lhs, eq.rhs)) for eq in all_eq)
-
-    # Check to see if we've solved this before, or if an equation
-    # with a strict subset of these equations was deemed impossible
-    # sols = None
-    for solved, solved_sols in SOLVE_CACHE.items():
-        if (eq_set == solved) or (all(eq in eq_set for eq in eq_set) and solved_sols == []):
-            sols = solved_sols
-            break
-    # if eq_set in SOLVE_CACHE:
-    #     sols = SOLVE_CACHE[eq_set]
-    # if sols is None:
-    else:
-        sols = sym.solve(all_eq, solve_vars, dict=True, simplify=True)
-        SOLVE_CACHE[eq_set] = sols
-    
-    # Inverse mapping
-    final_sols = []
-    for sol in sols:
-        final_sol = {}
-        for var, val in sol.items():
-            final_sol[var.subs(inv_mapping)] = val.subs(inv_mapping)
-            # final_sol[var] = val
-        final_sols.append(final_sol)
-    
+    dummy_var = CACHE_VARS[:len(solve_var_present)]
+    dummy_const = CACHE_CONST[:len(other_var_present)]
+    mapping = dict(zip(solve_var_present, dummy_var)) | dict(zip(other_var_present, dummy_const))
+    inv_mapping = {}
+    for var, val in mapping.items():
+        inv_mapping[val] = var
+    all_eq_mapped = [eq.subs(mapping) for eq in all_eq]
+    sols_w_dummy = _cached_solve(all_eq_mapped, dummy_var, simplify)
+    sols = []
+    for sol_dum in sols_w_dummy:
+        sol = {}
+        for var, val in sol_dum.items():
+            sol[var.subs(inv_mapping)] = val.subs(inv_mapping)
+        sols.append(sol)
     # breakpoint()
-    return final_sols
-        # Save results in cache
-        # for perm in itertools.permutations(dummies, len(vars_present)):
-        #     mapping = dict(zip(vars_present, perm))
-        #     eq_set = frozenset(frozenset(eq.subs(mapping) for eq in all_eq))
-        #     sols_perm = []
-        #     for sol in sols:
-        #         new_sol = {}
-        #         for var, val in sol.items():
-        #             new_sol[var.subs(mapping)] = val.subs(mapping)
-        #         sols_perm.append(new_sol)
-        #     SOLVE_CACHE[eq_set] = sols_perm
-        # return sols
+    return sols
+
+
+def _cached_solve(all_eq, solve_vars, simplify=True):
+
+
+    all_eq = _to_eq_list(all_eq)
+    
+    
+    # Recursive base case
+    if len(all_eq) == 0:
+        return []
+   
+    eq_set = frozenset(frozenset((eq.lhs, eq.rhs)) for eq in all_eq)
+    # eq_set = frozenset(frozenset((sym.simplify(eq.lhs), sym.simplify(eq.rhs))) for eq in all_eq)
+
+    # Have we solved this set of equations before?
+    # If we haven't, look for subsets of them that we have
+    remaining_eq = [x for x in eq_set]
+    solved_eq = []
+    for solved in sorted(SOLVE_CACHE.keys(), key=len):
+        # if len(solved) == 1:
+        #     break
+        solved_sols = SOLVE_CACHE[solved]
+        # Strict subset of these equations were solved
+        if eq_set == solved or (all(eq in eq_set for eq in solved) and solved_sols == []):
+            SOLVE_CACHE[eq_set] = solved_sols
+            return solved_sols
+        elif all(eq in remaining_eq for eq in solved) and len(solved_sols) == 1:
+            solved_eq += solved_sols
+            for eq in solved:
+                remaining_eq.remove(eq)
+        if len(remaining_eq) == 0:
+            simplified_eq = _to_eq_list(solved_eq)
+            simplified_eq_set = frozenset(frozenset((eq.lhs, eq.rhs)) for eq in simplified_eq)
+            sols = sym.solve(simplified_eq, solve_vars, dict=True, simplify=simplify)
+            SOLVE_CACHE[eq_set] = sols 
+            SOLVE_CACHE[simplified_eq_set] = sols  
+            return sols
+
+    if remaining_eq:
+        remaining_eq = _to_eq_list(remaining_eq)
+    if solved_eq:
+        solved_eq = _to_eq_list(solved_eq)
+    sols = sym.solve(remaining_eq+solved_eq, solve_vars, dict=True, simplify=simplify)
+    # sols = sym.solve(all_eq, solve_vars, dict=True, simplify=simplify)
+    
+    SOLVE_CACHE[eq_set] = sols
+    SOLVE_CACHE[_to_frozenset(remaining_eq+solved_eq)] = sols
+    
+    return sols
+      
 
 def _sol_indep_of_vars(expr, solve_vars, nonzero=[]):
     """
@@ -778,9 +896,13 @@ def _sol_indep_of_vars(expr, solve_vars, nonzero=[]):
     # check compatibility with each other
     sols = []
     for eq in eqs:
+        # si = _cached_solve([eq], solve_vars)
         si = sym.solve(eq, solve_vars, dict=True, simplify=True)
         if si:
             sols.append(si)
+        # At least one of them is unsolvable
+        else:
+            return []
     # Only keep solutions that have nonzero denominator, plus
     # any other nonzero items as inputs
     compat_sols = _fully_compatible_set(sols, solve_vars, nonzero=[])
@@ -812,139 +934,6 @@ def _sol_indep_of_vars(expr, solve_vars, nonzero=[]):
     return final_sols
 
 
-def _are_substitutions_compatible(subs_list: list[dict],
-                                  solve_vars: list[sym.Expr] = []):
-    """
-    Check whether a set of substitutions are mutually compatible.
-    Returns True, reduced_subs if compatible, or False, [] if not.
-    
-    Args:
-        subs (dict): variable -> value substitutions
-    
-    Returns:
-        (bool, dict | None)
-    """
-    ## 0. Identify variables that are constant, or clearly conflict as constants
-    const_subs = {}
-    const_eq = []
-    for subs in subs_list:
-        for var, val in subs.items():
-            # Simple var only
-            if not isinstance(var, sym.Symbol):
-                continue
-            val = sym.sympify(val)
-            if var.is_number and val.is_number:
-                if var != val:
-                    return False, []
-            if val.is_number:
-                if var not in const_subs:
-                    const_subs[var] = val
-                    const_eq.append(sym.Eq(var, val))
-                elif val != const_subs[var]:
-                    return False, []
-
-    var_subs = {}
-    var_eq = []
-    for subs in subs_list:
-        for var, val in subs.items():
-            val = sym.sympify(val)
-            var = sym.sympify(var)
-            # var has a constant value, make sure it's equivalent
-            if var in const_subs:
-                if not val.is_number:
-                    var = sym.simplify(var.subs(var, const_subs[var]))
-                    val = sym.simplify(val.subs(const_subs))
-                    if val.is_number:
-                        if var != val:
-                            return False, []
-                    # Val isn't constant, but var is due to the substitution
-                    elif val in var_subs:
-                        var_subs[val].append(var)
-                    else:
-                        var_subs[val] = [var]
-                continue
-            # Substitute in numerical values
-            var = sym.simplify(var.subs(const_subs))
-            val = sym.simplify(val.subs(const_subs))
-            # var and val constant post substitution
-            # check if equal
-            if (var.is_number) and (val.is_number):
-                if var != val:
-                    return False, []
-                else:
-                    continue
-            # val constant post substitution
-            # add to constant subs
-            elif val.is_number and isinstance(val, sym.Symbol):
-                if (var not in const_subs) and (val.is_finite):
-                    const_subs[var] = val
-                elif (var in const_subs) and (val != const_subs[var]):
-                    return False, []
-                elif not val.is_finite:
-                    return False, []
-            elif var not in var_subs:
-                var_subs[var] = [val]
-            elif var in var_subs:
-                var_subs[var].append(val)
-
-    # Only constant substitutions
-    if len(var_subs) == 0:
-        return True, [const_subs]
-    
-    # Make equations for the var_eq
-    var_present = set()
-    for var, vals in var_subs.items():
-        var_eq.append(sym.Eq(var, vals[0]))
-        var_present.update(var_eq[-1].free_symbols)
-        if len(vals) > 1:
-            # Each pairwise combination as well
-            for v1, v2 in itertools.combinations(vals, 2):
-                var_eq.append(sym.Eq(v1, v2))
-                var_present.update(var_eq[-1].free_symbols)
-
-    # Resolve variable substitutions
-    # TODO: Something global to keep track of equations you've solved before
-    # Or to build up one by one
-    # sols = sym.solve(var_eq+const_eq, solve_vars, dict=True, simplify=True)
-    # all_eq = var_eq + const_eq
-    # prev_sols = sym.solve(all_eq[0], var_present, simplify=True, dict=True)
-    # for i in range(1, len(all_eq)):
-    #     prev_sols = sym.solve( + [all_eq[i]])
-    # sols = sym.solve(all_eq[0], var_present, simplify=True, dict=True)
-    # sols = _are_substitutions_compatible(all_eq)
-
-    sols = _fully_compatible_set([({eq.lhs: eq.rhs},) for eq in var_eq+const_eq], solve_vars)
-    if len(sols) == 0:
-        return False, []
-    else:
-        final_subs = []
-        for sol in sols:
-            final_subs.append(sol | const_subs)
-        return True, final_subs
-    
-   
-def _expr_valid(valid_expr: list[sym.Expr], subs):
-    """
-    Determines whether the given list of substitutions
-    are all "compatible," meaning they can be
-    simultaneously fulfilled.
-
-    Optionally include a sympy expression or matrix that must not
-    have undefined values with the specified substitutions.
-
-    Args:
-        subs_list (list[dict]): list of substitutions mapping
-                                sympy symbol to its value.
-
-    Returns:
-        (bool, list[dict]): first entry is whether the substitutions are compatible
-                            second entry is a refined set of substitutions that
-                            achieve them all simultaneously
-    """
-
-    is_finite = [x.subs(subs).simplify().is_finite for x in valid_expr]
-    return all([x for x in is_finite if not x is None])
-
 def _unique_products(expr: sym.Expr, exclude: list[sym.Symbol] = []):
     """
     Return a list of unique products of free symbols
@@ -970,18 +959,9 @@ def _unique_products(expr: sym.Expr, exclude: list[sym.Symbol] = []):
             factors.append(term)
         elif term.is_number:
             factors.append(term)
-
-        # Sort to put in cananical order
-        # strs = [str(x) for x in factors]
-        # order = np.argsort(strs)
-        # old_factors = factors
-        # factors = []
-        # for i in order:
-        #     factors.append(old_factors[i])
-        # factors = tuple(factors)
         factors = tuple(sorted(factors, key=lambda a: str(a))) + (1,)
         prod = functools.reduce(lambda a,b: a*b, factors, sym.sympify(1))
-        coeff = sym.simplify(term/prod)
+        coeff = term/prod
         if factors in products:
             products[factors].append(coeff)
         else:
@@ -1271,193 +1251,140 @@ def decoupling_transformation_3block(X:sym.Matrix, block1: Sequence[int],
     return sym.simplify(Z2)
 
 
-def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
+# def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
 
-    if cMat is None:
-        cMat = gen_cap_mat(circuit, edges)
+#     if cMat is None:
+#         cMat = gen_cap_mat(circuit, edges)
     
-    if lMat is None:
-        lMat = gen_ind_mat(circuit, edges)
+#     if lMat is None:
+#         lMat = gen_ind_mat(circuit, edges)
 
-    ## Compact -- J,C shunted islands
-    JC_islands = _islands_to_vectors(circuit, edges, ["J", "C"])
-    LC_islands = _islands_to_vectors(circuit, edges, ["L", "C"])
-    sigma_vec = _islands_to_vectors(circuit, edges, [])
-    C_islands = _islands_to_vectors(circuit, edges, ["C"])
-    L_islands = _islands_to_vectors(circuit, edges, ["L"])
-    wJ = gen_w(circuit, edges, "J")
-    n_nd = nd_mat.shape[1]
-    n_comp = len(_linearly_indep_cols(sym.Matrix.hstack(*JC_islands, nd_mat))) - n_nd
-    n_ext = len(_linearly_indep_cols(wJ)) - n_comp
-    Z_final = []
+#     ## Compact -- J,C shunted islands
+#     JC_islands = _islands_to_vectors(circuit, edges, ["J", "C"])
+#     LC_islands = _islands_to_vectors(circuit, edges, ["L", "C"])
+#     sigma_vec = _islands_to_vectors(circuit, edges, [])
+#     C_islands = _islands_to_vectors(circuit, edges, ["C"])
+#     L_islands = _islands_to_vectors(circuit, edges, ["L"])
+#     wJ = gen_w(circuit, edges, "J")
+#     n_nd = nd_mat.shape[1]
+#     n_comp = len(_linearly_indep_cols(sym.Matrix.hstack(*JC_islands, nd_mat))) - n_nd
+#     n_ext = len(_linearly_indep_cols(wJ)) - n_comp
+#     Z_final = []
 
-    # No compact variables
-    # Consider all possible wJ psuedoinverses
-    if n_comp == 0:
-        for col_set in _linearly_indep_col_sets(wJ):
-            Z = wJ[:, col_set].transpose().pinv()
-            # Decouple columns
-            for j in range(Z.shape[1]):
-                Z[:, j] = decouple_column(Z[:, j], nd_mat, cMat)
-                Z[:, j] = decouple_column(Z[:, j], nd_mat, lMat)
-            if len(_find_equiv_mats(Z, Z_final,
-                                    shifts=sigma_vec)) == 0:
-                Z_final.append(Z)
-        return Z_final[:1]
+#     # No compact variables
+#     # Consider all possible wJ psuedoinverses
+#     if n_comp == 0:
+#         for col_set in _linearly_indep_col_sets(wJ):
+#             Z = wJ[:, col_set].transpose().pinv()
+#             # Decouple columns
+#             for j in range(Z.shape[1]):
+#                 Z[:, j] = decouple_column(Z[:, j], nd_mat, cMat)
+#                 Z[:, j] = decouple_column(Z[:, j], nd_mat, lMat)
+#             if len(_find_equiv_mats(Z, Z_final,
+#                                     shifts=sigma_vec)) == 0:
+#                 Z_final.append(Z)
+#         return Z_final[:1]
 
-    # Yes compact variables
-    # First identify a possible choice of correctly
-    # scaled compact variables
-    # Choose to work with the set of columns that
-    # yields the most uncoupled junctions
-    most_uncoupled = -1
-    all_PI_cols = []
-    best_wJpi = None
-    best_in_wJpi = None
-    best_coupled = None
-    best_only_ext = None
-    for col_set in _linearly_indep_col_sets(wJ):
-        wJpi = wJ[:, col_set].transpose().pinv()
+#     # Yes compact variables
+#     # First identify a possible choice of correctly
+#     # scaled compact variables
+#     # Choose to work with the set of columns that
+#     # yields the most uncoupled junctions
+#     most_uncoupled = -1
+#     all_PI_cols = []
+#     best_wJpi = None
+#     best_in_wJpi = None
+#     best_coupled = None
+#     best_only_ext = None
+#     for col_set in _linearly_indep_col_sets(wJ):
+#         wJpi = wJ[:, col_set].transpose().pinv()
 
-        # Identify all unique PI columns
-        for j in range(wJpi.shape[1]):
-            if len(_find_equiv_cols(wJpi[:, j], all_PI_cols,
-                                    shifts=sigma_vec+L_islands+C_islands)) == 0:
-                all_PI_cols.append(wJpi[:, j])
+#         # Identify all unique PI columns
+#         for j in range(wJpi.shape[1]):
+#             if len(_find_equiv_cols(wJpi[:, j], all_PI_cols,
+#                                     shifts=sigma_vec+L_islands+C_islands)) == 0:
+#                 all_PI_cols.append(wJpi[:, j])
 
 
-        comp_vars_base, _, in_wJpi, _ = _vec_space_overlap(JC_islands, wJpi,
-                                                    support=LC_islands,
-                                                    return_decomp=True)
-        in_wJpi = sym.Matrix.hstack(*in_wJpi).transpose()
-        comp_vars_base = [decouple_column(v, nd_mat, cMat) for v in comp_vars_base]
+#         comp_vars_base, _, in_wJpi, _ = _vec_space_overlap(JC_islands, wJpi,
+#                                                     support=LC_islands,
+#                                                     return_decomp=True)
+#         in_wJpi = sym.Matrix.hstack(*in_wJpi).transpose()
+#         comp_vars_base = [decouple_column(v, nd_mat, cMat) for v in comp_vars_base]
 
-        # Decouple columns of wJpi from nd vars for building extended variables
-        for j in range(wJpi.shape[1]):
-            wJpi[:, j] = decouple_column(wJpi[:, j], nd_mat, cMat)
-            wJpi[:, j] = decouple_column(wJpi[:, j], nd_mat, lMat)
+#         # Decouple columns of wJpi from nd vars for building extended variables
+#         for j in range(wJpi.shape[1]):
+#             wJpi[:, j] = decouple_column(wJpi[:, j], nd_mat, cMat)
+#             wJpi[:, j] = decouple_column(wJpi[:, j], nd_mat, lMat)
 
-        # junctions that don't depend on compact variables
-        only_ext = list(range(wJpi.shape[1]))
+#         # junctions that don't depend on compact variables
+#         only_ext = list(range(wJpi.shape[1]))
 
-        # junctions that do depend on compact variables
-        coupled = []
-        for i in range(in_wJpi.shape[0]):
-            vi = in_wJpi[i, :]
-            by_vi = []
-            for j in range(len(vi)):
-                # Record variables that are coupled
-                # by the compact variables
-                if vi[j] != 0:
-                    by_vi.append(j)
-                    if j in only_ext:
-                        only_ext.remove(j)
-                        coupled.append(j)
+#         # junctions that do depend on compact variables
+#         coupled = []
+#         for i in range(in_wJpi.shape[0]):
+#             vi = in_wJpi[i, :]
+#             by_vi = []
+#             for j in range(len(vi)):
+#                 # Record variables that are coupled
+#                 # by the compact variables
+#                 if vi[j] != 0:
+#                     by_vi.append(j)
+#                     if j in only_ext:
+#                         only_ext.remove(j)
+#                         coupled.append(j)
         
-        if len(only_ext) > most_uncoupled:
-            best_wJpi = wJpi
-            best_in_wJpi = in_wJpi
-            best_coupled = coupled
-            best_only_ext = only_ext
+#         if len(only_ext) > most_uncoupled:
+#             best_wJpi = wJpi
+#             best_in_wJpi = in_wJpi
+#             best_coupled = coupled
+#             best_only_ext = only_ext
             
-    # Now enumerate the options
-    ext_vec_uncoupled = []
-    # Uncoupled junctions -> columns of wJpi
-    for j in best_only_ext:
-        ext_vec_uncoupled.append(best_wJpi[:, j])
-    # Coupled variables -> +/- 1 combinations of columns of best_wJpi
-    # Different choices of compact variables represent transformations
-    # on only the compact subspace, so it won't change which ext
-    # constraints are linearly independent
-    ext_vec_coupled = []
-    if len(best_coupled) > 1:
-        # We need a number of variables equal
-        # to remaining linearly independent
-        # degrees of freedom for the specified best_wJpi columns
-        n_elem = len(best_coupled) - len(_linearly_indep_cols(best_in_wJpi[:, best_coupled]))
-        if n_elem > 0:
-            # [best_wJpi[:,j] for j in best_coupled]
-            # all_PI_cols
-            ext_vec_coupled += [_unique_col_combos([best_wJpi[:,j] for j in best_coupled],
-                                                n_elem, signs=[1, -1],
-                                                li_vecs=comp_vars_base,
-                                                valid=lambda Ze: well_spaced(wJ.transpose()*Ze),
-                                                shifts=sigma_vec+L_islands+C_islands)]
+#     # Now enumerate the options
+#     ext_vec_uncoupled = []
+#     # Uncoupled junctions -> columns of wJpi
+#     for j in best_only_ext:
+#         ext_vec_uncoupled.append(best_wJpi[:, j])
+#     # Coupled variables -> +/- 1 combinations of columns of best_wJpi
+#     # Different choices of compact variables represent transformations
+#     # on only the compact subspace, so it won't change which ext
+#     # constraints are linearly independent
+#     ext_vec_coupled = []
+#     if len(best_coupled) > 1:
+#         # We need a number of variables equal
+#         # to remaining linearly independent
+#         # degrees of freedom for the specified best_wJpi columns
+#         n_elem = len(best_coupled) - len(_linearly_indep_cols(best_in_wJpi[:, best_coupled]))
+#         if n_elem > 0:
+#             # Find a linearly independent combination of the PI_cols
+#             ext_vec_coupled += _unique_col_combos([best_wJpi[:,j] for j in best_coupled],
+#                                                 n_elem, signs=[1, -1],
+#                                                 li_vecs=comp_vars_base,
+#                                                 valid=lambda Ze: well_spaced(wJ.transpose()*Ze),
+#                                                 shifts=sigma_vec+L_islands+C_islands,
+#                                                 only_one=True)
 
+#     # Now consider ''Center-ing'' the compact variables
+#     # on different junctions to generate unique choices of
+#     # compact variable to combine with the extended
+#     wJtrans = sym.simplify(wJ.transpose()*sym.Matrix.hstack(*comp_vars_base))
+#     for Zc in compact_alignment_transformation(wJtrans, n_comp):
+#         comp_vars = sym.Matrix.hstack(*comp_vars_base)*Zc
+#         # Fully uncoupled case returned earlier
+#         if len(ext_vec_coupled) == 0:
+#             Z = sym.Matrix.hstack(comp_vars, *ext_vec_uncoupled)
+#             if len(_find_equiv_mats(Z, Z_final, shifts=sigma_vec)) == 0:
+#                     Z_final.append(Z)
+#         else:
+#             # for ext_coupled in list(itertools.product(*ext_vec_coupled)):
+#             # TOD0: Keep same or revert
+#             for ext_coupled in list(itertools.product(*ext_vec_coupled))[:1]:
+#                 Z = sym.Matrix.hstack(comp_vars, *ext_coupled, *ext_vec_uncoupled)
+#                 if len(_find_equiv_mats(Z, Z_final, shifts=sigma_vec)) == 0:
+#                     Z_final.append(Z)
 
-    # Now consider ''Center-ing'' the compact variables
-    # on different junctions to generate unique choices of
-    # compact variable to combine with the extended
-    wJtrans = sym.simplify(wJ.transpose()*sym.Matrix.hstack(*comp_vars_base))
-    for Zc in compact_alignment_transformation(wJtrans, n_comp):
-        comp_vars = sym.Matrix.hstack(*comp_vars_base)*Zc
-        # Fully uncoupled case returned earlier
-        if len(ext_vec_coupled) == 0:
-            Z = sym.Matrix.hstack(comp_vars, *ext_vec_uncoupled)
-            if len(_find_equiv_mats(Z, Z_final, shifts=sigma_vec)) == 0:
-                    Z_final.append(Z)
-        else:
-            # for ext_coupled in list(itertools.product(*ext_vec_coupled)):
-            # TOD0: Keep same or revert
-            for ext_coupled in list(itertools.product(*ext_vec_coupled))[:1]:
-                Z = sym.Matrix.hstack(comp_vars, *ext_coupled, *ext_vec_uncoupled)
-                if len(_find_equiv_mats(Z, Z_final, shifts=sigma_vec)) == 0:
-                    Z_final.append(Z)
+#     return Z_final
 
-    return Z_final
-
-
-def unique_harmonic(circuit, edges, nd_mat, cMat=None, lMat=None):
-
-    if cMat is None:
-        cMat = gen_cap_mat(circuit, edges)
-    if lMat is None:
-        lMat = gen_ind_mat(circuit, edges)
-
-    # Linearly independent incidence matrices
-    wC = gen_w(circuit, edges, "C")
-    wC = wC[:, _linearly_indep_cols(wC)]
-    wCpi = wC.transpose().pinv()
-    wL = gen_w(circuit, edges, "L")
-    wL = wL[:, _linearly_indep_cols(wL)]
-    wLpi = wL.transpose().pinv()
-
-
-    # Shifts
-    shifts=[nd_mat[:,j] for j in range(nd_mat.shape[1])]
-
-    ## Harmonic -- L,C shunted islands
-    # Are there any LC islands that have both?
-    LC_islands = _islands_to_vectors(circuit, edges, ["L", "C"])
-    # number of harmonic variables is the number of LC islands
-    # minus the number of free/sigma variables that can be made
-    # from those islands
-    n_nd = nd_mat.shape[1]
-    n_harm = len(_linearly_indep_cols(sym.Matrix.hstack(nd_mat, *LC_islands))) - n_nd
-    if n_harm > 0:
-        # Identify PI columns that correspond
-        # to inductors that are involved in the
-        # harmonic mode - i.e. connected to L and C
-        # but not J
-        harm_vec = []
-        for v in _vec_space_overlap(LC_islands, wLpi, support=wL.transpose().nullspace()):
-            if not (wC.transpose()*v).is_zero_matrix:
-                v = decouple_column(v, nd_mat, cMat)
-                v = decouple_column(v, nd_mat, lMat)
-                if len(_find_equiv_cols(v, harm_vec, shifts=shifts))==0:
-                    harm_vec.append(v)
-    else:
-        return []
-    
-    # TODO: Pick one
-    # Now only need one
-    M = sym.Matrix.hstack(*harm_vec)
-    cols = _linearly_indep_cols(M)
-    return [M[:, cols]]
-
-    # return _unique_col_combos(harm_vec, n_harm, signs=[1, -1], shifts=shifts,
-    #                             li_vecs=[nd_mat[:, j] for j in range(n_nd)])
-    
 
 def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
            dyn_modes=["compact", "extended", "harmonic"],
@@ -1579,7 +1506,14 @@ def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
     return lowest_hash, lowest_Z
 
 
-def gen_cap_mat(circuit, edges):
+def incidence_to_square(w, vals):
+
+    mat = sym.Matrix(np.zeros((w.shape[0], w.shape[0])))
+    for j in range(w.shape[1]):
+        mat += vals[j]*w[:, j]*w[:, j].transpose()
+    return mat
+
+def gen_cap_mat(circuit, edges, ground_node: list[int] = []):
     """
     Generates a capacitance matrix using Sympy for the given circuit.
     Energy C = Q_vec @ inv_cap @ Q_vec
@@ -1595,42 +1529,15 @@ def gen_cap_mat(circuit, edges):
         sym.Matrix of the capacitance matrix
     """
 
-    # Generate a blank matrix
-    edges = utils.zero_start_edges(edges)
-    n_nodes = utils.get_num_nodes(edges)
-    cap_mat = sym.Matrix(np.zeros((n_nodes, n_nodes)))
+    # Generate incidence matrices for capacitors and junctions
+    wC, c_vals = gen_w(circuit, edges, "C", return_params=True, ground_node=ground_node)
+    wJ, cj_vals = gen_w(circuit, edges, "J", return_params=True, ground_node=ground_node,
+                       param_func=lambda e: "C_{J" + e.replace("J", "") + "}")
 
-    C = {}
-    CJ = {}
-    for elems in circuit:
-        for elem in elems:
-            if elem in C or elem in CJ:
-                continue
-            if "C" in elem:
-                C[elem] = sym.Symbol(elem, positive=True, real=True)
-            elif "J" in elem:
-                suffix = elem.replace("J", "")
-                CJ[elem] = sym.Symbol("C_{J" + suffix + "}", positive=True, real=True)
-
-    # Fill in capacitance values
-    for edge, elems in zip(edges, circuit):
-        i, j = edge
-        val = 0
-        for elem in elems:
-            if "C" in elem:
-                val += C[elem]
-            elif "J" in elem:
-                val += CJ[elem]
-
-        cap_mat[i, i] += val
-        cap_mat[j, j] += val
-        cap_mat[i, j] += -val
-        cap_mat[j, i] += -val
-
-    return cap_mat
+    return incidence_to_square(sym.Matrix.hstack(wC, wJ), c_vals + cj_vals)
 
 
-def gen_ind_mat(circuit, edges):
+def gen_ind_mat(circuit, edges, ground_node: list[int] = []):
     """
     Generates an inductor matrix using Sympy for the given circuit. 
     Defined so Energy L = Phi_vec @ ind_mat @ Phi_vec
@@ -1645,35 +1552,14 @@ def gen_ind_mat(circuit, edges):
         sym.Matrix of the capacitance matrix
     """
 
-    # Generate a blank matrix
-    edges = utils.zero_start_edges(edges)
-    n_nodes = utils.get_num_nodes(edges)
-    ind_mat = sym.Matrix(np.zeros((n_nodes, n_nodes)))
+    # Generate incidence matrices for inductors and get inverse of inductance values
+    wL, l_vals = gen_w(circuit, edges, "L", return_params=True, ground_node=ground_node)
+    l_vals = [1/l for l in l_vals]
 
-    L = {}
-    for elems in circuit:
-        for elem in elems:
-            if elem in L:
-                continue
-            if "L" in elem:
-                L[elem] = sym.Symbol(elem, positive=True, real=True)
+    return incidence_to_square(wL, l_vals)
 
-    # Fill in inductance values
-    for edge, elems in zip(edges, circuit):
-        i, j = edge
-        val = 0
-        for elem in elems:
-            if "L" in elem:
-                val += 1/L[elem]
-        ind_mat[i, i] += val
-        ind_mat[j, j] += val
-        ind_mat[i, j] += -val
-        ind_mat[j, i] += -val
-
-    return ind_mat
-
-
-def gen_w(circuit: list, edges: list, w_elem: str = "J", return_params=False):
+def gen_w(circuit: list, edges: list, w_elem: str = "J", return_params=False,
+          ground_node: list[int]=[], param_func = lambda e: e):
     """
     Generate the junction (or inductor) incidence matrix.
     (n_nodes, n_jj) matrix where w_ij = 1,-1 for head/tail
@@ -1700,7 +1586,7 @@ def gen_w(circuit: list, edges: list, w_elem: str = "J", return_params=False):
 
     # Fill in values
     edges = utils.zero_start_edges(edges)
-    n_nodes = utils.get_num_nodes(edges)
+    n_nodes = utils.get_num_nodes(edges) - len(ground_node)
     n_elem = utils.count_elems_mapped(circuit)[w_elem]
     if n_elem == 0:
         return sym.Matrix([[]])
@@ -1710,9 +1596,11 @@ def gen_w(circuit: list, edges: list, w_elem: str = "J", return_params=False):
     for edge, elems in zip(edges, circuit):
         for e in elems:
             if w_elem in e:
-                params.append(e)
+                params.append(param_func(e))
                 w[min(edge), w_count] = 1
                 w[max(edge), w_count] = -1
+                for n in ground_node:
+                    w[n, w_count] = 0
                 w_count += 1
     if return_params:
         param_symbols = sym.symbols(",".join(params), real=True)
@@ -1722,17 +1610,39 @@ def gen_w(circuit: list, edges: list, w_elem: str = "J", return_params=False):
     else:
         return w
 
+def var_trans_basis(circuit, edges, ground_node=[]):
 
-def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
+    # Incidence matrices
+    wC, c_vals = gen_w(circuit, edges, "C", return_params=True, ground_node=ground_node)
+    _, cj_vals = gen_w(circuit, edges, "J", return_params=True, ground_node=ground_node,
+                       param_func=lambda e: "C_{J" + e.replace("J", "") + "}")
+    wL, l_vals = gen_w(circuit, edges, "L", return_params=True, ground_node=ground_node)
+    wJ, j_vals = gen_w(circuit, edges, "J", return_params=True, ground_node=ground_node)
+
+    return var_trans_basis_incidence_mat(sym.Matrix.hstack(wC, wJ), wL, wJ, c_vals+j_vals, l_vals, j_vals)
+
+
+
+
+
+def var_trans_basis_incidence_mat(wC: sym.Matrix, wL: sym.Matrix, wJ: sym.Matrix,
+                                  c_vals: list[sym.Symbol] = None, l_vals: list[sym.Symbol] = None,
+                                  j_vals: list[sym.Symbol] = None):
     """
-    Generates all variable transformations that
-    separate periodic, extended, harmonic,
+    Generates a basis for variable transformations that
+    separate compact, extended, harmonic,
     free (no potential), frozen (no kinetic), and
     sigma (neither potential nor kinetic) variables.
 
-    The transformation must also maintain the spacing
-    of the position variable for periodic junction terms,
-    extended junction terms, and harmonic inductor terms.
+    Produces variables a basis where dynamical and
+    non-dynamical variables are decoupled in both
+    charge and flux.
+
+    The transformation must also maintain the periodicity of 
+    the junction terms for compact variables.
+
+    NOTE: Here we assume wC to include any junction capacitances
+    and wJ to only include Josephson junctions.
 
     Orders variables in [compact, extended, harmonic,
                             free, frozen, sigma] order
@@ -1742,19 +1652,18 @@ def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
         edges (_type_): _description_
     """
     # match indices with array indices
-    edges = utils.zero_start_edges(edges)
-    n_nodes = utils.get_num_nodes(edges)
+    if wC.shape[1] == 0:
+        raise ValueError("No Capacitors in Circuit -- Cannot Define Variables")
+    n_nodes = wC.shape[0]
 
-    # Incidence matrices
-    wC = gen_w(circuit, edges, "C")
-    wL = gen_w(circuit, edges, "L")
-    wJ = gen_w(circuit, edges, "J")
+    # Define Nullspaces of incidence matrices
+    N_wC = wC.transpose().nullspace()
+    N_wL = wL.transpose().nullspace()
+    N_wJ = wJ.transpose().nullspace()
 
-    # Capacitance and susceptance matrices
-    if cMat is None:
-        cMat = gen_cap_mat(circuit, utils.zero_start_edges(edges))
-    if lMat is None:
-        lMat = gen_ind_mat(circuit, utils.zero_start_edges(edges))
+    # Capacitance and susceptance matrices for decoupling
+    cMat = incidence_to_square(wC, c_vals) if wC.shape[1] > 0 else sym.zeros(n_nodes, n_nodes)
+    lMat = incidence_to_square(wL, l_vals) if wL.shape[1] > 0 else sym.zeros(n_nodes, n_nodes)
 
     # labels of mode types
     mode_types = []
@@ -1762,87 +1671,51 @@ def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
     dy_modes = []
     nd_modes = []
     
-    ## sigma -- each set of connected components (should only be 1)
-    sig_vec = _islands_to_vectors(circuit, edges, [])
-    if len(sig_vec) > 1:
-        print("--- WARNING: Multiple disconnected circuit segments ---")
-    ## Free -- capacitively shunted islands
-    C_islands = _islands_to_vectors(circuit, edges, ["C"])
-    free_vec = C_islands
-    ## Frozen -- inductively shunted islands
-    L_islands = _islands_to_vectors(circuit, edges, ["L"])
-    froz_vec = L_islands
+    # Nondynamical variable vectors
+    sig_vec = _vec_space_overlap(N_wL, _vec_space_overlap(N_wJ, N_wC))
+    n_sig = len(sig_vec)
+    free_vec = _independent_from(_vec_space_overlap(N_wJ, N_wL), sig_vec)
+    n_free = len(free_vec)
+    froz_vec = _independent_from(_vec_space_overlap(N_wJ, N_wC), sig_vec)
+    n_froz = len(froz_vec)
 
-    # Single nondynamical variable matrix -- doesn't matter
-    # which you pick, but keep track
-    nd_mat = sym.Matrix.hstack(*sig_vec, *froz_vec, *free_vec)
-    nd_cols = _linearly_indep_cols(nd_mat)
-    nd_mat = nd_mat[:, nd_cols[::-1]]
-    divide = (len(sig_vec), len(sig_vec+froz_vec), len(sig_vec+free_vec+froz_vec))
-    nd_types = {"free": [], "frozen": [], "sigma": []}
-    count = n_nodes-1
-    for i in range(len(sig_vec+free_vec+froz_vec)):
-        if i in nd_cols:
-            if i < divide[0]:
-                nd_types["sigma"] += [count]
-            elif divide[0] <= i < divide[1]:
-                nd_types["frozen"] += [count]
-            else:
-                nd_types["free"] += [count]
-            count += -1
-    
-    # Number of each variable dynamical type
-    n_nd = nd_mat.shape[1]
-    LC_islands = _islands_to_vectors(circuit, edges, ["L", "C"])
-    JC_islands = _islands_to_vectors(circuit, edges, ["J", "C"])
-    n_comp = len(_linearly_indep_cols(sym.Matrix.hstack(*JC_islands, nd_mat))) - n_nd
-    n_harm = len(_linearly_indep_cols(sym.Matrix.hstack(*LC_islands, nd_mat))) - n_nd
-    n_ext = len(_linearly_indep_cols(wJ)) - n_comp
-    
-    ## Compact -- J,C shunted islands
-    u_harm = unique_harmonic(circuit, edges, nd_mat, cMat, lMat)
-    u_comp_ext = unique_compact_extended(circuit, edges, nd_mat, cMat, lMat)
+    nd_vec = sig_vec + free_vec + froz_vec
+    nd_mat = sym.Matrix.hstack(*nd_vec) if len(nd_vec) > 0 else sym.Matrix([])
+    n_nd = len(nd_vec)
 
-    # verify number of harmonic
-    if n_harm == 0:
-        assert len(u_harm) == 0
-    else:
-        try:
-            assert n_harm == u_harm[0].shape[1]
-        except:
-            breakpoint()
+    # Dynamical variable vectors
+    harm_vec = _independent_from(N_wJ, nd_vec)
+    n_harm = len(harm_vec)
+    comp_vec = _independent_from(N_wL, nd_vec)
+    n_comp = len(comp_vec)
+    ext_vec = _independent_from(sym.eye(n_nodes), nd_vec + harm_vec + comp_vec)
+    n_ext = len(ext_vec)
+
 
     # Categorize variable types
     var_types = {}
-    if n_comp > 0:
-        var_types["compact"] = list(range(n_comp))
-    if n_ext > 0:
-        var_types["extended"] = list(range(n_comp, n_comp+n_ext))
-    if n_harm > 0:
-        var_types["harmonic"] = list(range(n_comp+n_ext, n_comp+n_ext+n_harm))
-    for nd_mode in nd_types:
-        if len(nd_types[nd_mode]) > 0:
-            var_types[nd_mode] = nd_types[nd_mode]
-    assert n_nd + n_comp + n_harm + n_ext == n_nodes
+    var_types["compact"] = list(range(n_comp))
+    var_types["extended"] = list(range(n_comp, n_comp+n_ext))
+    var_types["harmonic"] = list(range(n_comp+n_ext, n_comp+n_ext+n_harm))
+    var_types["free"] = list(range(n_comp+n_ext+n_harm, n_comp+n_ext+n_harm+n_free))
+    var_types["frozen"] = list(range(n_comp+n_ext+n_harm+n_free, n_comp+n_ext+n_harm+n_free+n_froz))
+    var_types["sigma"] = list(range(n_comp+n_ext+n_harm+n_free+n_froz, n_nodes))
+    
+    # Check number of modes adds up
+    if n_nd + n_comp + n_harm + n_ext != n_nodes:
+        raise ValueError("Did not identify correct number of modes")
+    
+    ## Decouple from nondynamical modes
+    # Compact
+    comp_vec = [decouple_column(v, nd_mat, cMat) for v in comp_vec]
+    # Extended
+    ext_vec = [decouple_column(v, nd_mat, cMat) for v in ext_vec]
+    ext_vec = [decouple_column(v, nd_mat, lMat) for v in ext_vec]
+    # Harmonic
+    harm_vec = [decouple_column(v, nd_mat, cMat) for v in harm_vec]
+    harm_vec = [decouple_column(v, nd_mat, lMat) for v in harm_vec]
 
-
-    # Enumerate combinations for Z
-    all_Z = []
-    present_modes = [x for x in (u_comp_ext, u_harm) if len(x) > 0]
-    eye = sym.eye(n_nodes)
-    for dyn_cols in itertools.product(*present_modes):
-        Z = sym.Matrix.hstack(*dyn_cols, nd_mat)
-        # Bad combination of extended and harmonic
-        if Z.det() == 0:
-            continue
-        cTrans = Z.transpose()*cMat*Z
-        lTrans = Z.transpose()*lMat*Z
-        if (decoupling_transformation(cTrans, n_comp+n_ext+n_harm) != eye or
-            decoupling_transformation(lTrans, n_comp+n_ext+n_harm) != eye):
-            raise ValueError("Decoupling Transformation Failed")
-        all_Z.append(Z)
-        
-    return all_Z, var_types
+    return sym.Matrix.hstack(*comp_vec, *ext_vec, *harm_vec, *nd_vec), var_types
 
 
 def nonlinear_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
@@ -1952,7 +1825,14 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
     if not cMat is None:
         cTrans2 = Z.transpose()*cTrans*Z
         cTrans2_trunc = cTrans2[:n_comp+n_ext+n_harm,:n_comp+n_ext+n_harm]
-        cTrans2_det = cTrans2_trunc.det()
+        # cTrans2_det = cTrans2_trunc.det()
+        ## MAKE FAST SIMPLIFY HERE WITH TIMEOUT
+        # cTrans2_det = sym.simplify(_fast_det(cTrans2_trunc))
+        # Try to simplify but don't if it takes too long
+        cTrans2_det = _fast_det(cTrans2_trunc)
+        cTrans2_det_simp = utils.run_with_timeout(sym.simplify, (cTrans2_det,), timeout=5)
+        if not cTrans2_det_simp is None:
+            cTrans2_det = cTrans2_det_simp
         if cTrans2_trunc.shape[0] > 1:
             cTransInv2 = sym.inv_quick(cTrans2_trunc)
         else:
@@ -1964,6 +1844,7 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
         cTrans = None
 
     lTrans2 = (Z.transpose()*lTrans*Z)
+
 
     # Determine which entries are possible to decouple
     # without depending on system parameters
@@ -2001,7 +1882,8 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
     #         del coupling_terms[k]
     #     else:
     #         coupling_terms[k] = new_sols
-    
+    # 
+        
     ## Maximize the number of coupling terms that go to zero
     n_couple = len(coupling_terms)
     already_tested = {}
@@ -2033,6 +1915,7 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
             # Check if a subset of the keys are incompatible
             if any(all(k in keys for k in incompat_keys) for incompat_keys in incompatible):
                 continue
+
             # Manually make hash for speed
             keys_L = [x for x in keys if "L" in x]
             keys_C = [x for x in keys if "C" in x]
@@ -2045,15 +1928,33 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
                 nz_str.append(_nonzero_entries_str(test))
                 n_nz += int(nz_str[-1][0])
             nz_str = str(n_nz) + "_" + "_".join(nz_str)
-            rules_sets = [coupling_terms[k] for k in keys]
+
+            # Fill in rule set with possible simplifications
+            # from previous iterations
+            keys_left = [k for k in keys]
+            rules_sets = []
+            # print("start", keys_left)
+            for keyset in sorted(compatible.keys(), key=len)[::-1]:
+                if all(k in keys_left for k in keyset):
+                    # print(keyset)
+                    rules_sets.append(compatible[keyset])
+                    for k in keyset:
+                        keys_left.remove(k)
+                    # print(keys_left)
+                if keys_left == []:
+                    break
+            for k in keys_left:
+                rules_sets.append(coupling_terms[k])
             
             # Identify a set of rules that are fully compatible
-            res = _fully_compatible_set(rules_sets, var_list, nonzero=dets, depth_first=False)
+            res = _fully_compatible_set(rules_sets, var_list, depth_first=False)
             if len(res) == 0:
                 incompatible.add(keys)
                 continue
             good_subs = []
-            for compat_sub in res:
+            for i, compat_sub in enumerate(res):
+                if any(sym.simplify(d.subs(compat_sub)) == 0 for d in dets):
+                    continue
                 Ztest = sym.simplify(Z.subs(compat_sub))
                 Z_free = list(Ztest.free_symbols)
                 if nz > best_nz:
@@ -2067,13 +1968,16 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
                     best_nz_str.append(nz_str)
                 good_subs.append(compat_sub)
                 # Save the solved compatibility for these keys
+            if len(good_subs) == 0:
+                incompatible.add(keys)
+                continue
             if keys in compatible_keys:
                 compatible[keys] += good_subs
             else:
                 compatible[keys] = good_subs
                 compatible_keys.append(keys)
 
-
+    # print(sorted(compatible_keys, key=len))
     ## Remove any transformations that are "subsets" of
     ## another, meaning it has a proper subset of the terms present
     nz_Z = [X.shape[0]*X.shape[1] - int(_nonzero_entries_str(X, full_mat=True)[0]) for X in best_Z]
@@ -2138,7 +2042,7 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
         return final_Z
 
 
-def choose_Z(circuit: list, edges: list,
+def choose_Z(circuit: list, edges: list, ground_node: list = [],
              return_instance: bool = True) -> tuple[sym.Matrix, dict[str, list[int]], str]:
     """
     Chooses a transformation phi_node = Z*phi_new that separates
@@ -2166,64 +2070,57 @@ def choose_Z(circuit: list, edges: list,
     # Reset solve cache
     global SOLVE_CACHE
     SOLVE_CACHE = {}
+
+    # Relabel nodes from 0
+    edges, node_map = utils.reset_node_labels(edges, return_map=True)
+    ground_node = [node_map[n] for n in ground_node]
      
-    t0 = time.time()
-
-    # Generate capacitance matrix, susceptance matrix, and incidence matrix
-    cMat = gen_cap_mat(circuit, utils.zero_start_edges(edges))
-    lMat = gen_ind_mat(circuit, utils.zero_start_edges(edges))
-    if utils.count_elems_mapped(circuit)["J"] > 0:
-        wJ, EJ = gen_w(circuit, edges, w_elem="J", return_params=True)
-        # Generate linear junction coupling matrix
-        wMat = sym.zeros(*cMat.shape)
-        for j in range(wJ.shape[1]):
-            wMat += EJ[j] * wJ[:, j] * wJ[:, j].T
-    else:
-        wJ = sym.Matrix([[]])
+    # Prep: Generate capacitance matrix, susceptance matrix, and incidence matrix
+    cMat = gen_cap_mat(circuit, edges, ground_node=ground_node)
+    lMat = gen_ind_mat(circuit, edges, ground_node=ground_node)
+    wJ, EJ = gen_w(circuit, edges, w_elem="J", return_params=True)
+    wMat = incidence_to_square(wJ, EJ) if wJ.shape[1] > 0 else sym.zeros(Z0.shape[0], Z0.shape[0])
     
-    t1 = time.time()
+    # Step 0: Separate into different variable types and decouple nondynamical
+    Z0, var_types = var_trans_basis(circuit, edges, ground_node=ground_node)
 
-    all_Z, var_types = gen_spaced_var_trans(circuit, edges, cMat, lMat)
+    # Step 1: Enumerate different choices of compact variable
+    wJT_trans = wJ.transpose()*Z0
+    Z1 = [Z0*Z for Z in compact_alignment_transformation(wJT_trans, len(var_types["compact"]))]
+
+    # Step 2: Minimize intermode coupling
     lowest_hash = ""
     lowest_Z = []
-
-    t12 = time.time()
-    for Z in all_Z:
-        if Z.det().simplify() == 0:
+    for Z in Z1:
+        if sym.simplify(Z.det()) == 0:
             raise ValueError("Invalid Transformation (Not Invertible)")
-        # 1: Secondary transformation to decouple nonlinear degrees of freedom
-        if utils.count_elems_mapped(circuit)["J"] > 0:
-            Z1 = secondary_decouple(Z, var_types, None, wMat,
+        # 2a: Decouple nonlinear degrees of freedom
+        if wJ.shape[1] > 0:
+            Z2_a = secondary_decouple(Z, var_types, None, wMat,
                                     return_instance=False, prefix="Z",
                                     ordering_matters=False)
         else:
-            Z1 = [None]
+            Z2_a = [None]
         t2 = time.time()
-        # 2: Secondary transformation to decouple linear degrees of freedom
-        for Z_in in Z1:
-            Z2 = secondary_decouple(Z, var_types, cMat, lMat,
+        # 2b: Decouple linear degrees of freedom
+        for Z_in in Z2_a:
+            Z2_b = secondary_decouple(Z, var_types, cMat, lMat,
                                     return_instance=False, prefix="Z", Z_in=Z_in,
                                     # ordering_matters=True, wJ=wJ)    
-                                    ordering_matters=True, wJ=sym.Matrix([]))            
-            Z_tot = Z*Z2
-            # if len(Z_tot_all) == 0:
-            #     Z_tot_all.append(Z_tot)
-            # for Z_tot in Z_tot_all:
-            var_list = [x for x in Z2.free_symbols if "Z" in str(x)]
+                                    ordering_matters=True)            
+            Z_tot = Z*Z2_b
+            var_list = [x for x in Z2_b.free_symbols if "Z" in str(x)]
             Z_hash = _find_Z_instance(Z_tot, var_list, random=True)
             val, Z_perm = H_hash(Z_hash, var_types, cMat, lMat, wJ)
-            if val < lowest_hash or lowest_hash == "":
-                # if _expr_valid(Z_perm, {}):
-                    lowest_Z = [Z_tot]
-                    lowest_hash = val
-            elif val == lowest_hash:
-                # if _expr_valid(Z_perm, {}):
-                    lowest_Z = [Z_tot]
+            if val <= lowest_hash or lowest_hash == "":
+                lowest_Z = [Z_tot]
+                lowest_hash = val
+            # elif val == lowest_hash:
+            #     lowest_Z = [Z_tot]
     
-        t3 = time.time()
-
-    # If there are multiple with the same lowest hash
+    # If there are multiple Z with the same lowest hash
     # then see if they separate with equal parameter values
+    # TODO: Could return the full list of lowest Z
     Z_final = lowest_Z[0]
     hash_final = lowest_hash
     for Z in lowest_Z[1:]:
@@ -2235,14 +2132,12 @@ def choose_Z(circuit: list, edges: list,
             hash_final = val
             Z_final = Z
     
-    t4 = time.time()
-
     # Get a specific instance of the transformation
     if return_instance:
         # Try and identify a transformation that 
         # respects the periodicity of extended variable
         # junction terms
-        var_list = [x for x in Z2.free_symbols if "Z" in str(x)]
+        var_list = [x for x in Z_final.free_symbols if "Z" in str(x)]
         det = Z_final.det()
         if utils.count_elems_mapped(circuit)["J"] > 0:
             ext = var_types.get("extended", [])
@@ -2252,9 +2147,7 @@ def choose_Z(circuit: list, edges: list,
                 for j in ext:
                     val = sym.simplify(wJT_trans[i,j])
                     if val != 0:
-                        # = +1 and = -1
-                        # all_eqs.append((sym.Eq(val,1), sym.Eq(val,-1)))
-                        # all_eqs.append({val: 1, val:-1})
+                        # = +1 and = -1 and = 0
                         sol_p1 = sym.solve(sym.Eq(val, 1), [v for v in var_list if v in val.free_symbols], dict=True)
                         sol_0 = sym.solve(sym.Eq(val, 0), [v for v in var_list if v in val.free_symbols], dict=True)
                         sol_n1 = sym.solve(sym.Eq(val, -1), [v for v in var_list if v in val.free_symbols], dict=True)
@@ -2269,11 +2162,8 @@ def choose_Z(circuit: list, edges: list,
         if len(Z_final.free_symbols) > 0:
             Z_final = _find_Z_instance(Z_final, var_list)
     
-    t5 = time.time()
-
-    # print(t1-t0, t12-t1, t2-t12, t3-t2, t4-t3, t5-t4)
-    
     return Z_final, var_types, lowest_hash
+
 
 def gen_junc_pot(circuit, edges, flux_vars, Z=None, eps=1e-10) -> sym.Matrix:
     """
@@ -2654,6 +2544,12 @@ if __name__ == "__main__":
     circuit = utils.add_elem_number(circuit)
     edges =  [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
+    # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    # circuit = [("L1", "C1"), ("L2", "C2"), ("L3",), ("J",)]
+
+    # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    # circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
+
     # cMat = gen_cap_mat(circuit, edges)
     # lMat = gen_ind_mat(circuit, edges)
     # edges = utils.zero_start_edges(edges)
@@ -2672,7 +2568,7 @@ if __name__ == "__main__":
         # print(Z)
         tf = time.time()
         times.append(tf-t0)
-
+    print("Max", np.max(times), "Min:", np.min(times))
     print("Mean:", np.mean(times), "+/-", np.std(times))
 
     # breakpoint()
