@@ -101,7 +101,7 @@ def find_loops(circuit, edges, ind_elem=["J", "L"]):
     min_node = min(min(x) for x in edges)
 
     # Renumber to start from 0
-    edges = utils.zero_start_edges(edges)
+    edges = utils.renumber_nodes(edges)
 
     # Expand single edge loops
     max_node_og = utils.get_num_nodes(edges)-1
@@ -176,7 +176,7 @@ def add_explicit_ground_node(circuit: list, edges: list, params: dict, ecg: floa
     """
     # Get unique node values
     edges_og = edges[:]
-    edges = utils.zero_start_edges(edges)
+    edges = utils.renumber_nodes(edges)
     node_vals = []
     for n1, n2 in edges:
         if n1 not in node_vals:
@@ -420,7 +420,7 @@ def to_SCqubits(circuit: list, edges: list,
         if add_gnd:
             circuit, edges, params = add_explicit_ground_node(circuit, edges, params)
         else:
-            edges = utils.zero_start_edges(edges)
+            edges = utils.renumber_nodes(edges)
             edges = [(n1 + 1, n2 + 1) for (n1, n2) in edges]
             new_params = {}
             for key in params:

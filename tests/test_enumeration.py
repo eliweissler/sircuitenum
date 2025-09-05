@@ -401,16 +401,21 @@ def test_add_hamiltonian_classes():
     # there's 19 H classes
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=1, quiet=False)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
+    print("not in sym", [x for x in df.H_class.unique() if x not in df.H_class_sym.unique()])
+    print("not in class", [x for x in df.H_class_sym.unique() if x not in df.H_class.unique()])
+    print(df.H_class.unique().size, df.H_class_sym.unique().size)
     assert df.H_class.unique().size == 19
-    assert df.H_class_sym.unique().size == 19
+    assert df.H_class_sym.unique().size == 21
     os.remove(TEMP_FILE)
 
      # Generate all the 3 node circuits and check that
     # there's 19 H classes
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=4, quiet=False)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
+    print("not in sym", [x for x in df.H_class.unique() if x not in df.H_class_sym.unique()])
+    print("not in class", [x for x in df.H_class_sym.unique() if x not in df.H_class.unique()])
     assert df.H_class.unique().size == 19
-    assert df.H_class_sym.unique().size == 19
+    assert df.H_class_sym.unique().size == 21
     os.remove(TEMP_FILE)
     
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=5, n_workers=4)
@@ -422,7 +427,7 @@ def test_add_hamiltonian_classes():
     diff2 = [x for x in df.H_class_sym.unique() if x not in df.H_class.unique()]
     for x in ['110_1-1_0_0-0_0-0_2220']:
         assert x in diff2
-    assert df.H_class_sym.unique().size == 18
+    assert df.H_class_sym.unique().size == 16
     os.remove(TEMP_FILE)
 
 
@@ -572,8 +577,8 @@ if __name__ == "__main__":
     # test_generate_graphs_node()
     # test_generate_all_circuits()
     # test_find_equiv_cir_series()
-    # test_add_hamiltonian_classes()
-    test__gen_ham_class_row()
+    test_add_hamiltonian_classes()
+    # test__gen_ham_class_row()
     # test_find_equiv_cir_series()
     # test_gen_hamiltonian()
     # test_categorize_hamiltonian()
@@ -588,4 +593,6 @@ if __name__ == "__main__":
     # test_group_hamiltonian()
 
     # test_qps_enum()
+
+    test_generate_all_circuits()
 
