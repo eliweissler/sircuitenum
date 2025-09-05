@@ -1376,6 +1376,22 @@ def test_secondary_transformation_harm_ext():
 
 def test_choose_Z():
 
+
+    # Transmon Molecule + cap
+    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    circuit = [("J", "C"), ("J","C"), ("C",), ("C",)]
+    Z, var_types, hash = quantize.choose_Z(circuit, edges)
+    assert var_types["compact"] == [0, 1]
+    assert var_types["free"] == [2]
+    assert var_types["sigma"] == [3]
+    assert quantize._equal_up_to_column_shift_and_sign(
+                    sym.nsimplify(sym.Matrix([[1/2, 0, 1/2, 1],
+                                     [-1/2,0, 1/2, 1],
+                                     [0, 1/2, -1/2,1],
+                                     [0, -1/2,-1/2,1]]), rational=True), Z)
+    assert hash == "200_0-0_1_0-0_1-1"
+
+
      # Transmon
     edges = [(0, 1)]
     circuit = [("J", "C")]
@@ -1542,9 +1558,9 @@ def test_choose_Z():
                                                                                 Z)
 
 
-    # All three node circuits
+    # All four node circuits
     # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
-    # for n in range(2, 3):
+    # for n in range(4, 5):
     #     df = utils.get_unique_qubits(db_path, n)
     #     from tqdm import tqdm
     #     for i, row in tqdm(df.iterrows(), total=df.shape[0]):
@@ -1713,11 +1729,13 @@ if __name__ == "__main__":
 
     x = 1
 
-    test__wT_key()
-    test__sub_equal_LC()
-    test_num_subs()
-    test_symbolic_hamiltonian()
-    test_collect_H_terms()
+    test_choose_Z()
+
+    # test__wT_key()
+    # test__sub_equal_LC()
+    # test_num_subs()
+    # test_symbolic_hamiltonian()
+    # test_collect_H_terms()
 
     # test_find_islands()
     # test_decoupling_transformation()

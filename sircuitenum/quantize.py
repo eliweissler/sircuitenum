@@ -1029,8 +1029,8 @@ def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
         eps (float, optional): 
     """
     # Numerically treat the matrices
-    C, _ = num_subs(cMat, symbol="C")
-    L, _ = num_subs(lMat, symbol="L")
+    C, valsC = num_subs(cMat, symbol="C")
+    L, valsL = num_subs(lMat, symbol="L")
     n_nodes = Z.shape[0]
 
     # Record number of modes
@@ -1062,10 +1062,11 @@ def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
         C_tilde = Z_perm.transpose()*C*Z_perm
         L_tilde = Z_perm.transpose()*L*Z_perm
         # Truncate to dynamical modes
-        C_tilde = np.array(C_tilde[:-n_nd, :-n_nd])
-        L_tilde = np.array(L_tilde[:-n_nd, :-n_nd])
+        C_tilde = np.array(sym.simplify(C_tilde[:-n_nd, :-n_nd])).astype(float)
+        L_tilde = np.array(sym.simplify(L_tilde[:-n_nd, :-n_nd])).astype(float)
         # Invert capacitance matrix and trim small numerical values
-        C_tilde_inv = np.linalg.inv(np.array(C_tilde).astype(float))
+
+        C_tilde_inv = np.linalg.inv(C_tilde)
         C_tilde_inv[np.abs(C_tilde_inv)/np.abs(C_tilde_inv).max() < eps] = 0
         if not lMat.is_zero_matrix:
             L_tilde[np.abs(L_tilde)/np.abs(L_tilde).max() < eps] = 0
