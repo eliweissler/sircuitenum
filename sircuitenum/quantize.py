@@ -343,7 +343,7 @@ def _nonzero_entries_str(X: Union[sym.Matrix, np.ndarray],
     for i in range(X.shape[0]):
         for j in range(X.shape[1]):
             if j > i or full_mat:
-                if X[i,j] != 0:
+                if sym.simplify(sym.sympify(X[i,j])) != 0:
                     nz_idx.append("1")
                     n_nz += 1
                 else:
@@ -431,23 +431,6 @@ def _maximize_wT(wT):
 
         
     return best_w[0], best_key, best_w[1:]
-
-
-def _wT_key(wT: Union[sym.Matrix, np.ndarray], equalJ=False):
-
-    if isinstance(wT, sym.Matrix):
-        wT = np.array(wT).astype(float)
-
-    # Number of coupled modes
-    coup_mat = (wT[0][np.newaxis, :]*wT[0][:, np.newaxis]).astype(float)
-    for i in range(1, wT.shape[0]):
-        # outer product of row vectors
-        term = wT[i][np.newaxis, :]*wT[i][:, np.newaxis]
-        if not equalJ:
-            term = np.random.random()*term
-        coup_mat += term
-
-    return _nonzero_entries_str(coup_mat)
 
 
 def _var_col_perms(var_types,
@@ -834,7 +817,7 @@ def _extract_denom(Z: sym.Matrix):
 
 # Deterministic symbolic instantiation helper
 def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
-                                   max_tries=5, nonzero=[]):
+                                   max_tries=5, nonzero=[], return_mapping=False):
     """
     Deterministically substitute symbolic parameters in Z with
     rational values guaranteeing (if possible) a nonzero det.
@@ -856,7 +839,8 @@ def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
         if tries > max_tries:
             # Give up
             raise ValueError("Could not find non-singular instance")
-    
+    if return_mapping:
+        return sym.nsimplify(Z.subs(subs), rational=True), subs
     return sym.nsimplify(Z.subs(subs), rational=True)
 
 
@@ -1083,20 +1067,17 @@ def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True,
         perms = [tuple(range(n_dyn))]
 
     lowest_hash = ""
-    lowest_Z = None
+    lowest_perm = tuple(range(n_nodes))
     WJ_zero = len(WJ_VALS)//2
     for perm in perms:
         
         L_key = _nonzero_entries_str(lTrans[:, perm])
         C_key =  _nonzero_entries_str(cTransInv[:, perm])
-
+        w_key = _nonzero_entries_str(incidence_to_square(wJtTrans[:, perm], EJ))
         wT_tilde, wT_key_full, _ = _maximize_wT(_sort_wT(wJtTrans[:, perm]))
-        w_key = _wT_key(wT_tilde, EJ)
         if extra_nl:
             n_val = sum(int(x) != WJ_zero for x in wT_key_full)
             w_key += "-" + str(n_val) + "-" + wT_key_full
-        else:
-            w_key = "0-"+"0"*(len(L_key)-2)
 
         # If ordering doesn't matter
         if not ordering_matters:
@@ -1108,9 +1089,9 @@ def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True,
         Z_hash = "_".join([mode_str, w_key, str(int(L_key[0])+int(C_key[0])), L_key, C_key])
         if lowest_hash == "" or Z_hash < lowest_hash:
             lowest_hash = Z_hash
-            lowest_Z = Z_og[:, perm + tuple(range(n_nodes - n_nd, n_nodes))]
+            lowest_perm = perm + tuple(range(n_dyn, n_nodes))
 
-    return lowest_hash, lowest_Z
+    return lowest_hash, lowest_perm
 
 
 def incidence_to_square(w, vals):
@@ -1523,10 +1504,9 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
     best_Z = [Z]
     best_subs = [{}]
     # Hash from just the cTrans and lTrans
-    Z_hash = _find_Z_instance_deterministic(Z, var_list)
-    # Z_hash = _find_Z_instance_random(Z, var_list)
-    # Z_hash = _find_Z_instance(Z, var_list,var_types=var_types,wJ=wJ)
-    nz_str = H_hash(Z_hash, var_types, cTrans, lTrans, wJ=sym.Matrix([]))[0]
+    # Z_hash, subs = _find_Z_instance_deterministic(Z, var_list, return_map=True)
+    # nz_str = H_hash(cTransInv2.subs(subs), lTrans2.subs(), cTrans, lTrans, wJ=sym.Matrix([]))[0]
+    nz_str = H_hash(cTransInv2, lTrans2, wJtTrans=sym.Matrix([]), EJ=[], var_types=var_types)[0]
     for i in range(1,len(nz_str)-1):
         if nz_str[i-1] == "_" and nz_str[i+1] == "_":
             nz_str = nz_str[i:]
@@ -1740,10 +1720,11 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             for Z2_bi in Z2_b:
                 Z_tot = Z*Z2_bi
                 var_list = [x for x in Z2_bi.free_symbols if "Z" in str(x)]
-                # Z_hash = _find_Z_instance_random(Z_tot, var_list)
                 Z_hash = _find_Z_instance_deterministic(Z_tot, var_list, nonzero=_extract_denom(Z_tot))
-                # Z_hash = _find_Z_instance(Z_tot, var_list, var_types=var_types, wJ=wJ)
-                val, Z_perm = H_hash(Z_hash, var_types, cMat, lMat, wJ)
+                cTransInv = sym.simplify(Z_hash.transpose()*cMat*Z_hash)[:n_dyn, :n_dyn].inv()
+                lTrans2 = sym.simplify(Z_hash.transpose()*lMat*Z_hash)
+                wJtTrans = sym.simplify(wJ.transpose()*Z_hash)
+                val, Z_perm = H_hash(cTransInv, lTrans2, wJtTrans, EJ, var_types=var_types)
                 if val < lowest_hash or lowest_hash == "":
                     lowest_Z = [Z_tot]
                     lowest_hash = val
@@ -1762,10 +1743,16 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         var_list = [x for x in Z.free_symbols if "Z" in str(x)]
         # val, Z_perm = H_hash(_find_Z_instance_random(Z_equal, var_list),
         #                     var_types, cMat, lMat, wJ, equalJ=True)
-        val, Z_perm = H_hash(_find_Z_instance_deterministic(Z_equal, var_list, nonzero=_extract_denom(Z_equal)),
-                            var_types, cMat, lMat, wJ, equalJ=False)
-        Z2 = _find_Z_instance(Z, var_list, var_types=var_types, wJ=wJ, nonzero=_extract_denom(Z))
-        val_full, _ = H_hash(Z2, var_types, cMat, lMat, wJ, equalJ=False, extra_nl=True)
+        Z_hash1 = _find_Z_instance_deterministic(Z_equal, var_list, nonzero=_extract_denom(Z_equal))
+        cTransInv = sym.simplify(Z_hash1.transpose()*cMat*Z_hash1)[:n_dyn, :n_dyn].inv()
+        lTrans2 = sym.simplify(Z_hash1.transpose()*lMat*Z_hash1)
+        wJtTrans = sym.simplify(wJ.transpose()*Z_hash1)
+        val, Z_perm = H_hash(cTransInv, lTrans2, wJtTrans, EJ, var_types=var_types)
+        Z_hash2 = _find_Z_instance(Z, var_list, var_types=var_types, wJ=wJ, nonzero=_extract_denom(Z))
+        cTransInv = sym.simplify(Z_hash2.transpose()*cMat*Z_hash2)[:n_dyn, :n_dyn].inv()
+        lTrans2 = sym.simplify(Z_hash2.transpose()*lMat*Z_hash2)
+        wJtTrans = sym.simplify(wJ.transpose()*Z_hash2)
+        val_full, _ = H_hash(cTransInv, lTrans2, wJtTrans, EJ, var_types=var_types, extra_nl=True)
         if val < hash_final or hash_final == "":
             hash_final = val
             hash_full = [val_full]
