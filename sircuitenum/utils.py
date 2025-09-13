@@ -493,6 +493,34 @@ def get_num_nodes(edges: list):
     return np.unique(np.concatenate(edges)).size
 
 
+def swap_nodes(edges: list, na: int, nb: int):
+    """
+    Swaps all instances of node na with nb and vice versa
+
+    Args:
+        edges (list): A list of edge connections for the desired circuit
+                       e.g. [(0,1), (0,2), (1,2)]
+        na (int): The first node to swap
+        nb (int): The second node to swap
+
+    Returns:
+        list: A new list of edges with the nodes swapped
+    """
+    new_edges = []
+    for (n0, n1) in edges:
+        # Swap na and nb
+        if n0 == nb:
+            n0 = na
+        elif n0 == na:
+            n0 = nb
+        if n1 == nb:
+            n1 = na
+        elif n1 == na:
+            n1 = nb
+        new_edges.append((n0, n1))
+    return new_edges
+
+
 def renumber_nodes(edges: list, return_map=False):
     """
     Renumbers nodes so that there is a continuous range

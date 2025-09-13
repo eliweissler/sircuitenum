@@ -481,13 +481,11 @@ def _gen_ham_class_row(args):
             n_nd += len(var_types.get(nd_mode, []))
         # Apply transformation and record form of nonlinear terms
         wJT = quantize.gen_w(entry.circuit, entry.edges, "J").transpose()
-        try:
-            wJT_trans_sym, wJT_key_sym, _ = quantize._maximize_wT(sym.simplify(wJT*Z_sym)[:, :-n_nd])
-        except Exception as exc:
-            breakpoint()
+        wJT_trans_sym, wJT_key_sym, _ = quantize._maximize_wT(sym.simplify(wJT*Z_sym[0])[:, :-n_nd])
+
         ## Different Circuit Paramter values
         Z, var_types, h_class = quantize.choose_Z(utils.add_elem_number(entry.circuit), entry.edges)
-        wJT_trans, wJT_key, _ = quantize._maximize_wT(sym.simplify(wJT*Z)[:, :-n_nd])
+        wJT_trans, wJT_key, _ = quantize._maximize_wT(sym.simplify(wJT*Z[0])[:, :-n_nd])
 
     except KeyboardInterrupt as kbi:
         raise kbi

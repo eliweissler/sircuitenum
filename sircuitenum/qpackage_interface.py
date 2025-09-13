@@ -209,21 +209,6 @@ def add_explicit_ground_node(circuit: list, edges: list, params: dict, ecg: floa
     return new_circuit, new_edges, new_params
 
 
-def swap_nodes(edges: list, na: int, nb: int):
-    new_edges = []
-    for (n0, n1) in edges:
-        # Swap na and nb
-        if n0 == nb:
-            n0 = na
-        elif n0 == na:
-            n0 = nb
-        if n1 == nb:
-            n1 = na
-        elif n1 == na:
-            n1 = nb
-        new_edges.append((n0, n1))
-    return new_edges
-
 def to_SQcircuit(circuit: list, edges: list,
                  trunc_num: Union[int, list] = 50, **kwargs) -> sq.Circuit:
     """
@@ -264,11 +249,11 @@ def to_SQcircuit(circuit: list, edges: list,
     if ground_node is None:
         circuit, edges, params = add_explicit_ground_node(circuit, edges, params)
     elif ground_node != 0:
-        edges = swap_nodes(edges, 0, ground_node)
+        edges = utils.swap_nodes(edges, 0, ground_node)
         new_params = {}
         for key in params:
             edge, elem = key
-            new_edge = swap_nodes([edge], 0, ground_node)[0]
+            new_edge = utils.swap_nodes([edge], 0, ground_node)[0]
             new_params[(new_edge, elem)] = params[(edge, elem)]
         params = new_params
 
@@ -429,11 +414,11 @@ def to_SCqubits(circuit: list, edges: list,
                 new_params[(new_edge, elem)] = params[(edge, elem)]
             params = new_params
     elif ground_node != 0:
-        edges = swap_nodes(edges, 0, ground_node)
+        edges = utils.swap_nodes(edges, 0, ground_node)
         new_params = {}
         for key in params:
             edge, elem = key
-            new_edge = swap_nodes([edge], 0, ground_node)[0]
+            new_edge = utils.swap_nodes([edge], 0, ground_node)[0]
             new_params[(new_edge, elem)] = params[(edge, elem)]
         params = new_params
 
