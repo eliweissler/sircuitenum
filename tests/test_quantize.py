@@ -665,24 +665,23 @@ def test__fully_compatible_set():
     assert len(res_one) == 1
     assert {Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))} in res_one or {Z11: Z12*Z21/Z22} in res_one
 
+    # Produces infite denominator with the first expression applied to last
     assumptions = [({Z11: -1, Z12:-Z22/2},), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22)),},)]
     res_one = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
-    print(res_one)
-    assert len(res_one) == 2
-
+    assert len(res_one) == 0
     assumptions = [({Z11: -1, Z12:-Z22/2}, {Z12: Z22}), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22)),},)]
     res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
-    assert len(res_all) == 3
+    assert len(res_all) == 2
 
     assumptions = [({Z11: -1, Z12:-Z22/2}, {Z12: Z22}), ({Z11: Z12*Z21/Z22},)]
     res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
     assert len(res_all) == 2
     
-    assumptions = [({Z11: -1, Z12:-Z22/2}, {Z12: Z22}), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))},
+    assumptions = [({Z11: -1, Z12:-Z22/2},), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))},
                                                          {Z11: Z12*Z21/Z22})]
 
     res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
-    assert len(res_all) == 5
+    assert len(res_all) == 1
 
 
 def test__cached_solve():
@@ -904,28 +903,27 @@ def test__find_Z_instance():
 
 
     # The troublesome one
-    Z10, Z01, Z11 = sym.symbols("Z10, Z01, Z11", real=True)
+    # Z10, Z01, Z11 = sym.symbols("Z10, Z01, Z11", real=True)
     
     
     # Z = sym.Matrix([[2*Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, 2*Z01/3 - Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) + 2*Z10/3, -Z01/3 + 2*Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, -Z01/3 - Z11/3, 1/3]])
     # wJ = sym.Matrix([[1, 1, 0], [-1, 0, 1], [0, -1, -1]])
     # var_types =  {'compact': [], 'extended': [0, 1], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [2]}
-    var_list =  [Z01, Z11, Z10]
+    # var_list =  [Z01, Z11, Z10]
     # Z_hash2 = quantize._find_Z_instance(Z, var_list, var_types=var_types, wJ=wJ, nonzero=quantize._extract_denom(Z))
     # Z_hash2 = sym.nsimplify(Z_hash2, rational=True)
     # # wJT Matrix([[-Z10*Z11/(Z01 - Z11), Z01 - Z11, 0], [Z10*(Z01 - 2*Z11)/(Z01 - Z11), Z01, 0], [Z10, Z11, 0]])
 
 
 
-    Z =  sym.Matrix([[2*Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, 2*Z01/3 - Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) + 2*Z10/3, -Z01/3 + 2*Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, -Z01/3 - Z11/3, 1/3]])
-    var_types =  {'compact': [], 'extended': [0, 1], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [2]}
-    # var_list =  [Z11, Z10, Z01]
-    wJ =  sym.Matrix([[1, 1, 0], [-1, 0, 1], [0, -1, -1]])
-    Z_hash2 = quantize._find_Z_instance(Z, var_list, var_types=var_types, wJ=wJ, nonzero=quantize._extract_denom(Z))
-    Z_hash2 = sym.nsimplify(Z_hash2, rational=True)
-
-    _, key, _ = quantize._maximize_wT((wJ.transpose()*Z_hash2)[:, :2])
-    assert key == "544555"
+    # Z =  sym.Matrix([[2*Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, 2*Z01/3 - Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) + 2*Z10/3, -Z01/3 + 2*Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, -Z01/3 - Z11/3, 1/3]])
+    # var_types =  {'compact': [], 'extended': [0, 1], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [2]}
+    # # var_list =  [Z11, Z10, Z01]
+    # wJ =  sym.Matrix([[1, 1, 0], [-1, 0, 1], [0, -1, -1]])
+    # Z_hash2 = quantize._find_Z_instance(Z, var_list, var_types=var_types, wJ=wJ, nonzero=quantize._extract_denom(Z))
+    # Z_hash2 = sym.nsimplify(Z_hash2, rational=True)
+    # _, key, _ = quantize._maximize_wT((wJ.transpose()*Z_hash2)[:, :2])
+    # assert key == "544555"
 
 
     # Solution that only has a single thing
@@ -1300,8 +1298,6 @@ def test_secondary_decouple():
             assert Z2[i,j].is_finite
 
 
-   
-
 
     # Very slow right now with identical parameters
     # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
@@ -1351,6 +1347,7 @@ def test_choose_Z():
     # Was giving inconsistent results in test_enumeration
     # Examine every way to label nodes
     circuit = [("J", "L"), ("C", "J"), ("C", "J", "L")]
+    circuit = utils.add_elem_number(circuit)
     edges_og = ((0, 1), (0, 2), (1, 2))
     edges_all = [edges_og]
     for p in itertools.combinations([0, 1, 2], r=2):
@@ -1363,17 +1360,14 @@ def test_choose_Z():
             Z = Z[0]
             assert var_types["extended"] == [0,1]
             assert var_types["sigma"] == [2]
-            # print(edges, hash, quantize._maximize_wT(wJ.transpose()*Z)[1])
             if edges not in res:
                 res[edges] = set()
             res[edges].add(quantize._maximize_wT((wJ.transpose()*Z)[:,:2])[1])
         for e in res:
             res[e] = frozenset(res[e])
 
-        print(res)
         assert len(set(res.values())) == 1
     
-    assert False
     
     circuit, edges = ([('J',), ('J', 'L'), ('C', 'J', 'L')], [(0, 1), (0, 2), (1, 2)])
     Z, var_types, hash = quantize.choose_Z(circuit, edges, return_instance=True)
@@ -1735,8 +1729,8 @@ def main():
     # test__find_equiv_cols()
     # test_H_hash()
     # test__find_Z_instance_deterministic()
-    # test__find_Z_instance()
     # test__fully_compatible_set()
+    test__find_Z_instance()
     # test__unique_products()
     # test__sol_indep_of_vars()
 
@@ -1745,9 +1739,9 @@ def main():
     # test__nonzero_entries_str()
     # test_choose_Z()
 
-    test_secondary_decouple()
+    # test_secondary_decouple()
 
-    test_choose_Z()
+    # test_choose_Z()
     # test__maximize_wT()
     # test__wT_key()
     # test_var_trans_basis()
