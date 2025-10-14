@@ -5,6 +5,7 @@ __all__ = ['get_circuit_data_batch', 'find_circuit_in_db', "get_equiv_circuits",
 
 import itertools
 import functools
+import multiprocessing
 from typing import Union
 from pathlib import Path
 from time import sleep
@@ -14,6 +15,8 @@ import numpy as np
 import networkx as nx
 import pandas as pd
 from tqdm import tqdm
+
+from func_timeout import func_timeout, FunctionTimedOut
 
 # Set ENUM_PARAMS at end of file
 global ENUM_PARAMS
@@ -258,6 +261,7 @@ def add_elem_number(circuit: list, **kwargs):
     for elems in circuit:
         elems_new = []
         for elem in elems:
+            elem = [c for c in elem if c in possible_elems][0]
             counts[elem] += 1
             elems_new.append(elem+"_"+str(counts[elem]))
         circuit_new.append(tuple(elems_new))
@@ -489,7 +493,7 @@ def get_num_nodes(edges: list):
     return np.unique(np.concatenate(edges)).size
 
 
-def renumber_nodes(edges: list):
+def renumber_nodes(edges: list, return_map=False):
     """
     Renumbers nodes so that there is a continuous range
     of integers between 0 and the max number
@@ -504,15 +508,20 @@ def renumber_nodes(edges: list):
     """
     new_edges = edges[:]
     nodes = np.unique(np.concatenate(new_edges))
+    relabel_map = {}
     if nodes[-1] != nodes.shape[0]-1:
-        relabel_map = {}
         for i in range(len(nodes)):
             relabel_map[nodes[i]] = i
         for i in range(len(new_edges)):
             edge = new_edges[i]
             new_edges[i] = tuple([relabel_map[x] for x in edge])
+    else:
+        relabel_map = {i: i for i in range(len(nodes))}
 
-    return new_edges
+    if return_map:
+        return new_edges, relabel_map
+    else:
+        return new_edges
 
 
 def combine_redundant_edges(circuit: list, edges: list):
@@ -971,24 +980,25 @@ def list_all_columns(db_file: str, table_name: str):
     return cols
 
 
-def zero_start_edges(edges):
-    """
-    Helper function to convert a list of edges from 1
-    indexing to 0 indexing of the nodes
+def _worker(func, args, kwargs, q):
+    """Runs the target function and puts result/exception in a queue."""
+    try:
+        q.put(func(*args, **kwargs))
+    except Exception as e:
+        q.put(e)
 
-    Args:
-        edges (list of tuples of ints): a list of edge connections for the
-                                        desired circuit
-                                        (i.e., [(0,1),(1,2),(2,3),(3,0)])
 
-    Returns:
-         list[tuple[int]]: edges modified to have zero as the lowest
-                           index
-    """
-    min_node = min([min(edge) for edge in edges])
-    if min_node > 0:
-        edges = [(edge[0] - min_node, edge[1] - min_node) for edge in edges]
-    return edges
+def run_with_timeout(func, args=(), kwargs=None, timeout=1):
+    if kwargs is None:
+        kwargs = {}
+    try:
+        return func_timeout(60*timeout, func, args, kwargs)
+    except FunctionTimedOut:
+        return None
+    except KeyboardInterrupt as KI:
+        raise KI
+    except:
+        return None
 
 
 def set_enum_params(char_to_combo = {'0': ('C',),

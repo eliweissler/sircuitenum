@@ -1,3 +1,4 @@
+import functools
 import sympy as sym
 import numpy as np
 
@@ -9,21 +10,48 @@ import time
 import itertools
 
 
+def test__independent_from():
+    # Basic: A = {[1,0], [0,1]}, B = {[1,1]}
+    A = [sym.Matrix([1, 0]), sym.Matrix([0, 1])]
+    B = [sym.Matrix([1, 1])]
+    result = quantize._independent_from(A, B)
+    assert len(result) == 1
+    assert any(v == sym.Matrix([1, 0]) for v in result) or any(v == sym.Matrix([0, 1]) for v in result)
 
-def test__indices_to_arr():
+    A = [sym.Matrix([1, 1]), sym.Matrix([0, -1])]
+    B = [sym.Matrix([1, 0])]
+    result = quantize._independent_from(A, B)
+    assert len(result) == 1
+    assert any(v == sym.Matrix([1, 1]) for v in result) or any(v == sym.Matrix([0, -1]) for v in result)
 
-    assert quantize._indices_to_arr(3, [1]) == sym.Matrix([[0], [1], [0]])
+    # Subset: A = {[1,0], [0,1]}, B = {[1,0]}
+    A = [sym.Matrix([1, 0]), sym.Matrix([0, 1])]
+    B = [sym.Matrix([1, 0])]
+    result = quantize._independent_from(A, B)
+    assert len(result) == 1
+    assert result[0] == sym.Matrix([0, 1])
 
-def test__islands_to_vectors():
+    # All in B: A = {[1,0]}, B = {[1,0]}
+    A = [sym.Matrix([1, 0])]
+    B = [sym.Matrix([1, 0])]
+    result = quantize._independent_from(A, B)
+    assert result == []
 
-    edges = [(1, 2), (3, 4), (1, 4), (2, 3), (1, 3), (2, 4)]
-    circuit = [("J",), ("J",), ("L",), ("L",), ("C",), ("C",)]
-    vecs = quantize._islands_to_vectors(circuit, edges, ["J", "L"])
-    v1 = sym.Matrix([[1], [0], [1], [0]])
-    v2 = sym.Matrix([[0], [1], [0], [1]])
-    assert len(vecs) == 2
-    assert vecs[0] in [v1, v2]
-    assert vecs[1] in [v1, v2]
+    # Empty B: A = {[1,0], [0,1]}, B = []
+    A = [sym.Matrix([1, 0]), sym.Matrix([0, 1])]
+    B = []
+    result = quantize._independent_from(A, B)
+    assert len(result) == 2
+    assert any(v == sym.Matrix([1, 0]) for v in result)
+    assert any(v == sym.Matrix([0, 1]) for v in result)
+
+    # Symbolic: A = {[x,0], [0,y]}, B = {[x,y]}
+    x, y = sym.symbols('x y')
+    A = [sym.Matrix([x, 0]), sym.Matrix([0, y])]
+    B = [sym.Matrix([x, y])]
+    result = quantize._independent_from(A, B)
+    assert len(result) == 1
+    assert any(v == sym.Matrix([x, 0]) for v in result) or any(v == sym.Matrix([0, y]) for v in result)
 
 
 def test__vec_space_overlap():
@@ -235,6 +263,12 @@ def test__linearly_indep_row_col_sets():
         assert all(x in expected for x in col_sets)
 
 
+def test__det_fast():
+
+    for i in range(10):
+        mat = sym.randMatrix(i, i, min=0, max=5)
+        assert mat.det() == quantize._det_fast(mat)
+
 def test__equiv_cols():
 
     c1 = sym.Matrix([[1], [1]])
@@ -430,81 +464,6 @@ def test__equal_up_to_column_swaps_and_shift_and_sign():
     assert quantize._equal_up_to_column_swaps_and_shift_and_sign(matrix1, matrix2) == False
 
 
-def test__unique_mag_row_col():
-
-    X = sym.eye(5)
-    mags = quantize._unique_mag_row(X)
-    mags2 = quantize._unique_mag_col(X.transpose())
-    for m, m2 in zip(mags, mags2):
-        assert m == [0, 1]
-        assert m2 == [0, 1]
-    
-    X[0, 0] = 2
-    X[0, 1] = -4
-    X[0, 4] = 4
-    X[1, 1] = 0
-    mags = quantize._unique_mag_row(X)
-    mags2 = quantize._unique_mag_col(X.transpose())
-    assert mags[0] == [0, 2, 4]
-    assert mags[1] == [0]
-    assert mags2[0] == [0, 2, 4]
-    assert mags2[1] == [0]
-
-
-def test__unique_col_combos():
-
-    
-    basis = [sym.Matrix([[1], [0]]), sym.Matrix([[0], [1]])]
-    signs = [1, -1]
-    shifts = [sym.ones(*basis[0].shape)]
-    unique_combos = quantize._unique_col_combos(basis, 1, signs, shifts=shifts, li_vecs=shifts)
-
-    assert len(unique_combos) == 2
-    assert sym.Matrix([[1], [0]]) in unique_combos or sym.Matrix([[0], [1]]) in unique_combos
-    assert sym.Matrix([[1], [-1]]) in unique_combos or -sym.Matrix([[1], [-1]]) in unique_combos
-    
-    basis = [sym.Matrix([[1], [0], [0]]), sym.Matrix([[0], [1], [0]]), sym.Matrix([[0], [0], [1]])]
-    signs = [1]
-    shifts = [sym.ones(*basis[0].shape)]
-    unique_combos = quantize._unique_col_combos(basis, 1, signs, shifts=shifts, li_vecs=shifts)
-    assert len(unique_combos) == 3
-    assert sym.Matrix([[1], [0], [0]]) in unique_combos or -sym.Matrix([[1], [0], [0]]) in unique_combos
-    assert sym.Matrix([[0], [1], [0]]) in unique_combos or -sym.Matrix([[0], [1], [0]]) in unique_combos
-    assert sym.Matrix([[0], [0], [1]]) in unique_combos or -sym.Matrix([[0], [0], [1]]) in unique_combos
-
-    unique_combos = quantize._unique_col_combos(basis, 2, signs, shifts=shifts, li_vecs=shifts)
-    assert len(unique_combos) == 3
-    assert len(quantize._find_equiv_mats(sym.Matrix([ [1, 0],
-                                                        [0, 1],
-                                                        [0, 0]]),
-                                        unique_combos,
-                                        shifts=shifts)) > 0
-    len(quantize._find_equiv_mats(sym.Matrix([ [1, 0],
-                                                [0, 0],
-                                                [0, 1]]),
-                                        unique_combos,
-                                        shifts=shifts)) > 0
-    len(quantize._find_equiv_mats(sym.Matrix([ [0, 0],
-                                                [1, 0],
-                                                [0, 1]]),
-                                        unique_combos,
-                                        shifts=shifts)) > 0
-    
-    signs = [1, -1]
-    unique_combos = quantize._unique_col_combos(basis, 1, signs, shifts=shifts, li_vecs=shifts)
-    assert len(quantize._find_equiv_mats(sym.Matrix([[1], [0], [0]]), unique_combos, shifts=shifts)) > 0
-    assert len(quantize._find_equiv_mats(sym.Matrix([[0], [1], [0]]), unique_combos, shifts=shifts)) > 0
-    assert len(quantize._find_equiv_mats(sym.Matrix([[0], [0], [1]]), unique_combos, shifts=shifts)) > 0
-
-    assert len(quantize._find_equiv_mats(sym.Matrix([[1], [-1], [0]]), unique_combos, shifts=shifts)) > 0
-    assert len(quantize._find_equiv_mats(sym.Matrix([[0], [1], [-1]]), unique_combos, shifts=shifts)) > 0
-    assert len(quantize._find_equiv_mats(sym.Matrix([[1], [0], [-1]]), unique_combos, shifts=shifts)) > 0
-
-    assert len(quantize._find_equiv_mats(sym.Matrix([[1], [1], [-1]]), unique_combos, shifts=shifts)) > 0
-    assert len(quantize._find_equiv_mats(sym.Matrix([[1], [-1], [1]]), unique_combos, shifts=shifts)) > 0
-    assert len(quantize._find_equiv_mats(sym.Matrix([[1], [-1], [-1]]), unique_combos, shifts=shifts)) > 0
-
-
 def test__nonzero_entries_str():
 
     test = np.array([[1, 0, 2],
@@ -625,18 +584,6 @@ def test__wT_key():
     assert key == "1-1"
 
 
-def test__remove_row():
-
-    Cv = sym.Matrix(np.array([sym.Symbol("C_c", real=True, positive=True), 0]).reshape((2, 1)))
-    assert quantize._remove_row(Cv, 1).shape[0] == 1
-
-
-def test__remove_col():
-
-    Cv = sym.Matrix(np.array([sym.Symbol("C_c", real=True, positive=True), 0]).reshape((1, 2)))
-    assert quantize._remove_col(Cv, 1).shape[1] == 1
-
-
 def test__var_col_perms():
 
     var_types = {"compact": [0, 1],
@@ -664,104 +611,299 @@ def test__sub_equal_LC():
     assert test[2,0] == test[2,1] == test[2,2]
 
 
-def test_well_spaced():
+def test__to_frozenset():
 
-    wT = sym.nsimplify((sym.Matrix([[1, 0, 1, 1],
-                                    [0, -1, 0, 1],
-                                    [1, 1, 0, -1],
-                                    [1, 1, -1, 1]])), rational=True)
-    assert quantize.well_spaced(wT) == True
-
-    wT = sym.nsimplify((sym.Matrix([[1, 0, 1, 1],
-                                    [0, -1, 0, 2],
-                                    [1, 1, 0, -1],
-                                    [1, 1, -1/2, 1]])), rational=True)
-    assert quantize.well_spaced(wT) == False
+    a, b, c, d, e = sym.symbols("a b c d e")
+    s1 = [sym.Eq(a,b), sym.Eq(c,d)]
+    s2 = [sym.Eq(c,d), sym.Eq(a,b)]
+    s3 = [sym.Eq(a,b), sym.Eq(c,e)]
+    fs1 = quantize._to_frozenset(s1)
+    fs2 = quantize._to_frozenset(s2)
+    fs3 = quantize._to_frozenset(s3)
+    assert fs1 == fs2
+    assert fs1 != fs3
 
 
-def test_find_islands():
+def test__to_eq_list():
 
-    # Transmon
-    edges = [(0, 1)]
-    circuit = [("J", "C")]
-    islands = quantize.find_islands(circuit, edges, links = ["J"])
-    assert islands == [(0, 1)]
+    # Dictionary -> eq list
+    a, b, c, d, e = sym.symbols("a b c d e")
+    s1 = {a: b, c: d}
+    s2 = {c: d, a: b}
+    s3 = {a: b, c: e}
+    l1 = quantize._to_eq_list(s1)
+    l2 = quantize._to_eq_list(s2)
+    l3 = quantize._to_eq_list(s3)
+    assert all(x in l1 for x in l2) and all(x in l2 for x in l1)
+    assert not (all(x in l1 for x in l3) and all(x in l3 for x in l1))
 
+    # Eq list -> frozenset -> Eq list
+    s1 = [sym.Eq(a,b), sym.Eq(c,d)]
+    s2 = [sym.Eq(c,d), sym.Eq(a,b)]
+    s3 = [sym.Eq(a,b), sym.Eq(c,e)]
+    fs1 = quantize._to_frozenset(s1)
+    fs2 = quantize._to_frozenset(s2)
+    fs3 = quantize._to_frozenset(s3)
+    s1_b = quantize._to_eq_list(fs1)
+    s2_b = quantize._to_eq_list(fs2)
+    s3_b = quantize._to_eq_list(fs3)
+    assert all(x in s1 or sym.Eq(x.rhs, x.lhs) in s1 for x in s1_b)
+    assert all(x in s2 or sym.Eq(x.rhs, x.lhs) in s2 for x in s2_b)
+    assert all(x in s3 or sym.Eq(x.rhs, x.lhs) in s3 for x in s3_b)
+
+    # list of dict -> eq list
+    l1 = quantize._to_eq_list(s1+s2+s3)
+    assert len(l1) == 6
+    assert all(x in l1 for x in [sym.Eq(a,b), sym.Eq(c,d), sym.Eq(c,e)])
+
+    # expression -> eq list
+    expr1 = a - b
+    expr2 = c - d
+    l1 = quantize._to_eq_list([expr1, expr2])
+    assert len(l1) == 2
+    assert all(x in l1 for x in [sym.Eq(a-b,0), sym.Eq(c-d,0)])
+
+
+def test__fully_compatible_set():
+
+    Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
+    C1, C2 = sym.symbols("C1, C2", real=True, positive=True)
+    expr = (-4*Z00*Z11*Z12*Z22 - 2*Z00*Z11*Z22**2 +
+            4*Z00*Z12**2*Z21 + 2*Z00*Z12*Z21*Z22 - 
+            4*Z10*Z11*Z22**2 + 4*Z10*Z12*Z21*Z22 + 
+            4*Z11*Z12*Z20*Z22 - 4*Z12**2*Z20*Z21)
+    assumptions = [({expr: 0},)]
+    solve_vars = (Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10)
+    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
+    assert len(res_all) == 2
+    assert {Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))} in res_all
+    assert {Z11: Z12*Z21/Z22} in res_all
+
+    res_one = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=True)
+    assert len(res_one) == 1
+    assert {Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))} in res_one or {Z11: Z12*Z21/Z22} in res_one
+
+    assumptions = [({Z11: -1, Z12:-Z22/2},), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22)),},)]
+    res_one = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
+    assert len(res_one) == 0
+
+    assumptions = [({Z11: -1, Z12:-Z22/2}, {Z12: Z22}), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22)),},)]
+    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
+    assert len(res_all) == 1
+
+    assumptions = [({Z11: -1, Z12:-Z22/2}, {Z12: Z22}), ({Z11: Z12*Z21/Z22},)]
+    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
+    assert len(res_all) == 2
     
-    # 0-pi
-    edges = [(1, 2), (3, 4), (1, 4), (2, 3), (1, 3), (2, 4)]
-    circuit = [("J",), ("J",), ("L",), ("L",), ("C",), ("C",)]
-    islands = quantize.find_islands(circuit, edges, links = ["J"])
-    assert islands == [(1, 2, 3, 4)]
-    islands = quantize.find_islands(circuit, edges, links = ["J", "C"])
-    assert all(x in [(1, 4), (2, 3)] for x in islands)
-    assert len(islands) == 2
-    islands = quantize.find_islands(circuit, edges, links = ["J", "L"])
-    assert all(x in [(1, 3), (2, 4)] for x in islands)
-    assert len(islands) == 2
-
-    edges = [(1, 2), (3, 4), (1, 4), (2, 3), (1, 3), (2, 4)]
-    circuit = [("J1",), ("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
-    islands = quantize.find_islands(circuit, edges, links = ["J"])
-    assert islands == [(1, 2, 3, 4)]
-    islands = quantize.find_islands(circuit, edges, links = ["J", "C"])
-    assert all(x in [(1, 4), (2, 3)] for x in islands)
-    assert len(islands) == 2
-    islands = quantize.find_islands(circuit, edges, links = ["J", "L"])
-    assert all(x in [(1, 3), (2, 4)] for x in islands)
-    assert len(islands) == 2
+    assumptions = [({Z11: -1, Z12:-Z22/2}, {Z12: Z22}), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))},
+                                                         {Z11: Z12*Z21/Z22})]
+    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
+    assert len(res_all) == 3
 
 
-    edges = [(1, 2), (2, 3), (3, 4), (1, 5), (5, 6), (6, 7)]
-    circuit = [("J",), ("J",), ("J",), ("L",), ("J",), ("L",)]
-    islands = quantize.find_islands(circuit, edges, links = ["L"])
-    for x in islands:
-        assert x in [(1, 2, 3, 4), (5, 6), (7,)]
-    assert len(islands) == 3
+def test__cached_solve():
 
-    # Fancy circuit
-    circuit = [("J",), ("J",), ("L",), ("C",), ("C",), ("J",)]
-    edges = [(0, 1), (0, 2), (1, 2), (1, 3), (2, 4), (3, 4)]
+    eps = 1e-06
+    for i in range(10):
+        x, y, z = sym.symbols("x,y,z")
+        eq1 = x + 2*y + 3*z - 6*np.random.random()
+        eq2 = 2*x + 3*y + z - 5*np.random.random()
+        eq3 = x - y + z - 2*np.random.random()
+        eqs = [eq1, eq2, eq3]
+        vars = [x, y, z]
+        sol_good = sym.solve(eqs, vars, dict=True, simplify=True)[0]
+        t0 = time.time()
+        sol1 = quantize._cached_solve(eqs, vars)[0]
+        t1 = time.time()
+        sol2 = quantize._cached_solve(eqs, vars)[0]
+        t2 = time.time()
+        assert t1 - t0 > t2 - t1  # second call should be faster due to caching
+        for v in vars:
+            assert abs(sol1[v] - sol_good[v]) < eps
+            assert abs(sol2[v] - sol_good[v]) < eps
+
+
+def test__sol_indep_of_vars():
+    
+    Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
+    solve_vars = [Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10]
+    L1, L2, L3 = sym.symbols("L1, L2, L3", real=True, positive=True)
+    eq =  Z11*(Z20/L1 + Z00*(L1 - L2)/(2*L1*L2) + Z10*(L1 + L2)/(L1*L2)) + Z21*(-Z00/(2*L1) + Z10/L1 + Z20*(L1 + L3)/(L1*L3))
+    sols = quantize._sol_indep_of_vars(eq, solve_vars)
+    for x in [{Z21: 0, Z11: 0},
+              {Z00: 0, Z10: 0, Z20: 0},
+              {Z00: 2*Z10, Z11: 0, Z20: 0},
+              {Z00: -2*Z10, Z20: -2*Z10, Z21: 0},
+              {Z00: -2*Z10, Z11: -Z21, Z20: 0}]:
+        any_true = False
+        for sol in sols:
+             all_eq = [sym.Eq(x[0], x[1]) for x in sol.items()]
+             sol_rewrite = sym.solve(all_eq, list(x.keys()), dict=True, simplify=True)
+             if x in sol_rewrite:
+                 any_true = True
+                 break
+        assert any_true
+
+    x,y = sym.symbols("x,y", real=True)
+    a,b = sym.symbols("a,b", real=True)
+
+    # No solution indep of bad vars
+    eq = (x+y/2)*a*b + b
+    SOLVE_CACHE={}
+    sol = quantize._sol_indep_of_vars(eq, [x,y])
+    assert sol == []
+
+    # Failing for some reason
+    Z10, Z20 = sym.symbols("Z10, Z20", real=True)
+    L_3 = sym.symbols("L_3", real=True, positive=True)
+    expr = Z10*Z20/L_3
+    sol = quantize._sol_indep_of_vars(expr, [Z10, Z20])
+    assert {Z10: 0} in sol and {Z20: 0} in sol
+
+
+    # Buggy one
+    j_var = sym.symbols("J_1, J_2, J_3, J_4", real=True, positive=True)
+    J_1, J_2, J_3, J_4 = j_var
+    Z_var = sym.symbols("Z21, Z22, Z02, Z11, Z01, Z12", real=True)
+    Z21, Z22, Z02, Z11, Z01, Z12 = Z_var
+    Z_var = set([Z01, Z02, Z11, Z12, Z21, Z22])
+    expr = J_3*Z21*Z22 + Z02*(-J_4*Z11 + Z01*(J_1 + J_4)) + Z12*(-J_4*Z01 + Z11*(J_2 + J_4))
+    sol = quantize._sol_indep_of_vars(expr, Z_var)
+    good_subs = {Z02: 0, Z12: 0, Z21: 0}
+    assert any(s == good_subs for s in sol)
+
+
+    # No bad vars present
+    eq = x-y
+    sol = quantize._sol_indep_of_vars(eq, [x,y])
+    assert len(sol) == 1
+    sol = sol[0]
+    if x in sol:
+        assert sol[x] == y
+    else:
+        assert sol[y] == x
+
+    # Solution exists independent of bad vars
+    eq = (x+y/2)*a*b
+    sol = quantize._sol_indep_of_vars(eq, [x,y])
+    assert len(sol) == 1
+    sol = sol[0]
+    if x in sol:
+        assert sol[x] == -y/2
+    else:
+        assert sol[y] == -2*x
+   
+    # There is if you remove b
+    eq = (x+y/2)*a + b
+    sol = quantize._sol_indep_of_vars(eq, [x,y,b])
+    assert len(sol) == 1
+    sol = sol[0]
+    if x in sol:
+        assert sol[x] == -y/2
+    else:
+        assert sol[y] == -2*x
+    assert sol[b] == 0
+
+    # Multiple solutions
+    eq = x*a*b
+    sol = quantize._sol_indep_of_vars(eq, [x,y,b])
+    assert len(sol) == 2
+    if x in sol[0]:
+        assert sol[0][x] == 0 and sol[1][b] == 0
+    else:
+        assert sol[1][x] == 0 and sol[0][b] == 0
+
+
+
+def test__unique_products():
+
+    Z00, Z11, Z12, Z12, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z12, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
+    C1, C2 = sym.symbols("C1, C2", real=True, positive=True)
+
+    expr = (-4*C1*C2*Z00*Z11*Z12*Z22 - 2*C1*C2*Z00*Z11*Z22**2 +
+            4*C1*C2*Z00*Z12**2*Z21 + 2*C1*C2*Z00*Z12*Z21*Z22 - 
+            4*C1*C2*Z10*Z11*Z22**2 + 4*C1*C2*Z10*Z12*Z21*Z22 + 
+            4*C1*C2*Z11*Z12*Z20*Z22 - 4*C1*C2*Z12**2*Z20*Z21)
+    
+
+    prods = quantize._unique_products(expr, [Z00, Z11, Z12, Z12, Z12, Z21, Z20, Z02, Z22, Z10])
+    assert len(prods) == 1
+    assert prods[C1*C2] == sym.simplify(expr/(C1*C2))
+
+
+    # Solution that only has a single thing
+    x,y = sym.symbols("x,y", real=True)
+    a,b = sym.symbols("a,b", real=True)
+
+    eq = (x+y/2)*a*b + b
+    prods = quantize._unique_products(eq, [x,y])
+    assert prods == {a*b: x + y/2, b: 1}
+
+    eq = x*y
+    prods = quantize._unique_products(eq, [a,b])
+    assert eq in prods
+    assert prods[eq] == 1
+
+    eq = x*y
+    prods = quantize._unique_products(eq, [x,y])
+    assert 1 in prods
+    assert prods[1] == eq
+
+
+    eq = x + y
+    prods = quantize._unique_products(eq, [x,y])
+    assert prods[1] == eq
+
+    eq = (x + y)*(a + b)**2 + a - y*b
+    prods = quantize._unique_products(eq, [x,y])
+    for pr in [a**2, a*b, b**2, a, b]:
+        assert pr in prods
+
+    eq = (x + y)*(a + 1/b)**2 + 1/a - y*b
+    prods = quantize._unique_products(eq, [x,y])
+    for pr in [a**2, a/b, 1/b**2, 1/a, b]:
+        assert pr in prods
+
+
+def test__find_Z_instance():
+
+    # Solution that only has a single thing
+    x,y = sym.symbols("x,y", real=True)
+    a,b = sym.symbols("a,b", real=True)
+    v = [x,y,a,b]
+
+    Z = sym.Matrix([[x,y],
+                    [a,b]])
+    
+    Zsub = quantize._find_Z_instance(Z, v)
+    assert Z.det().simplify() != 0
+    assert sym.im(Zsub).is_zero_matrix
 
 
 def test_compact_well_aligned():
 
-    wT = sym.nsimplify((sym.Matrix([[1, 0, 1, 1],
+    wT = sym.nsimplify(sym.Matrix([[1, 0, 1, 1],
                                     [0, -1, 0, 1],
-                                    [1, 1, 0, -1],
-                                    [1, 1, -1, 1]])), rational=True)
-    assert quantize.compact_well_aligned(wT, 0) == True
-    assert quantize.compact_well_aligned(wT, 1) == True
-    assert quantize.compact_well_aligned(wT, 2) == True
-    assert quantize.compact_well_aligned(wT, 3) == False
-    assert quantize.compact_well_aligned(wT, 4) == False
+                                    [0, 1, 0, 1],
+                                    [1, 0, -1, 1]]), rational=True)
+    assert quantize.compact_well_aligned(wT, 2)
 
 
-    wT = sym.nsimplify((sym.Matrix([[1, 0, 0, 1/2],
-                                    [0, 1/2, 0, 1],
-                                    [0, 0, 1/2, -1],
-                                    [1, 1/3, -1, 1]])), rational=True)
-    assert quantize.compact_well_aligned(wT, 0) == True
-    assert quantize.compact_well_aligned(wT, 1) == True
-    assert quantize.compact_well_aligned(wT, 2) == False
-    assert quantize.compact_well_aligned(wT, 3) == False
-    assert quantize.compact_well_aligned(wT, 4) == False
+    wT = sym.nsimplify(sym.Matrix([[1, 0, 1, 1],
+                                    [0, -1, 0, 1],
+                                    [0, 1, 0, 1],
+                                    [1, 0, -1, 1]]), rational=True)
+    assert not quantize.compact_well_aligned(wT, 3)
 
-    wT = sym.nsimplify((sym.Matrix([[1, 0, 0, 1/2],
-                                    [0, 0, 1/2, 1],
-                                    [0, 0, 1, -1],
-                                    [0, -1, 0, 1]])), rational=True)
-    assert quantize.compact_well_aligned(wT, 0) == True
-    assert quantize.compact_well_aligned(wT, 1) == True
-    assert quantize.compact_well_aligned(wT, 2) == True
-    assert quantize.compact_well_aligned(wT, 3) == False
-    assert quantize.compact_well_aligned(wT, 4) == False
-
+    wT = sym.nsimplify(sym.Matrix([[1, 1, 1],
+                        [2/3, 1/3, 1/10],
+                        [40, 90, 200]]), rational=True)
+    assert not quantize.compact_well_aligned(wT, 2)
 
 def test_compact_alignment_transformation():
 
     edges = [(1, 2), (2, 3), (3, 4), (4,1)]
-    edges = utils.zero_start_edges(edges)
+    edges = utils.renumber_nodes(edges)
     circuit = [("J",), ("J","C"), ("J",), ("L",)]
     Z = sym.nsimplify((sym.Matrix([[1, 0, 1, 1],
                                     [0, -1/2, 0, 1],
@@ -780,6 +922,28 @@ def test_compact_alignment_transformation():
                         [40, 90, 200]]), rational=True)
         for Z2 in quantize.compact_alignment_transformation(wT, n_c):
             assert quantize.compact_well_aligned(wT*Z2, n_c)
+
+
+def test_decouple_column():
+
+    # Transmon molecule
+    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    circuit = [("J",), ("J",), ("C13",), ("C24",)]
+    cMat = quantize.gen_cap_mat(circuit, edges)
+    Z1 = sym.simplify(sym.Matrix([[1/2, 0, 1, 1],
+                                  [-1/2, 0, 1, 1],
+                                  [0, 1/2, 0, 1],
+                                  [0, -1/2, 0, 1]]),
+                                  rational=True)
+    nd_mat = Z1[:, 2:]
+
+    c1 = quantize.decouple_column(Z1[:, 0], nd_mat, cMat)
+    c2 = quantize.decouple_column(Z1[:, 1], nd_mat, cMat)
+    Z2 = sym.Matrix.hstack(c1, c2, nd_mat)
+    test2 = sym.simplify(Z2.transpose()*cMat*Z2)
+    for i in [0, 1]:
+        for j in [2, 3]:
+            assert test2[i,j] == test2[j,i] == 0
 
 
 def test_decoupling_transformation():
@@ -809,220 +973,6 @@ def test_decoupling_transformation():
     for i in [0, 1]:
         for j in [2, 3]:
             assert test2[i,j] == test2[j,i] == 0
-
-
-def test_decouple_column():
-
-    # Transmon molecule
-    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
-    circuit = [("J",), ("J",), ("C13",), ("C24",)]
-    cMat = quantize.gen_cap_mat(circuit, edges)
-    Z1 = sym.simplify(sym.Matrix([[1/2, 0, 1, 1],
-                                  [-1/2, 0, 1, 1],
-                                  [0, 1/2, 0, 1],
-                                  [0, -1/2, 0, 1]]),
-                                  rational=True)
-    nd_mat = Z1[:, 2:]
-
-    c1 = quantize.decouple_column(Z1[:, 0], nd_mat, cMat)
-    c2 = quantize.decouple_column(Z1[:, 1], nd_mat, cMat)
-    Z2 = sym.Matrix.hstack(c1, c2, nd_mat)
-    test2 = sym.simplify(Z2.transpose()*cMat*Z2)
-    for i in [0, 1]:
-        for j in [2, 3]:
-            assert test2[i,j] == test2[j,i] == 0
-
-
-def test_decoupling_transformation_3block():
-
-    test = sym.Matrix([[1, 2, 3],
-                       [2, 3, 5],
-                       [3, 5, 3]])
-    Z2 = quantize.decoupling_transformation_3block(test, [0], [1], [2])
-    test2 = Z2.transpose()*test*Z2
-    assert test2[1,0] == test2[0,1] == 0
-
-    test = sym.Matrix([[1, 6, 2, 3],
-                       [6, 3, 5, 4],
-                       [2, 5, 5, 3],
-                       [3, 4, 3, 2]])
-    Z2 = quantize.decoupling_transformation_3block(test, [0], [1, 2], [3])
-    test2 = Z2.transpose()*test*Z2
-    for i in [0]:
-        for j in [1, 2]:
-            assert test2[i,j] == test2[j,i] == 0
-    
-    test = sym.Matrix([[1, 6, 2, 3],
-                       [6, 3, 5, 4],
-                       [2, 5, 5, 3],
-                       [3, 4, 3, 2]])
-    Z2 = quantize.decoupling_transformation_3block(test, [0], [1], [2, 3])
-    test2 = Z2.transpose()*test*Z2
-    for i in [0]:
-        for j in [1]:
-            assert test2[i,j] == test2[j,i] == 0
-
-    test = sym.Matrix([[1, 6, 2, 3],
-                       [6, 3, 5, 4],
-                       [2, 5, 5, 3],
-                       [3, 4, 3, 2]])
-    Z2 = quantize.decoupling_transformation_3block(test, [0,1], [2], [3])
-    assert Z2 == sym.eye(4)
-
-    circuit = [("C", "L1"), ("J", "L2")]
-    edges = [(1, 2), (1, 3)]
-    edges = utils.zero_start_edges(edges)
-    cMat = quantize.gen_cap_mat(circuit, edges)
-    Z = sym.simplify(sym.Matrix([[1/2, 0, 1],
-                                [0, 1, 1],
-                                [-1/2, 0, 1]]), rational=True)
-    cTrans = Z.transpose()*cMat*Z
-
-    Z2 = quantize.decoupling_transformation_3block(cTrans, [1], [0], [1])
-    assert Z2 ==  sym.simplify(sym.Matrix([[1, 0, 0],
-                                            [1/2, 1, 0],
-                                            [0, 0, 1]]), rational=True)
-
-
-def test_unique_compact_extended():
-
-    # Transmon
-    edges = [(0, 1)]
-    circuit = [("J", "C")]
-    nd_mat = sym.Matrix([1, 1])
-    # u_ce = quantize.unique_compact_extended(circuit, edges, nd_mat)
-    # assert len(quantize._find_equiv_cols(sym.simplify(sym.Matrix([-1/2, 1/2]), rational=True),
-    #                                            u_ce, shifts=nd_mat)) > 0
-
-    # Bifluxon
-    edges = [(1, 2), (1, 3), (2, 3)]
-    circuit = [("J",), ("J",), ("L",)]
-    nd_mat = sym.Matrix([1, 1, 1])
-    u_ce = quantize.unique_compact_extended(circuit, edges, nd_mat)
-    for Z in u_ce:
-        assert quantize._equal_up_to_column_shift_and_sign(Z[:, 0],
-                                                           sym.simplify(sym.Matrix([2/3, -1/3, -1/3]),
-                                                                        rational=True))
-    
-    
-        assert (quantize._equal_up_to_column_shift_and_sign(Z[:, 1],
-                sym.nsimplify(sym.Matrix([[1/3],
-                                        [-2/3],
-                                        [1/3]]), rational=True)) or
-       quantize._equal_up_to_column_shift_and_sign(Z[:, 1],
-                sym.nsimplify(sym.Matrix([[1/3],
-                                        [1/3],
-                                        [-2/3]]), rational=True))  or
-        quantize._equal_up_to_column_shift_and_sign(Z[:, 1],
-                sym.nsimplify(sym.Matrix([[0],
-                                        [-1],
-                                        [1]]), rational=True)))
-        
-    
-    # Transmon Molecule
-    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
-    circuit = [("J1",), ("J2",), ("C1",), ("C2",)]
-    nd_mat = sym.Matrix([[1,1,0,0],[1,1,1,1]]).transpose()
-    u_ce = quantize.unique_compact_extended(circuit, edges, nd_mat)
-    assert len(u_ce) == 1
-    C1 = [x for x in u_ce[0].free_symbols if "C" in str(x) and "1" in str(x)][0]
-    C2 = [x for x in u_ce[0].free_symbols if "C" in str(x) and "2" in str(x)][0]
-    Cs = C1 + C2
-    ce_expect = sym.Matrix([[C2/Cs, -C1/Cs, 0, 0],
-                            [C1/Cs-1/2, C1/Cs-1/2, 1/2, -1/2]]).transpose()
-    ce_expect = sym.simplify(ce_expect, rational=True)
-    assert quantize._equal_up_to_column_swaps_and_shift_and_sign(u_ce[0], ce_expect)
-
-    # Implementation Details Example Circuit A
-    circuit = [("J",), ("J",), ("J",), ("J", "L"), ("C",), ("C",)]
-    edges = [(1, 2), (1, 3), (2, 3), (3, 4), (1, 4), (2, 4)]
-    nd_mat = sym.ones(4,1)
-    u_ce = quantize.unique_compact_extended(circuit, edges, nd_mat)
-    assert len(u_ce) == 3
-    comp_vars = [sym.Matrix([1/4, -3/4, 1/4, 1/4]), sym.Matrix([1/2, 1/2, -1/2, -1/2]),
-                 sym.Matrix([3/4, -1/4, -1/4, -1/4])]
-    comp_vars = [sym.Matrix.hstack(*combo) for combo in itertools.combinations(comp_vars,2)]
-    ext_vars = [sym.simplify(sym.Matrix([1/4, 1/4, 1/4, -3/4]), rational=True)]
-    for c, e in itertools.product(comp_vars, ext_vars):
-        Z = sym.simplify(sym.Matrix.hstack(c, e), rational=True)
-        assert len(quantize._find_equiv_mats(Z, u_ce, shifts=[nd_mat])) > 0
-
-    # Implementation Details Example Circuit C
-    circuit = [("J",), ("J",), ("J",), ("J",), ("C",), ("L",)]
-    edges = [(1, 2), (1, 3), (2, 3), (3, 4), (1, 4), (2, 4)]
-    nd_mat = sym.ones(4,1)
-    u_ce = quantize.unique_compact_extended(circuit, edges, nd_mat)
-    assert len(u_ce) == 21
-    comp_vars = [sym.Matrix([1/2, -1/2, 1/2, -1/2]),
-                 sym.Matrix([3/4, -1/4, -1/4, -1/4]),
-                 sym.Matrix([1/4, 1/4, -3/4, 1/4])]
-    comp_vars = [sym.Matrix.hstack(*combo) for combo in itertools.combinations(comp_vars,2)]
-    ext_vars = [sym.Matrix([1/4, -3/4, 1/4, 1/4]),
-                sym.Matrix([1/4, 1/4, 1/4, -3/4]),
-                sym.Matrix([1/2, 1/2, -1/2, -1/2]),
-                sym.Matrix([3/4, 3/4, -1/4, -5/4]),
-                sym.Matrix([0, 1, 0, -1]),
-                sym.Matrix([1, 0, 0, -1]),
-                sym.Matrix([1/2, -1/2, -1/2, 1/2])
-                ]
-    for c, e in itertools.product(comp_vars, ext_vars):
-        Z = sym.simplify(sym.Matrix.hstack(c, e), rational=True)
-        assert len(quantize._find_equiv_mats(Z, u_ce, shifts=[nd_mat])) > 0
-
-
-
-
-def test_unique_harmonic():
-
-    # Transmon
-    edges = [(0, 1)]
-    circuit = [("J", "C")]
-    nd_mat = sym.ones(2,1)
-    u_h = quantize.unique_harmonic(circuit, edges, nd_mat)
-    assert len(u_h) == 0
-
-    # Zero pi
-    edges = [(1, 2), (3, 4), (1, 4), (2, 3), (1, 3), (2, 4)]
-    circuit = [("J",), ("J",), ("L",), ("L",), ("C",), ("C",)]
-    nd_mat = sym.ones(4,1)
-    u_h = quantize.unique_harmonic(circuit, edges, nd_mat)
-    assert len(u_h) == 1
-    assert len(quantize._find_equiv_mats(sym.simplify(
-                         sym.Matrix([-1/2, -1/2, 1/2, 1/2]), rational=True),
-                                               u_h)) > 0
-    
-    # Fully linear
-    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
-    circuit = [("L1",), ("L2",), ("C1",), ("C2",)]
-    nd_mat = sym.Matrix([[1, 1, 1],
-                         [1, 0, 1],
-                         [0, 1, 1],
-                         [0, 0, 1]])
-    u_h = quantize.unique_harmonic(circuit, edges, nd_mat)
-    shifts = [nd_mat[:,j] for j in range(nd_mat.shape[1])]
-    C1 = [x for x in u_h[0].free_symbols if "1" in str(x) and "C" in str(x)][0]
-    C2 = [x for x in u_h[0].free_symbols if "2" in str(x) and "C" in str(x)][0]
-    Cs = C1 + C2
-    L1 = [x for x in u_h[0].free_symbols if "1" in str(x) and "L" in str(x)][0]
-    L2 = [x for x in u_h[0].free_symbols if "2" in str(x) and "L" in str(x)][0]
-    Ls = L1 + L2
-    u_h_expect = sym.simplify(sym.Matrix([L1/Ls - C1/Cs, -C1/Cs, -L2/Ls, 0]), rational=True)
-    assert len(quantize._find_equiv_mats(u_h_expect,u_h,shifts=shifts)) > 0
-
-    # Multiple Harmonic Modes
-    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
-    circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
-    nd_mat = sym.ones(4,1)
-    u_h = quantize.unique_harmonic(circuit, edges, nd_mat)
-    x = sym.simplify(sym.Matrix([1, 0, 1, 0]), rational=True)
-    y = sym.simplify(sym.Matrix([1, 0, 0, 0]), rational=True)
-    assert len(u_h) == 6
-    assert len(quantize._find_equiv_mats(sym.Matrix.hstack(x,y), u_h, shifts=[nd_mat])) > 0
-    assert len(quantize._find_equiv_mats(sym.Matrix.hstack(x,x+y), u_h, shifts=[nd_mat])) > 0
-    assert len(quantize._find_equiv_mats(sym.Matrix.hstack(x,x-y), u_h, shifts=[nd_mat])) > 0
-    assert len(quantize._find_equiv_mats(sym.Matrix.hstack(x+y,y), u_h, shifts=[nd_mat])) > 0
-    assert len(quantize._find_equiv_mats(sym.Matrix.hstack(x-y,y), u_h, shifts=[nd_mat])) > 0
-    assert len(quantize._find_equiv_mats(sym.Matrix.hstack(x+y,x-y), u_h, shifts=[nd_mat])) > 0
    
 
 def test_H_hash():
@@ -1031,101 +981,84 @@ def test_H_hash():
     # Transmon
     edges = [(0, 1)]
     circuit = [("J", "C")]
-    all_Z, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    _, var_types = quantize.var_trans_basis(circuit, edges)
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
+    Z = sym.Matrix([[1, 1], [0, 1]])
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    hashes = [quantize.H_hash(Z, var_types, cMat, lMat, wJ) for Z in all_Z]
-    assert len(hashes) == 1
-    assert hashes[0][0] == "100_0-_0_0-_0-"
+    hashes = quantize.H_hash(Z, var_types, cMat, lMat, wJ)
+    assert hashes[0] == "100_0-_0_0-_0-"
     assert quantize._find_equiv_mats(sym.Matrix([[1, 1],
-                                                 [0,1]]), 
-                                     [hashes[0][1]]) == [0]
+                                                 [0, 1]]), 
+                                     [hashes[1]]) == [0]
 
     # Zero-pi
     circuit = [("J",),("J",), ("L",), ("L",), ("C",), ("C",)]
     edges = [(0, 1), (2, 3), (0, 3), (1, 2), (0, 2), (1, 3)]
-    all_Z, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    _, var_types = quantize.var_trans_basis(circuit, edges)
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    hashes = [quantize.H_hash(Z, var_types, cMat, lMat, wJ)[0] for Z in all_Z]
-    assert len(hashes) == 3
-    assert hashes.count('111_1-100_1_0-000_1-100') == 2
-    assert hashes.count('111_1-100_0_0-000_0-000') == 1
+    Z = sym.Matrix([[1, 1, 1, 1],
+                    [0, 0, 1, 1],
+                    [0, 1, 0, 1],
+                    [1, 0, 0, 1]])
+    hashes = quantize.H_hash(Z, var_types, cMat, lMat, wJ)
+    assert hashes[0] == '111_1-100_0_0-000_0-000'
+    assert quantize._find_equiv_mats(Z, [hashes[1]]) == [0]
 
     circuit = [("J1",),("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
-    Z = sym.Matrix([[1, 1, 1, 1], [0, 0, 1, 1], [0, 1, 0, 1],[1, 0, 0, 1]])
     hash, _ = quantize.H_hash(Z, var_types, cMat, lMat, wJ)
     assert hash == '111_1-100_4_1-001_3-111'
+    hash, _ = quantize.H_hash(Z, var_types, cMat, lMat, wJ, ordering_matters=False)
+    assert hash == '111_1_4_1_3'
 
-    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
-    circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
-    all_Z, var_types = quantize.gen_spaced_var_trans(circuit, edges)
-    # Swap columns to see if hashing will pick right column order
-    cMat = quantize.gen_cap_mat(circuit, edges)
-    lMat = quantize.gen_ind_mat(circuit, edges)
-    wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    hashes = [quantize.H_hash(Z, var_types, cMat, lMat, wJ) for Z in all_Z]
-    Z_final = [h[1] for h in hashes]
-    hashes = [h[0] for h in hashes]
-    assert len(hashes) == 6
-    assert min(hashes) == "012_0-000_5_2-011_3-111"
-    assert max(hashes) == "012_0-000_6_3-111_3-111"
-    for i in range(len(all_Z)):
-        if hashes[i] == "012_0-000_5_2-011_3-111":
-            lMatTrans1 = all_Z[i].transpose()*lMat*all_Z[i]
-            lMatTrans2 = Z_final[i].transpose()*lMat*Z_final[i]
-            if quantize._nonzero_entries_str(quantize.num_subs(lMatTrans1[:3,:3], symbol="L")[0]) != "2-011":
-                assert quantize._equal_up_to_column_shift_and_sign(Z_final[i],
-                                                                all_Z[i][:, [0, 2, 1, 3]],
-                                                                shifts=[])
-            else:
-                assert quantize._equal_up_to_column_shift_and_sign(Z_final[i],
-                                                                all_Z[i],
-                                                                shifts=[])
-        else:
-            assert Z_final[i] == all_Z[i]
+
+def test_incidence_to_square():
+
+    wTest = sym.Matrix([[1, 0, 1, 1],
+                        [0, -1/2, 0, 1],
+                        [0, 1/2, 0, 1],
+                        [1, 0, -1, 1.0]])
+    ans = functools.reduce(lambda a,b: a+b, [wTest[:,i]*wTest[:,i].transpose() for i in range(4)], sym.zeros(4,4))
+    wSquare = quantize.incidence_to_square(wTest, [1,1,1,1])
+    assert (wSquare - ans).is_zero_matrix
 
 
 def test_gen_cap_mat():
 
-    # Transmon
     edges = [(0, 1)]
-    circuit = [("J", "C")]
-    obj = pi.to_SCqubits(circuit, edges)
-    Z = sym.Matrix(obj.transformation_matrix)
+    circuit = [("L")]
+    try:
+        cMat = quantize.gen_cap_mat(circuit, edges)
+    except Exception as e:
+        assert isinstance(e, ValueError)
 
-    C = quantize.gen_cap_mat(circuit, edges)
-    ans = r'\left[\begin{matrix}C + C_{J} & - C - C_{J}\\- C - C_{J} & C + C_{J}\end{matrix}\right]'
-    assert sym.latex(C, order="grlex") == ans
+    edges = [(0, 1)]
+    circuit = [("C", "L")]
+    cMat = quantize.gen_cap_mat(circuit, edges)
+    C = cMat.free_symbols.pop()
+    assert cMat/C == sym.Matrix([[1, -1],
+                                 [-1, 1]])
 
 
 def test_gen_ind_mat():
 
-    # Transmon
     edges = [(0, 1)]
     circuit = [("J", "C")]
-    obj = pi.to_SCqubits(circuit, edges)
-    Z = sym.Matrix(obj.transformation_matrix)
+    lMat = quantize.gen_ind_mat(circuit, edges)
+    assert lMat == sym.Matrix([[0, 0],
+                               [0, 0]])
 
-    L = quantize.gen_ind_mat(circuit, edges)
-    ans = r'\left[\begin{matrix}0 & 0\\0 & 0\end{matrix}\right]'
-    assert sym.latex(L, order="grlex") == ans
-
-    # Fluxonium
     edges = [(0, 1)]
-    circuit = [("J", "L")]
-    obj = pi.to_SCqubits(circuit, edges)
-    Z = sym.Matrix(obj.transformation_matrix)
-    L = quantize.gen_ind_mat(circuit, edges)
-    ans = r'\left[\begin{matrix}\frac{1}{L} & - \frac{1}{L}\\- \frac{1}{L} & \frac{1}{L}\end{matrix}\right]'
-
-    assert sym.latex(L, order="grlex") == ans
-
-
+    circuit = [("J", "C", "L")]
+    lMat = quantize.gen_ind_mat(circuit, edges)
+    L = lMat.free_symbols.pop()
+    assert lMat*L == sym.Matrix([[1, -1],
+                                 [-1, 1]])
+    
 def test_gen_w():
 
     # Transmon
@@ -1142,7 +1075,8 @@ def test_gen_w():
     edges = [(0, 1)]
     circuit = [("J", "C")]
     w = quantize.gen_w(circuit, edges, w_elem="L")
-    assert w == sym.Matrix([[]])
+    assert w == sym.Matrix([[0],
+                            [0]])
     
     # 0-pi
     edges = [(1, 2), (3, 4), (1, 4), (2, 3), (1, 3), (2, 4)]
@@ -1154,198 +1088,147 @@ def test_gen_w():
                            [0, -1]])
 
 
-def test_gen_spaced_var_trans():
+def test_var_trans_basis():
+
+
+    circuit, edges = ([('J',), ('J', 'L'), ('C', 'J', 'L')], [(0, 1), (0, 2), (1, 2)])
+    Z, var_types = quantize.var_trans_basis(circuit, edges)
+    assert var_types["extended"] == [0,1]
+    assert var_types["sigma"] == [2]
+    assert Z.det() != 0
+    for i in range(3):
+        for j in range(3):
+            assert Z[i,j].is_finite
 
     # Was making singular Z
     circuit = [('J_1',), ('J_2',), ('C_1', 'L_1'), ('L_2',)]
     edges = [(0, 2), (0, 3), (1, 3), (2, 3)]
-    trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
-    assert all(Z.det() != 0 for Z in trans)
+    Z, var_types = quantize.var_trans_basis(circuit, edges)
+    assert Z.det() != 0
 
     # Well-spaced and decoupled not possible for harmonic
     circuit, edges = ([('C', 'L'), ('L',), ('J',), ('L',)],
                       [(0, 2), (0, 3), (1, 3), (2, 3)])
-    trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    trans, var_types = quantize.var_trans_basis(circuit, edges)
     assert var_types["compact"] == [0]
     assert var_types["harmonic"] == [1]
     assert var_types["frozen"] == [2]
     assert var_types["sigma"] == [3]
 
     circuit, edges = [('J',), ('J',), ('J',)], [(0, 3), (1, 3), (2, 3)]
-    trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    trans, var_types = quantize.var_trans_basis(circuit, edges)
     assert var_types["compact"] == [0, 1, 2]
     assert var_types["sigma"] == [3]
-    assert len(trans) == 1
 
     circuit, edges = [('J',), ('J',), ('J',)], [(0, 1), (0, 2), (1, 2)]
-    trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    trans, var_types = quantize.var_trans_basis(circuit, edges)
     assert var_types["compact"] == [0, 1]
     assert var_types["sigma"] == [2]
-    assert len(trans) == 3
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-               sym.nsimplify(sym.Matrix([[2/3, 1/3, 1],
-                                     [-1/3, -2/3, 1],
-                                     [-1/3, 1/3, 1]]), rational=True), t)
-                for t in trans)
-    any(quantize._equal_up_to_column_shift_and_sign(
-                sym.nsimplify(sym.Matrix([[2/3, 1/3, 1],
-                                     [-1/3, 1/3, 1],
-                                     [-1/3, -2/3, 1]]), rational=True), t)
-                for t in trans)
-    any(quantize._equal_up_to_column_shift_and_sign(
-                sym.nsimplify(sym.Matrix([[1/3, 1/3, 1],
-                                     [1/3, -2/3, 1],
-                                     [-2/3, 1/3, 1]]), rational=True), t)
-                for t in trans)
     
-
     # Bifluxon
     edges = [(1, 2), (1, 3), (2, 3)]
     circuit = [("J",), ("J",), ("L",)]
-    trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    trans, var_types = quantize.var_trans_basis(circuit, edges)
     assert var_types["compact"] == [0]
     assert var_types["extended"] == [1]
     assert var_types["sigma"] == [2]
-    assert len(trans) == 3
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-               sym.nsimplify(sym.Matrix([[2/3, 1/3, 1],
-                                     [-1/3, -2/3, 1],
-                                     [-1/3, 1/3, 1]]), rational=True), t)
-                for t in trans)
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-                sym.nsimplify(sym.Matrix([[2/3, 1/3, 1],
-                                     [-1/3, 1/3, 1],
-                                     [-1/3, -2/3, 1]]), rational=True), t)
-                for t in trans)
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[2/3, 0, 1],
-                                     [-1/3, -1, 1],
-                                     [-1/3, 1, 1]]), rational=True), t)
-                    for t in trans)
     
     edges = [(1, 2), (1, 3), (2, 3), (1, 4)]
     circuit = [("J",), ("J",), ("L",), ("C", "L")]
-    trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    trans, var_types = quantize.var_trans_basis(circuit, edges)
     assert var_types["compact"] == [0]
     assert var_types["extended"] == [1]
     assert var_types["harmonic"] == [2]
     assert var_types["sigma"] == [3]
-    Z1 = sym.nsimplify(sym.Matrix([[2/3, 1/3, 1/2, 1],
-                                     [-1/3, -2/3, 1/2, 1],
-                                     [-1/3, 1/3, 1/2, 1],
-                                     [2/3, 0, -1/2, 1]]), rational=True)
-    Z2 = sym.nsimplify(sym.Matrix([[2/3, 1/3, 1/2, 1],
-                                     [-1/3, 1/3, 1/2, 1],
-                                     [-1/3, -2/3, 1/2, 1],
-                                     [2/3, 0, -1/2, 1]]), rational=True)
-    # BAD det = 0 transformation
-    Z3 = sym.nsimplify(sym.Matrix([[2/3, 2/3, 1/2, 1],
-                                     [-1/3, -1/3, 1/2, 1],
-                                     [-1/3, -1/3, 1/2, 1],
-                                     [2/3, 0, -1/2, 1]]), rational=True)
-    Z4 = sym.nsimplify(sym.Matrix([[2/3, 0, 1/2, 1],
-                                     [-1/3, -1, 1/2, 1],
-                                     [-1/3, 1, 1/2, 1],
-                                     [2/3, 0, -1/2, 1]]), rational=True)
-    assert len(trans) == 3
-    for Z in [Z1, Z2, Z4]:
-        assert any(quantize._equal_up_to_column_shift_and_sign(Z, t) for t in trans)
-    assert not any(quantize._equal_up_to_column_shift_and_sign(Z3, t) for t in trans)
-
 
     edges = [(1, 2), (1, 3), (2, 3), (1, 4)]
     circuit = [("C",), ("L",), ("J",), ("J",)]
-    trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    trans, var_types = quantize.var_trans_basis(circuit, edges)
     assert var_types["compact"] == [0, 1]
     assert var_types["harmonic"] == [2]
     assert var_types["sigma"] == [3]
-    assert len(trans) == 1
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[-1/2, 0, 1/2, 1],
-                                     [1/2, 0, -1/2, 1],
-                                     [-1/2, 0, -1/2, 1],
-                                     [-1/2, -1, 1/2, 1]]), rational=True), t)
-                                     for t in trans)
-
 
     # Transmon Molecule
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("J",), ("J",), ("C",), ("C",)]
-    trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    trans, var_types = quantize.var_trans_basis(circuit, edges)
     assert var_types["compact"] == [0, 1]
     assert var_types["free"] == [2]
     assert var_types["sigma"] == [3]
-    assert len(trans) == 1
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[1/2, 0, 1/2, 1],
-                                     [-1/2,0, 1/2, 1],
-                                     [0, 1/2, -1/2,1],
-                                     [0, -1/2,-1/2,1]]), rational=True), t)
-                                     for t in trans)
-
+   
     # Zero pi
     edges = [(1, 2), (3, 4), (1, 4), (2, 3), (1, 3), (2, 4)]
     circuit = [("J",), ("J",), ("L",), ("L",), ("C",), ("C",)]
-    trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    trans, var_types = quantize.var_trans_basis(circuit, edges)
     assert var_types["compact"] == [0]
     assert var_types["extended"] == [1]
     assert var_types["harmonic"] == [2]
     assert var_types["sigma"] == [3]
-    assert len(trans) == 3
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[-1/2, 1/2, 1/2, 1],
-                                     [1/2,-1/2, 1/2, 1],
-                                     [1/2, 0, -1/2,1],
-                                     [-1/2, 0,-1/2,1]]), rational=True), t)
-                                     for t in trans)
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[-1/2, 0, 1/2, 1],
-                                     [1/2, 0, 1/2, 1],
-                                     [1/2, 1/2, -1/2,1],
-                                     [-1/2, -1/2,-1/2,1]]), rational=True), t)
-                                     for t in trans)
-    assert any(quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[-1/2, 1/2, 1/2, 1],
-                                     [1/2,-1/2, 1/2, 1],
-                                     [1/2, 1/2, -1/2,1],
-                                     [-1/2, -1/2,-1/2,1]]), rational=True), t)
-                                     for t in trans)
     
     # Fully linear
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("L",), ("L",), ("C",), ("C",)]
-    trans, var_types = quantize.gen_spaced_var_trans(circuit, edges)
+    trans, var_types = quantize.var_trans_basis(circuit, edges)
     assert var_types["harmonic"] == [0]
     assert var_types["free"] == [1]
     assert var_types["frozen"] == [2]
     assert var_types["sigma"] == [3]
 
 
-    # All three node circuits
-    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
-    # for n in range(2, 5):
-    #     df = utils.get_unique_qubits(db_path, n)
-    #     from tqdm import tqdm
-    #     for i, row in tqdm(df.iterrows(), total=df.shape[0]):
-    #         # print(row.circuit, row.edges)
-    #         trans, var_types = quantize.gen_spaced_var_trans(row.circuit, row.edges)
-    #         # print(len(trans), "transformations")
-    #         try:
-    #             assert row.n_periodic == len(var_types.get("compact", []))
-    #             assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
-    #         except:
-    #             print("Failed", row.circuit, row.edges)
-    #             breakpoint()
+def test_secondary_decouple():
+
+    # Make sure it's not nan
+    circuit, edges = ([('J',), ('J', 'L'), ('C', 'J', 'L')], [(0, 1), (0, 2), (1, 2)])
+    Z, var_types = quantize.var_trans_basis(circuit, edges)
+    assert var_types["extended"] == [0,1]
+    assert var_types["sigma"] == [2]
+    assert Z.det() != 0
+    for i in range(3):
+        for j in range(3):
+            assert Z[i,j].is_finite
+    cMat = quantize.gen_cap_mat(circuit, edges)
+    lMat = quantize.gen_ind_mat(circuit, edges)
+    wJ = quantize.gen_w(circuit, edges, w_elem="J")
+    Z2 = quantize.secondary_decouple(Z, var_types, cMat, lMat, return_instance=True)
+    for i in range(3):
+        for j in range(3):
+            assert Z2[i,j].is_finite
 
 
-def test_secondary_transformation_harm_ext():
+    # Debugging example
+    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    circuit = [("L_1", "C_1"), ("L_2", "C_2"), ("L_3",), ("J_1",)]
+    cMat = quantize.gen_cap_mat(circuit, edges)
+    lMat = quantize.gen_ind_mat(circuit, edges)
+    edges = utils.renumber_nodes(edges)
+    wJ = quantize.gen_w(circuit, edges, w_elem="J")
+    Z0, var_types = quantize.var_trans_basis(circuit, edges)
+    Z = quantize.secondary_decouple(Z0, var_types, cMat, lMat)
+    val, Z_perm = quantize.H_hash(quantize._find_Z_instance(Z0*Z, Z.free_symbols), var_types, cMat, lMat, wJ)
+    assert val == '012_0-000_3_2-011_1-001'
+
+
+    # Very slow right now with identical parameters
+    # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    # circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
+    # cMat = quantize.gen_cap_mat(circuit, edges)
+    # lMat = quantize.gen_ind_mat(circuit, edges)
+    # Z0, var_types = quantize.var_trans_basis(circuit, edges)
+    # Z = Z0*quantize.secondary_decouple(Z, var_types, cMat, lMat)
+    # cMat = quantize.gen_cap_mat(circuit, edges)
+    # lMat = quantize.gen_ind_mat(circuit, edges)
+    # wJ = quantize.gen_w(circuit, edges, w_elem="J")
+    # hashes = quantize.H_hash(quantize._find_Z_instance(Z, Z.free_symbols), var_types, cMat, lMat, wJ)
+    # assert hashes[0] == "012_0-000_3_0-000_3-111"
+
 
     # Example from secondary transformation section
     circuit = [("C", "L1"), ("J", "L2")]
     edges = [(1, 2), (1, 3)]
-    edges = utils.zero_start_edges(edges)
+    edges = utils.renumber_nodes(edges)
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
+    wJ = quantize.gen_w(circuit, edges, "J")
     Z0 = sym.simplify(sym.Matrix([[1/2, 0, 1],
                                 [0, 1, 1],
                                 [-1/2, 0, 1]]), rational=True)
@@ -1353,35 +1236,84 @@ def test_secondary_transformation_harm_ext():
                 "extended": [0],
                 "harmonic": [1],
                 "sigma": [2]}
-    Z2, hash = quantize.secondary_transformation_harm_ext(Z0, var_types, cMat, lMat)
-    assert Z2 ==  sym.simplify(sym.Matrix([[1, 0, 0],[1/2, 1, 0],[0, 0, 1]]), rational=True)
-    assert hash == "011_0-0_0_0-0_0-0"
+    Z2 = quantize.secondary_decouple(Z0, var_types, cMat, lMat)
+    Z_comp = quantize._find_Z_instance(Z2, Z2.free_symbols, vals=[1/2])
+    assert quantize._equal_up_to_column_swaps_and_shift_and_sign(Z_comp,
+                                                                 sym.simplify(sym.Matrix([[1.0, 0, 0],[1/2, 1/2, 0],[0, 0, 1]]), rational=True),
+                                                                 shifts=[sym.ones(3,1)])
+    val = quantize.H_hash(quantize._find_Z_instance(Z0*Z2, Z2.free_symbols), var_types, cMat, lMat, wJ)[0]
+    assert val == "011_0-0_0_0-0_0-0"
 
-    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
-    circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
-    cMat = quantize.gen_cap_mat(circuit, edges)
-    lMat = quantize.gen_ind_mat(circuit, edges)
-    all_Z, var_types = quantize.gen_spaced_var_trans(circuit, edges)
-    all_Z = [Z*quantize.secondary_transformation_harm_ext(Z, var_types, cMat, lMat)[0]
-             for Z in all_Z]
-    # Swap columns to see if hashing will pick right column order
-    cMat = quantize.gen_cap_mat(circuit, edges)
-    lMat = quantize.gen_ind_mat(circuit, edges)
-    wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    hashes = [quantize.H_hash(Z, var_types, cMat, lMat, wJ) for Z in all_Z]
-    Z_final = [h[1] for h in hashes]
-    hashes = [h[0] for h in hashes]
-    assert len(hashes) == 6
-    assert min(hashes) == "012_0-000_3_0-000_3-111"
-    assert max(hashes) == "012_0-000_4_1-001_3-111"
 
 
 def test_choose_Z():
 
+
+
+    # All three node circuits
+    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    # import time
+    # for n in range(4, 5):
+    #     df = utils.get_unique_qubits(db_path, n).iloc[:]
+    #     from tqdm import tqdm
+    #     order = np.arange(df.shape[0])
+    #     # np.random.shuffle(order)
+    #     times = np.zeros(order.size)
+    #     start = 0 #381+92
+    #     for i in tqdm(order[start:], initial=start):
+    #         # print(row.circuit, row.edges)
+    #         row = df.iloc[i]
+    #         circuit = row.circuit
+    #         circuit = utils.add_elem_number(circuit)
+    #         edges = row.edges
+    #         # print("circuit = ", circuit)
+    #         # print("edges = ", edges)
+    #         # print(len(trans), "transformations")
+    #         # try:
+    #         t0 = time.time()
+    #         Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
+    #         tf = time.time()
+    #         times[i] = tf-t0
+            # assert row.n_periodic == len(var_types.get("compact", []))
+            # assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
+            # except:
+            #     print("Failed", row.circuit, row.edges)
+            #     breakpoint()
+
+    # breakpoint()
+    # i = np.argmax(times)
+    # print(np.max(times), i)
+    # print("circuit = ", df.iloc[i].circuit)
+    # print("edges = ", df.iloc[i].edges)
+
+    circuit, edges = ([('J',), ('J', 'L'), ('C', 'J', 'L')], [(0, 1), (0, 2), (1, 2)])
+    Z, var_types, hash = quantize.choose_Z(circuit, edges, return_instance=True)
+    assert var_types["extended"] == [0,1]
+    assert var_types["sigma"] == [2]
+    for i in range(3):
+        for j in range(3):
+            assert Z[i,j].is_finite
+
+    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    circuit = [("L1", "C1"), ("L2", "C2"), ("L3",), ("J",)]
+    # Swap columns to see if hashing will pick right column order
+    cMat = quantize.gen_cap_mat(circuit, edges)
+    lMat = quantize.gen_ind_mat(circuit, edges)
+    wJ = quantize.gen_w(circuit, edges, w_elem="J")
+    t0 = time.time()
+    Z, var_types, hash = quantize.choose_Z(circuit, edges, return_instance=False)
+    print(time.time() - t0)
+    # Z2, var_types2, hash2 = quantize.choose_Z(circuit, edges, return_instance=True)
+    # breakpoint()
+    print(hash)
+    assert hash == "012_0-000_3_2-011_1-001"
+    # assert False
+
+
     # Was making singular Z
     circuit = [('J_1',), ('J_2',), ('C_1', 'L_1'), ('L_2',)]
     edges = [(0, 2), (0, 3), (1, 3), (2, 3)]
-    Z, var_types, hash = quantize.choose_Z(circuit, edges)
+    # Z, var_types, hash = quantize.choose_Z(circuit, edges)
 
     # Transmon Molecule + cap
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
@@ -1413,23 +1345,24 @@ def test_choose_Z():
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    Z, var_types, hash = quantize.choose_Z(circuit, edges)
+    Z, var_types, hash = quantize.choose_Z(circuit, edges, return_instance=True)
     assert quantize._find_equiv_mats(sym.Matrix([[1, 1, 1, 1],
-                                                 [0, 0, 1, 1],
-                                                 [0, 1, 0, 1],
-                                                 [1, 0, 0, 1]]), 
-                                     [Z]) == [0]
+                                                [0, 0, 1, 1],
+                                                [0, 1, 0, 1],
+                                                [1, 0, 0, 1]]), 
+                                    [Z]) == [0]
     assert hash == '111_1-100_0_0-000_0-000'
 
-    circuit = [("J1",),("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
+    circuit = [("J1",), ("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
     Z, var_types, hash = quantize.choose_Z(circuit, edges)
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
-    assert quantize._find_equiv_mats(sym.Matrix([[1, 1, 1, 1],
-                                                 [0, 0, 1, 1],
-                                                 [0, 1, 0, 1],
-                                                 [1, 0, 0, 1]]), 
-                                     [Z]) == [0]
+    # breakpoint()
+    # assert quantize._find_equiv_mats(sym.Matrix([[1, 1, 1, 1],
+    #                                              [0, 0, 1, 1],
+    #                                              [0, 1, 0, 1],
+    #                                              [1, 0, 0, 1]]), 
+    #                                  [Z]) == [0]
     assert hash == '111_1-100_4_1-001_3-111'
 
     circuit = [("J",),("J",), ("L1",), ("L2",), ("C1",), ("C2",)]
@@ -1445,15 +1378,6 @@ def test_choose_Z():
                                      [Z]) == [0]
     assert hash == '111_1-100_2_1-001_1-010'
 
-
-    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
-    circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
-    # Swap columns to see if hashing will pick right column order
-    cMat = quantize.gen_cap_mat(circuit, edges)
-    lMat = quantize.gen_ind_mat(circuit, edges)
-    wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    Z, var_types, hash = quantize.choose_Z(circuit, edges)
-    assert hash == "012_0-000_3_0-000_3-111"
 
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("L1", "C1"), ("L2", "C2"), ("L3",), ("J",)]
@@ -1514,10 +1438,6 @@ def test_choose_Z():
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    assert quantize._equal_up_to_column_shift_and_sign(
-                    sym.nsimplify(sym.Matrix([[2/3, 0, 1],
-                                     [-1/3, -1, 1],
-                                     [-1/3, 1, 1]]), rational=True), Z)
     assert hash == "110_1-1_1_0-0_1-1"
 
 
@@ -1550,19 +1470,15 @@ def test_choose_Z():
     # Example from secondary transformation section
     circuit = [("C", "L1"), ("J", "L2")]
     edges = [(1, 2), (1, 3)]
-    edges = utils.zero_start_edges(edges)
+    edges = utils.renumber_nodes(edges)
     cMat = quantize.gen_cap_mat(circuit, edges)
     Z, var_types, hash = quantize.choose_Z(circuit, edges)
     assert var_types["extended"] == [0]
     assert var_types["harmonic"] == [1]
     assert var_types["sigma"] == [2]
     assert hash == "011_0-0_0_0-0_0-0"
-    assert quantize._equal_up_to_column_shift_and_sign(sym.simplify(sym.Matrix([[0, 0, 1],
-                                                                                [0, 1, 1],
-                                                                                [1, 0, 1]]),
-                                                                                rational=True),
-                                                                                Z)
 
+<<<<<<< HEAD
 
     # All three node circuits
     db_path = "circuits_4_nodes_7_elems.db"
@@ -1584,6 +1500,28 @@ def test_choose_Z():
             except:
                 print("Failed", row.circuit, row.edges)
                 breakpoint()
+=======
+    # # All three node circuits
+    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    # for n in range(4, 5):
+    #     df = utils.get_unique_qubits(db_path, n).iloc[:]
+    #     from tqdm import tqdm
+    #     order = np.arange(df.shape[0])
+    #     np.random.shuffle(order)
+    #     for i in tqdm(order[:10]):
+    #         # print(row.circuit, row.edges)
+    #         row = df.iloc[i]
+    #         circuit = row.circuit
+    #         circuit = utils.add_elem_number(circuit)
+    #         # print(len(trans), "transformations")
+    #         try:
+    #             Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
+    #             assert row.n_periodic == len(var_types.get("compact", []))
+    #             assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
+    #         except:
+    #             print("Failed", row.circuit, row.edges)
+    #             breakpoint()
+>>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
                 
 def test_gen_junc_pot():
 
@@ -1610,24 +1548,24 @@ def test_num_subs():
     X = sym.Matrix([[C1, 1, C2],
                     [C3, C1, L1]])
     test, vals = quantize.num_subs(X, symbol="C", hermitify=False)
-    assert test[0,0] == test[1,1] == vals["C1"]
-    assert test[0,2] == vals["C2"]
-    assert test[1,0] == vals["C3"]
+    assert test[0,0] == test[1,1] == vals[C1]
+    assert test[0,2] == vals[C2]
+    assert test[1,0] == vals[C3]
     assert test[0,1] == 1
     assert L1 in test.free_symbols
 
     X = sym.Matrix([[C1, 1, C2],
                     [C3, C1, L1]])
     test, vals = quantize.num_subs(X, symbol="L", hermitify=False)
-    assert test[1,2] == vals["L1"]
+    assert test[1,2] == vals[L1]
     assert test[0,1] == 1
     assert all(x in test.free_symbols for x in  [C1, C2, C3])
 
-    vals_in = {"C1": 1, "C2":2, "C3":3}
+    vals_in = {C1: 1, C2:2, C3:3}
     test, vals = quantize.num_subs(X, symbol="C", vals_in=vals_in, hermitify=False)
-    assert test[0,0] == test[1,1] == vals["C1"] == vals_in["C1"]
-    assert test[0,2] == vals["C2"] == vals_in["C2"]
-    assert test[1,0] == vals["C3"] == vals_in["C3"]
+    assert test[0,0] == test[1,1] == vals[C1] == vals_in[C1]
+    assert test[0,2] == vals[C2] == vals_in[C2]
+    assert test[1,0] == vals[C3] == vals_in[C3]
     assert test[0,1] == 1
     assert L1 in test.free_symbols
 
@@ -1635,7 +1573,7 @@ def test_num_subs():
     X = sym.Matrix([[CJ, C1],
                     [C1, 1]])
     test, vals = quantize.num_subs(X, symbol="C", exclude="J", hermitify=True)
-    assert test[1,0] == test[0,1] == vals["C1"]
+    assert test[1,0] == test[0,1] == vals[C1]
     assert test[1,1] == 1
     assert CJ in test.free_symbols
     assert test == test.transpose()
@@ -1645,7 +1583,7 @@ def test_num_subs():
                     [C1, 1]])
     test, vals = quantize.num_subs(X, symbol=r"C_{J}", hermitify=True)
     assert test[1,0] == test[0,1] == C1/2
-    assert test[0,0] == vals["C_{J}"]
+    assert test[0,0] == vals[CJ]
     assert all(x in test.free_symbols for x in  [C1])
     assert test == test.transpose()
 
@@ -1736,36 +1674,40 @@ if __name__ == "__main__":
     # H, trans, H_class = enum.gen_hamiltonian(entry.circuit, entry.edges,
     #                                         cob=Z, var_class = var_class, symmetric=False)
 
-    x = 1
-
     # test__wT_key()
+    # test__sort_wT()
     # test__sub_equal_LC()
     # test_num_subs()
     # test_symbolic_hamiltonian()
     # test_collect_H_terms()
 
-    # test_find_islands()
     # test_decoupling_transformation()
     # test_decouple_column()
     # test__var_col_perms()
-    # test_secondary_transformation_harm_ext()
-    # test_decoupling_transformation_3block()
 
-    # test__unique_col_combos()
-
-    # # test_unique_compact()
+    # test_unique_compact()
     # test__find_equiv_mats()
     # test__find_equiv_cols()
-    # test_unique_compact_extended()
-    # test_unique_harmonic()
     # test_H_hash()
-    # test_gen_spaced_var_trans()
-    test_choose_Z()
+    # test__find_Z_instance()
+    # test__fully_compatible_set()
+    # test__unique_products()
+    # test__sol_indep_of_vars()
 
-    # # test__vec_space_overlap()
+    # test__vec_space_overlap()
+    # test__independent_from()
     # test__nonzero_entries_str()
-    # test__sort_wT()
-
     # test_choose_Z()
+
+    test_choose_Z()
     # test__maximize_wT()
     # test__wT_key()
+    # test_var_trans_basis()
+
+    # test__to_eq_list()
+    # test_H_hash()
+    # test_incidence_to_square()
+    # test_gen_cap_mat()
+    # test_var_trans_basis()
+    # test_secondary_decouple()
+    # test__cached_solve()

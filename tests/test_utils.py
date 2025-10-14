@@ -6,6 +6,7 @@ import numpy as np
 import networkx as nx
 import pandas as pd
 from pathlib import Path
+import sympy as sym
 
 from sircuitenum import utils
 from test_qpackage_interface import TEST_CIRCUITS
@@ -818,6 +819,14 @@ def write_test_df(fname: str = TEMP_FILE, overwrite: bool = False):
     utils.write_df(TEMP_FILE, df, 3, overwrite=overwrite)
 
     return df
+
+
+def test_run_with_timeout():
+    func = sym.simplify
+    x,y = sym.symbols('x y')
+    assert utils.run_with_timeout(func, (x + y)) == x + y
+    assert utils.run_with_timeout(func, (x + x)) == 2*x
+    assert utils.run_with_timeout(func, (x + x), timeout=0.00001) == x + x
 
 
 if __name__ == "__main__":
