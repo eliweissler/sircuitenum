@@ -994,15 +994,7 @@ def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
         numerical (bool, optional):
         eps (float, optional): 
     """
-<<<<<<< HEAD
-    # Numerically treat the matrices
-    C, valsC = num_subs(cMat, symbol="C")
-    L, valsL = num_subs(lMat, symbol="L")
-    n_nodes = Z.shape[0]
-=======
-    
     Z_og = Z
->>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
 
     # Record number of modes
     n_nodes = Z.shape[0]
@@ -1057,21 +1049,6 @@ def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
 
         L_tilde = L[:, perm]
     
-<<<<<<< HEAD
-        # Transformed capacitance and inductance matrices
-        C_tilde = Z_perm.transpose()*C*Z_perm
-        L_tilde = Z_perm.transpose()*L*Z_perm
-        # Truncate to dynamical modes
-        C_tilde = np.array(sym.simplify(C_tilde[:-n_nd, :-n_nd])).astype(float)
-        L_tilde = np.array(sym.simplify(L_tilde[:-n_nd, :-n_nd])).astype(float)
-        # Invert capacitance matrix and trim small numerical values
-
-        C_tilde_inv = np.linalg.inv(C_tilde)
-        C_tilde_inv[np.abs(C_tilde_inv)/np.abs(C_tilde_inv).max() < eps] = 0
-        if not lMat.is_zero_matrix:
-            L_tilde[np.abs(L_tilde)/np.abs(L_tilde).max() < eps] = 0
-=======
->>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
         # Key for C, L = [n_coupled]-[nz entries of off diag]
         if np.abs(L_tilde).max() > 0:
             L_tilde[np.abs(L_tilde)/np.abs(L_tilde).max() < eps] = 0

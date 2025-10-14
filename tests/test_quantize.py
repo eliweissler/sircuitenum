@@ -1274,11 +1274,11 @@ def test_choose_Z():
     #         Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
     #         tf = time.time()
     #         times[i] = tf-t0
-            # assert row.n_periodic == len(var_types.get("compact", []))
-            # assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
-            # except:
-            #     print("Failed", row.circuit, row.edges)
-            #     breakpoint()
+    #         assert row.n_periodic == len(var_types.get("compact", []))
+    #         assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
+    #         except:
+    #             print("Failed", row.circuit, row.edges)
+    #             breakpoint()
 
     # breakpoint()
     # i = np.argmax(times)
@@ -1494,18 +1494,10 @@ def test_choose_Z():
     assert var_types["sigma"] == [2]
     assert hash == "011_0-0_0_0-0_0-0"
 
-<<<<<<< HEAD
-
-    # All four node circuits
-    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
-    # for n in range(4, 5):
-    #     df = utils.get_unique_qubits(db_path, n)
-=======
     # # All three node circuits
     # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
     # for n in range(4, 5):
     #     df = utils.get_unique_qubits(db_path, n).iloc[:]
->>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
     #     from tqdm import tqdm
     #     order = np.arange(df.shape[0])
     #     np.random.shuffle(order)
@@ -1681,18 +1673,6 @@ if __name__ == "__main__":
     # test_symbolic_hamiltonian()
     # test_collect_H_terms()
 
-<<<<<<< HEAD
-    test_choose_Z()
-
-    # test__wT_key()
-    # test__sub_equal_LC()
-    # test_num_subs()
-    # test_symbolic_hamiltonian()
-    # test_collect_H_terms()
-
-    # test_find_islands()
-=======
->>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
     # test_decoupling_transformation()
     # test_decouple_column()
     # test__var_col_perms()
