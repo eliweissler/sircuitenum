@@ -151,6 +151,75 @@ def _vec_space_overlap(vecs1:Union[list[sym.Matrix], sym.Matrix],
         return overlap_vecs
 
 
+<<<<<<< HEAD
+#     Args:
+#         vecs1 (Union[list[sym.Matrix], sym.Matrix]): set of column vectors
+#         vecs2 (Union[list[sym.Matrix], sym.Matrix]): set of column vectors
+#         idx (list[int], optional): Consider equality only in a specified set of indices.
+#                                    Note: In this case the vectors are reconstructed from
+#                                    the set specified by v_recon.
+#         v1_recon bool: In the case of only examining equality
+#                                                        for a specified set of indices, the set to
+#                                                        reconstruct the full vector from. True is vecs1
+#                                                        false is vecs2.
+#         return_decomp (bool, optional): Return the decomposition of the overlap
+#                                         vectors in each set. Defaults to False.
+
+#     Returns:
+#         list[sym.Matrix]: list of vectors that span the overlap space.
+#     """
+#     # Convert matrices to list
+#     if isinstance(vecs1, sym.Matrix):
+#         vecs1 = [vecs1[:, j] for j in range(vecs1.shape[1])]
+#     if isinstance(vecs2, sym.Matrix):
+#         vecs2 = [vecs2[:, j] for j in range(vecs2.shape[1])]
+
+#     # If either one is empty, return no overlap
+#     if len(vecs1) == 0 or len(vecs2) == 0:
+#         if return_decomp:
+#             return [], [], []
+#         else:
+#             return []
+#     # Assert vector sets are linearly independent
+#     assert len(_linearly_indep_cols(sym.Matrix.hstack(*vecs1))) == len(vecs1)
+#     assert len(_linearly_indep_cols(sym.Matrix.hstack(*vecs2))) == len(vecs2)
+
+#     # Examine all indices if none is given
+#     assert vecs1[0].shape[0] == vecs2[0].shape[0]
+#     if idx == []:
+#         idx = list(range(vecs1[0].shape[0]))
+
+#     # Calculate the overlap of the two vector spaces
+#     divide = len(vecs1)
+#     ns = sym.Matrix.hstack(*[v[idx, :] for v in vecs1],
+#                            *[-v[idx, :] for v in vecs2]).nullspace()
+    
+#     # Gather the entries
+#     in_v1 = []
+#     in_v2 = []
+#     for vec in ns:
+#         v1_entry = vec[:divide, :]
+#         v2_entry = vec[divide:, :]
+#         if not(v1_entry.is_zero_matrix or v2_entry.is_zero_matrix):
+#             in_v1.append(v1_entry)
+#             in_v2.append(v2_entry)
+    
+#     # Reconstruct the overlap vectors
+#     if v1_recon:
+#         mat_recon = sym.Matrix.hstack(*vecs1)
+#         overlap_vecs = [mat_recon*v for v in in_v1]
+#     else:
+#         mat_recon = sym.Matrix.hstack(*vecs2)
+#         overlap_vecs = [mat_recon*v for v in in_v2]
+    
+#     if return_decomp:
+#         return overlap_vecs, in_v1, in_v2
+#     else:
+#         return overlap_vecs
+
+
+=======
+>>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
 def _linearly_indep_cols(X):
     rref, pivot_cols = X.rref()
     return pivot_cols
@@ -955,11 +1024,250 @@ def decoupling_transformation(X:sym.Matrix, n_d:int):
         if any(X[i, n_d:]):
             coupled.append(i)
 
+<<<<<<< HEAD
+    # # Make the transformation to uncouple them
+    # # (I 0)
+    # # (M I)
+    # # with M = -X_22^-1 X_21
+    # Z2 = sym.eye(X.shape[0])
+    # X22 = X[coupled, coupled]
+    # X21 = X[coupled, :n_d]
+    # M = -X22.inv()*X21
+    # for i, row in enumerate(coupled):
+    #     Z2[row, :n_d] = M[i, :]
+    # return Z2
+
+
+
+def decoupling_transformation_3block(X:sym.Matrix, block1: Sequence[int],
+                                     block2: Sequence[int], block3: Sequence[int]):
+    # Transformation is
+    #     (I 0 0)
+    # Z = (0 I 0)
+    #     (0 M I)
+    #(block1, block2, block3)
+    #
+    # Decouples
+    #       (X11 X12 X13)        (- X12 + X13*M -)
+    # Z^T * (X21 X22 X23) * Z =  (X21 + M^T*X31 - -)
+    #       (X31 X32 X33)        (- - -)
+    #
+    #
+    # By setting M = -X13^-1 * X12
+    #
+    # Simplifies to the two block version
+    #
+=======
     # Make the transformation to uncouple them
+>>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
     # (I 0)
     # (M I)
     # with M = -X_22^-1 X_21
     Z2 = sym.eye(X.shape[0])
+<<<<<<< HEAD
+    X13 = X[coupled["13"], coupled["31"]]
+    # May be able to do it with fewer block3 variables
+    X13_LI = _linearly_indep_cols(X13)
+    if len(X13_LI) != X13.shape[1]:
+        coupled["13"] = X13_LI
+    X12 = X[coupled["13"], coupled["21"]]
+    M = -X13.pinv()*X12
+    for i, row in enumerate(coupled["31"]):
+        for j, col in enumerate(coupled["21"]):
+            Z2[row, col] = M[i, j]
+
+    # Verify transformation
+    Xtrans = Z2.transpose()*X*Z2
+    for i in coupled["12"]:
+        for j in coupled["21"]:
+            if sym.simplify(Xtrans[i,j]) != 0:
+                raise ValueError("Decoupling Transformation Unsuccessful")
+    
+    return sym.simplify(Z2)
+
+
+def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
+
+    if cMat is None:
+        cMat = gen_cap_mat(circuit, edges)
+    
+    if lMat is None:
+        lMat = gen_ind_mat(circuit, edges)
+
+    ## Compact -- J,C shunted islands
+    JC_islands = _islands_to_vectors(circuit, edges, ["J", "C"])
+    LC_islands = _islands_to_vectors(circuit, edges, ["L", "C"])
+    sigma_vec = _islands_to_vectors(circuit, edges, [])
+    C_islands = _islands_to_vectors(circuit, edges, ["C"])
+    L_islands = _islands_to_vectors(circuit, edges, ["L"])
+    wJ = gen_w(circuit, edges, "J")
+    n_nd = nd_mat.shape[1]
+    n_comp = len(_linearly_indep_cols(sym.Matrix.hstack(*JC_islands, nd_mat))) - n_nd
+    n_ext = len(_linearly_indep_cols(wJ)) - n_comp
+    Z_final = []
+
+    # No compact variables
+    # Consider all possible wJ psuedoinverses
+    if n_comp == 0:
+        for col_set in _linearly_indep_col_sets(wJ):
+            Z = wJ[:, col_set].transpose().pinv()
+            # Decouple columns
+            for j in range(Z.shape[1]):
+                Z[:, j] = decouple_column(Z[:, j], nd_mat, cMat)
+                Z[:, j] = decouple_column(Z[:, j], nd_mat, lMat)
+            if len(_find_equiv_mats(Z, Z_final,
+                                    shifts=sigma_vec)) == 0:
+                Z_final.append(Z)
+        return Z_final
+
+    # Yes compact variables
+    # First identify a possible choice of correctly
+    # scaled compact variables
+    # Choose to work with the set of columns that
+    # yields the most uncoupled junctions
+    most_uncoupled = -1
+    all_PI_cols = []
+    best_wJpi = None
+    best_in_wJpi = None
+    best_coupled = None
+    best_only_ext = None
+    for col_set in _linearly_indep_col_sets(wJ):
+        wJpi = wJ[:, col_set].transpose().pinv()
+
+        # Identify all unique PI columns
+        for j in range(wJpi.shape[1]):
+            if len(_find_equiv_cols(wJpi[:, j], all_PI_cols,
+                                    shifts=sigma_vec+L_islands+C_islands)) == 0:
+                all_PI_cols.append(wJpi[:, j])
+
+
+        comp_vars_base, _, in_wJpi, _ = _vec_space_overlap(JC_islands, wJpi,
+                                                    support=LC_islands,
+                                                    return_decomp=True)
+        in_wJpi = sym.Matrix.hstack(*in_wJpi).transpose()
+        comp_vars_base = [decouple_column(v, nd_mat, cMat) for v in comp_vars_base]
+
+        # Decouple columns of wJpi from nd vars for building extended variables
+        for j in range(wJpi.shape[1]):
+            wJpi[:, j] = decouple_column(wJpi[:, j], nd_mat, cMat)
+            wJpi[:, j] = decouple_column(wJpi[:, j], nd_mat, lMat)
+
+        # junctions that don't depend on compact variables
+        only_ext = list(range(wJpi.shape[1]))
+
+        # junctions that do depend on compact variables
+        coupled = []
+        for i in range(in_wJpi.shape[0]):
+            vi = in_wJpi[i, :]
+            by_vi = []
+            for j in range(len(vi)):
+                # Record variables that are coupled
+                # by the compact variables
+                if vi[j] != 0:
+                    by_vi.append(j)
+                    if j in only_ext:
+                        only_ext.remove(j)
+                        coupled.append(j)
+        
+        if len(only_ext) > most_uncoupled:
+            best_wJpi = wJpi
+            best_in_wJpi = in_wJpi
+            best_coupled = coupled
+            best_only_ext = only_ext
+            
+    # Now enumerate the options
+    ext_vec_uncoupled = []
+    # Uncoupled junctions -> columns of wJpi
+    for j in best_only_ext:
+        ext_vec_uncoupled.append(best_wJpi[:, j])
+    # Coupled variables -> +/- 1 combinations of columns of best_wJpi
+    # Different choices of compact variables represent transformations
+    # on only the compact subspace, so it won't change which ext
+    # constraints are linearly independent
+    ext_vec_coupled = []
+    if len(best_coupled) > 1:
+        # We need a number of variables equal
+        # to remaining linearly independent
+        # degrees of freedom for the specified best_wJpi columns
+        n_elem = len(best_coupled) - len(_linearly_indep_cols(best_in_wJpi[:, best_coupled]))
+        if n_elem > 0:
+            # [best_wJpi[:,j] for j in best_coupled]
+            # all_PI_cols
+            ext_vec_coupled += [_unique_col_combos([best_wJpi[:,j] for j in best_coupled],
+                                                n_elem, signs=[1, -1],
+                                                li_vecs=comp_vars_base,
+                                                valid=lambda Ze: well_spaced(wJ.transpose()*Ze),
+                                                shifts=sigma_vec+L_islands+C_islands)]
+
+
+    # Now consider ''Center-ing'' the compact variables
+    # on different junctions to generate unique choices of
+    # compact variable to combine with the extended
+    
+    wJtrans = sym.simplify(wJ.transpose()*sym.Matrix.hstack(*comp_vars_base))
+    for Zc in compact_alignment_transformation(wJtrans, n_comp):
+        comp_vars = sym.Matrix.hstack(*comp_vars_base)*Zc
+        # Fully uncoupled case returned earlier
+        if len(ext_vec_coupled) == 0:
+            Z = sym.Matrix.hstack(comp_vars, *ext_vec_uncoupled)
+            if len(_find_equiv_mats(Z, Z_final, shifts=sigma_vec)) == 0:
+                    Z_final.append(Z)
+        else:
+            for ext_coupled in itertools.product(*ext_vec_coupled):
+                Z = sym.Matrix.hstack(comp_vars, *ext_coupled, *ext_vec_uncoupled)
+                if len(_find_equiv_mats(Z, Z_final, shifts=sigma_vec)) == 0:
+                    Z_final.append(Z)
+
+    return Z_final
+
+
+def unique_harmonic(circuit, edges, nd_mat, cMat=None, lMat=None):
+
+    if cMat is None:
+        cMat = gen_cap_mat(circuit, edges)
+    if lMat is None:
+        lMat = gen_ind_mat(circuit, edges)
+
+    # Linearly independent incidence matrices
+    wC = gen_w(circuit, edges, "C")
+    wC = wC[:, _linearly_indep_cols(wC)]
+    wCpi = wC.transpose().pinv()
+    wL = gen_w(circuit, edges, "L")
+    wL = wL[:, _linearly_indep_cols(wL)]
+    wLpi = wL.transpose().pinv()
+
+
+    # Shifts
+    shifts=[nd_mat[:,j] for j in range(nd_mat.shape[1])]
+
+    ## Harmonic -- L,C shunted islands
+    # Are there any LC islands that have both?
+    LC_islands = _islands_to_vectors(circuit, edges, ["L", "C"])
+    # number of harmonic variables is the number of LC islands
+    # minus the number of free/sigma variables that can be made
+    # from those islands
+    n_nd = nd_mat.shape[1]
+    n_harm = len(_linearly_indep_cols(sym.Matrix.hstack(nd_mat, *LC_islands))) - n_nd
+    if n_harm > 0:
+        # Identify PI columns that correspond
+        # to inductors that are involved in the
+        # harmonic mode - i.e. connected to L and C
+        # but not J
+        harm_vec = []
+        for v in _vec_space_overlap(LC_islands, wLpi, support=wL.transpose().nullspace()):
+            if not (wC.transpose()*v).is_zero_matrix:
+                v = decouple_column(v, nd_mat, cMat)
+                v = decouple_column(v, nd_mat, lMat)
+                if len(_find_equiv_cols(v, harm_vec, shifts=shifts))==0:
+                    harm_vec.append(v)
+    else:
+        return []
+
+    return _unique_col_combos(harm_vec, n_harm, signs=[1, -1], shifts=shifts,
+                                li_vecs=[nd_mat[:, j] for j in range(n_nd)])
+    
+
+=======
     X22 = X[coupled, coupled]
     X21 = X[coupled, :n_d]
     M = -X22.inv()*X21
@@ -968,6 +1276,7 @@ def decoupling_transformation(X:sym.Matrix, n_d:int):
     return Z2
 
 
+>>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
 def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
            dyn_modes=["compact", "extended", "harmonic"],
            nd_modes=["free", "frozen", "sigma"], try_perms = True,
@@ -1214,6 +1523,10 @@ def gen_w(circuit: list, edges: list, w_elem: str = "J", return_params=False,
     else:
         return w
 
+<<<<<<< HEAD
+
+def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
+=======
 def var_trans_basis(circuit, edges, ground_node=[]):
 
     # Incidence matrices
@@ -1240,6 +1553,7 @@ def var_trans_basis(circuit, edges, ground_node=[]):
 
 def var_trans_basis_incidence_mat(wC: sym.Matrix, wL: sym.Matrix, wJ: sym.Matrix,
                                   c_vals: list[sym.Symbol] = None, l_vals: list[sym.Symbol] = None):
+>>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
     """
     Generates a basis for variable transformations that
     separate compact, extended, harmonic,
@@ -1341,6 +1655,11 @@ def var_trans_basis_incidence_mat(wC: sym.Matrix, wL: sym.Matrix, wJ: sym.Matrix
     # Put into matrix form
     Z = sym.Matrix.hstack(*comp_vec, *ext_vec, *harm_vec, *free_vec, *froz_vec, *sig_vec)
 
+<<<<<<< HEAD
+
+def secondary_transformation_harm_ext(Z0, var_types, cMat, lMat, wJ=sym.Matrix([[]]),
+                                      tried=[False, False, False]):
+=======
     # If a sigma mode is present, scale the column to make
     # the defined variable an equal superposition of all node fluxes
     if len(sig_vec) > 0:
@@ -1349,6 +1668,7 @@ def var_trans_basis_incidence_mat(wC: sym.Matrix, wL: sym.Matrix, wJ: sym.Matrix
             for j in range(Z_inv.shape[1]):
                 Z_inv[i, j] = 1
         Z = sym.ImmutableDenseMatrix(Z_inv.inv())
+>>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
 
     return Z, var_types
 
@@ -1390,6 +1710,46 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
 
     # Record mode types
     eye = sym.eye(Z0.shape[0])
+<<<<<<< HEAD
+    n_comp = len(var_types.get("compact", []))
+    n_ext = len(var_types.get("extended", []))
+    n_harm = len(var_types.get("harmonic", []))
+
+    if n_harm == 0 or n_ext == 0:
+        return eye, H_hash(Z0, var_types, cMat, lMat, wJ, try_perms=False)[0]
+
+    # Try each of the three possible decouplings
+    Zl_eh = decoupling_transformation(lTrans, n_comp+n_ext)
+    Zc_eh = decoupling_transformation(cTrans, n_comp+n_ext)
+    Zc_ce = []
+    for i_comp in var_types.get("compact", []):
+        Zc_ce.append(decoupling_transformation_3block(cTrans,
+                                                [i_comp],
+                                                var_types.get("extended", []),
+                                                var_types.get("harmonic", [])))
+    decouple_trans = [Zl_eh, Zc_eh] + Zc_ce
+    valid_trans = [Ztest != eye and len(Ztest.free_symbols) == 0
+                   and Ztest.det() > 0 for Ztest in decouple_trans]
+    best_Z = eye
+    # Recursive case, there are valid transformations
+    if any(valid_trans):
+        best_hash = ""
+        for i, Ztest in enumerate(decouple_trans):
+            # Try each ordering of different decoupling transformations
+            if valid_trans[i] and not tried[i]:
+                new_tried = [x for x in tried]
+                new_tried[i] = True
+                Z2, hash = secondary_transformation_harm_ext(Z0*Ztest, var_types,
+                                                                  cMat, lMat, wJ,
+                                                             new_tried)
+                if best_hash == "" or hash < best_hash:
+                    best_hash = hash
+                    best_Z = Ztest*Z2
+    return best_Z, H_hash(Z0*best_Z, var_types, cMat, lMat, wJ, try_perms=False)[0]
+
+
+def choose_Z(circuit, edges) -> tuple[sym.Matrix, dict[str, list[int]], str]:
+=======
     comp = var_types.get("compact", [])
     n_comp = len(comp)
     ext = var_types.get("extended", [])
@@ -1399,6 +1759,7 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
     sigma = var_types.get("sigma", [])
     n_sigma = len(sigma)
     n_d = n_comp + n_harm + n_ext
+>>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
     
     # Possible to not include cMat to consider junction
     # decoupling

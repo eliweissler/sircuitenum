@@ -1494,6 +1494,29 @@ def test_choose_Z():
     assert var_types["sigma"] == [2]
     assert hash == "011_0-0_0_0-0_0-0"
 
+<<<<<<< HEAD
+
+    # All three node circuits
+    db_path = "circuits_4_nodes_7_elems.db"
+    for n in range(4, 5):
+        df = utils.get_unique_qubits(db_path, n).iloc[:]
+        from tqdm import tqdm
+        order = np.arange(df.shape[0])
+        np.random.shuffle(order)
+        for i in tqdm(order[:]):
+            # print(row.circuit, row.edges)
+            row = df.iloc[i]
+            circuit = row.circuit
+            circuit = utils.add_elem_number(circuit)
+            Z, var_types, hash = quantize.choose_Z(circuit, row.edges)
+            # print(len(trans), "transformations")
+            try:
+                assert row.n_periodic == len(var_types.get("compact", []))
+                assert row.n_extended + row.n_harmonic == len(var_types.get("harmonic", []) + var_types.get("extended", []))
+            except:
+                print("Failed", row.circuit, row.edges)
+                breakpoint()
+=======
     # # All three node circuits
     # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
     # for n in range(4, 5):
@@ -1514,6 +1537,7 @@ def test_choose_Z():
     #         except:
     #             print("Failed", row.circuit, row.edges)
     #             breakpoint()
+>>>>>>> bcc5e81d41979aed650d3132066bf77aac87917a
                 
 def test_gen_junc_pot():
 
