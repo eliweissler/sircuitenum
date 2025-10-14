@@ -396,38 +396,47 @@ def df_equality_check(df1: pd.DataFrame, df2: pd.DataFrame):
 
 def test_add_hamiltonian_classes():
     
+
+    res19 = ['200_0-0_0_0-0_0-0_5445', '101_0-0_0_0-0_0-0_54', '110_0-0_0_0-0_0-0_5445', '011_0-0_0_0-0_0-0_54', '020_0-0_0_0-0_0-0_5445', '200_0-0_1_0-0_1-1_5445', '101_0-0_1_0-0_1-1_54', '110_0-0_1_0-0_1-1_5445', '011_0-0_1_0-0_1-1_54', '020_0-0_1_0-0_1-1_5445', '200_1-1_1_0-0_1-1_544555', '110_1-1_1_0-0_1-1_5455', '110_1-1_1_0-0_1-1_544555', '011_0-0_1_1-1_0-0_54', '020_0-0_1_1-1_0-0_5445', '011_0-0_2_1-1_1-1_54', '020_0-0_2_1-1_1-1_5445', '020_1-1_1_0-0_1-1_544555', '020_1-1_2_1-1_1-1_544555']
+    # res21 =  ['200_0-0_0_0-0_0-0_5445', '101_0-0_0_0-0_0-0_54', '110_0-0_0_0-0_0-0_5445', '011_0-0_0_0-0_0-0_54', '020_0-0_0_0-0_0-0_5445', '200_0-0_1_0-0_1-1_5445', '101_0-0_1_0-0_1-1_54', '110_0-0_1_0-0_1-1_5445', '011_0-0_1_0-0_1-1_54', '020_0-0_1_0-0_1-1_5445', '200_1-1_1_0-0_1-1_544555', '110_1-1_0_0-0_0-0_5553', '110_1-1_0_0-0_0-0_465553', '020_0-0_1_1-1_0-0_5445', '110_1-1_1_0-0_1-1_5455', '020_0-0_2_1-1_1-1_5445', '020_1-1_0_0-0_0-0_645553', '110_1-1_1_0-0_1-1_544555', '020_1-1_1_0-0_1-1_465553', '020_1-1_0_0-0_0-0_465553', '020_1-1_1_0-0_1-1_544555']
+    # res20 = ['200_0-0_0_0-0_0-0_5445', '101_0-0_0_0-0_0-0_54', '110_0-0_0_0-0_0-0_5445', '011_0-0_0_0-0_0-0_54', '020_0-0_0_0-0_0-0_5445', '200_0-0_1_0-0_1-1_5445', '101_0-0_1_0-0_1-1_54', '110_0-0_1_0-0_1-1_5445', '011_0-0_1_0-0_1-1_54', '020_0-0_1_0-0_1-1_5445', '200_1-1_1_0-0_1-1_544555', '110_1-1_0_0-0_0-0_5553', '110_1-1_0_0-0_0-0_465553', '020_0-0_1_1-1_0-0_5445', '110_1-1_1_0-0_1-1_5455', '020_0-0_2_1-1_1-1_5445', '020_1-1_0_0-0_0-0_645553', '110_1-1_1_0-0_1-1_544555', '020_1-1_1_0-0_1-1_465553', '020_1-1_0_0-0_0-0_465553']
+   
+    # res20 =  ['200_0-0_0_0-0_0-0_5445', '101_0-0_0_0-0_0-0_54', '110_0-0_0_0-0_0-0_5445', '011_0-0_0_0-0_0-0_54', '020_0-0_0_0-0_0-0_5445', '200_0-0_1_0-0_1-1_5445', '101_0-0_1_0-0_1-1_54', '110_0-0_1_0-0_1-1_5445', '011_0-0_1_0-0_1-1_54', '020_0-0_1_0-0_1-1_5445', '200_1-1_1_0-0_1-1_544555', '110_1-1_0_0-0_0-0_5553', '110_1-1_0_0-0_0-0_465553', '020_0-0_1_1-1_0-0_5445', '110_1-1_1_0-0_1-1_5455', '020_0-0_2_1-1_1-1_5445', '020_1-1_0_0-0_0-0_645553', '110_1-1_1_0-0_1-1_544555', '020_1-1_1_0-0_1-1_465553', '020_1-1_0_0-0_0-0_465553']
+    res21 =  ['200_0-0_0_0-0_0-0_5445', '101_0-0_0_0-0_0-0_54', '110_0-0_0_0-0_0-0_5445', '011_0-0_0_0-0_0-0_54', '020_0-0_0_0-0_0-0_5445', '200_0-0_1_0-0_1-1_5445', '101_0-0_1_0-0_1-1_54', '110_0-0_1_0-0_1-1_5445', '011_0-0_1_0-0_1-1_54', '020_0-0_1_0-0_1-1_5445', '200_1-1_1_0-0_1-1_544555', '110_1-1_0_0-0_0-0_5553', '110_1-1_0_0-0_0-0_465553', '020_0-0_1_1-1_0-0_5445', '110_1-1_1_0-0_1-1_5455', '020_0-0_2_1-1_1-1_5445', '020_1-1_0_0-0_0-0_645553', '110_1-1_1_0-0_1-1_544555', '020_1-1_1_0-0_1-1_465553', '020_1-1_0_0-0_0-0_465553', '020_1-1_1_0-0_1-1_544555']
+    
+    # print("in 21 not in 20", [x for x in res21 if x not in res20])
+    # print("in 20 not in 21", [x for x in res20 if x not in res21])
     
     # Generate all the 3 node circuits and check that
     # there's 19 H classes
-    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=1, quiet=False)
-    df = utils.get_unique_qubits(TEMP_FILE, 3)
-    print("not in sym", [x for x in df.H_class.unique() if x not in df.H_class_sym.unique()])
-    print("not in class", [x for x in df.H_class_sym.unique() if x not in df.H_class.unique()])
-    print(df.H_class.unique().size, df.H_class_sym.unique().size)
-    assert df.H_class.unique().size == 19
-    assert df.H_class_sym.unique().size == 21
-    os.remove(TEMP_FILE)
-
-     # Generate all the 3 node circuits and check that
-    # there's 19 H classes
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=4, quiet=False)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
-    print("not in sym", [x for x in df.H_class.unique() if x not in df.H_class_sym.unique()])
-    print("not in class", [x for x in df.H_class_sym.unique() if x not in df.H_class.unique()])
+    print(df.H_class.unique().size, df.H_class_sym.unique().size)
+
+    # print(df[df.H_class_sym == "020_1-1_1_0-0_1-1_544555"])
+
+    # print("res = ", [x for x in df.H_class_sym.unique()])
+
     assert df.H_class.unique().size == 19
+    assert all(x in df.H_class.unique() for x in res19)
     assert df.H_class_sym.unique().size == 21
+    assert all(x in df.H_class_sym.unique() for x in res21)
+    os.remove(TEMP_FILE)
+
+    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=1, quiet=False)
+    df = utils.get_unique_qubits(TEMP_FILE, 3)
+    print(df.H_class.unique().size, df.H_class_sym.unique().size)
+
+    assert df.H_class.unique().size == 19
+    assert all(x in df.H_class.unique() for x in res19)
+    assert df.H_class_sym.unique().size == 21
+    assert all(x in df.H_class_sym.unique() for x in res21)
+
     os.remove(TEMP_FILE)
     
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=5, n_workers=4)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
     assert df.H_class.unique().size == 19
-    diff = [x for x in df.H_class.unique() if x not in df.H_class_sym.unique()]
-    for x in ['110_1-1_1_0-0_1-1_2220', '011_0-0_2_1-1_1-1_21']:
-        assert x in diff
-    diff2 = [x for x in df.H_class_sym.unique() if x not in df.H_class.unique()]
-    for x in ['110_1-1_0_0-0_0-0_2220']:
-        assert x in diff2
-    assert df.H_class_sym.unique().size == 16
     os.remove(TEMP_FILE)
 
 

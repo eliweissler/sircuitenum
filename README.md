@@ -28,7 +28,7 @@ Testing
 The unit tests can be run locally using `pytest`. To install testing dependencies, install sircuitenum using
 
 ```bash
-pip install pip install -e .[full]
+pip install pip install -e '.[full]'
 ```
 
 Disclaimer
