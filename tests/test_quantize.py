@@ -1565,13 +1565,13 @@ def test_choose_Z():
 
 
     # All three node circuits
-    db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    db_path = "circuits_4_nodes_7_elems.db"
     for n in range(4, 5):
         df = utils.get_unique_qubits(db_path, n).iloc[:]
         from tqdm import tqdm
         order = np.arange(df.shape[0])
         np.random.shuffle(order)
-        for i in tqdm(order[:500]):
+        for i in tqdm(order[:]):
             # print(row.circuit, row.edges)
             row = df.iloc[i]
             circuit = row.circuit

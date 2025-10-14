@@ -217,7 +217,7 @@ def _vec_space_overlap(vecs1:Union[list[sym.Matrix], sym.Matrix],
 #     else:
 #         return overlap_vecs
 
-@profile
+
 def _linearly_indep_cols(X):
     rref, pivot_cols = X.rref()
     return pivot_cols
@@ -743,7 +743,7 @@ def decoupling_transformation(X:sym.Matrix, n_d:int):
     # return Z2
 
 
-@profile
+
 def decoupling_transformation_3block(X:sym.Matrix, block1: Sequence[int],
                                      block2: Sequence[int], block3: Sequence[int]):
     # Transformation is
@@ -824,7 +824,7 @@ def decoupling_transformation_3block(X:sym.Matrix, block1: Sequence[int],
     
     return sym.simplify(Z2)
 
-@profile
+
 def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
 
     if cMat is None:
@@ -959,7 +959,7 @@ def unique_compact_extended(circuit, edges, nd_mat, cMat=None, lMat=None):
 
     return Z_final
 
-@profile
+
 def unique_harmonic(circuit, edges, nd_mat, cMat=None, lMat=None):
 
     if cMat is None:
@@ -1005,7 +1005,7 @@ def unique_harmonic(circuit, edges, nd_mat, cMat=None, lMat=None):
     return _unique_col_combos(harm_vec, n_harm, signs=[1, -1], shifts=shifts,
                                 li_vecs=[nd_mat[:, j] for j in range(n_nd)])
     
-@profile
+
 def H_hash(Z, var_types, cMat, lMat, wJ, equalJ=False,
            dyn_modes=["compact", "extended", "harmonic"],
            nd_modes=["free", "frozen", "sigma"], try_perms = True,
@@ -1250,7 +1250,7 @@ def gen_w(circuit: list, edges: list, w_elem: str = "J"):
                 w_count += 1
     return w
 
-@profile
+
 def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
     """
     Generates all variable transformations that
@@ -1377,7 +1377,7 @@ def gen_spaced_var_trans(circuit, edges, cMat=None, lMat=None):
         
     return all_Z, var_types
 
-@profile
+
 def secondary_transformation_harm_ext(Z0, var_types, cMat, lMat, wJ=sym.Matrix([[]]),
                                       tried=[False, False, False]):
 
@@ -1420,7 +1420,7 @@ def secondary_transformation_harm_ext(Z0, var_types, cMat, lMat, wJ=sym.Matrix([
                     best_Z = Ztest*Z2
     return best_Z, H_hash(Z0*best_Z, var_types, cMat, lMat, wJ, try_perms=False)[0]
 
-@profile
+
 def choose_Z(circuit, edges) -> tuple[sym.Matrix, dict[str, list[int]], str]:
     
     # Generate capacitance matrix, susceptance matrix, and incidence matrix
