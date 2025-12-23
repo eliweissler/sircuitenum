@@ -6,8 +6,10 @@ __all__ = ["gen_cap_mat", "gen_ind_mat", "gen_junc_pot", "quantize_circuit"]
 import itertools
 import functools
 import time
+from copy import deepcopy
 
-from typing import Union, Sequence
+from dataclasses import dataclass, field
+from typing import Union, Sequence, Iterable, Mapping, Optional, Tuple
 
 import sympy as sym
 import numpy as np
@@ -17,6 +19,7 @@ from sympy import collect, expand_mul, Mul, Dummy
 from sympy.core.add import Add
 
 from sircuitenum import utils
+from sircuitenum.equationset import EquationSet, cached_solve, fully_compatible_set, maximally_compatible_set, sol_indep_of_vars, extract_denom, unique_solutions
 
 
 
@@ -32,11 +35,6 @@ EXT_PHASE = "_{ext}"
 # Possible integer values
 WJ_VALS = [0,1,-1,2,-2,3,-3,4,-4]
 
-
-# Cache of solved equations
-CACHE_VARS = sym.symbols(",".join([f'x{i}' for i in range(100)]), real=True)
-CACHE_CONST = sym.symbols(",".join([f'c{i}' for i in range(100)]), real=True)
-SOLVE_CACHE = {}
 
 def _independent_from(A, B):
     """
@@ -112,15 +110,13 @@ def _vec_space_overlap(vecs1:Union[list[sym.Matrix], sym.Matrix],
             return []
 
     # Assert vector sets are linearly independent and same length
-    try:
-        assert len(_linearly_indep_cols(sym.Matrix.hstack(*vecs1))) == len(vecs1)
-        assert len(_linearly_indep_cols(sym.Matrix.hstack(*vecs2))) == len(vecs2)
-        assert len(_linearly_indep_cols(sym.Matrix.hstack(*support))) == len(support)
-        assert vecs1[0].shape[0] == vecs2[0].shape[0]
-        if len(support) > 0:
-            assert support[0].shape[0] == vecs1[0].shape[0]
-    except:
-        breakpoint()
+    assert len(_linearly_indep_cols(sym.Matrix.hstack(*vecs1))) == len(vecs1)
+    assert len(_linearly_indep_cols(sym.Matrix.hstack(*vecs2))) == len(vecs2)
+    assert len(_linearly_indep_cols(sym.Matrix.hstack(*support))) == len(support)
+    assert vecs1[0].shape[0] == vecs2[0].shape[0]
+    if len(support) > 0:
+        assert support[0].shape[0] == vecs1[0].shape[0]
+
     # Calculate the overlap of the two vector spaces
     divide = (len(vecs1), len(support) + len(vecs1))
     ns = sym.Matrix.hstack(*[v for v in vecs1],
@@ -221,7 +217,20 @@ def _det_fast(M):
     else:
         return M.det()
 
+
 def _equiv_cols(c1, c2, shifts=None):
+    """
+    Are two transformation columns equivalent up to a change
+    in sign and and given shifts?
+
+    Args:
+        c1 (sym.Matrix): column 1
+        c2 (sym.Matrix): column 2
+        shifts (list[sym.Matrix], optional): Shifts. Defaults to global 1.
+
+    Returns:
+        bool: True if equivalent up to sign and shifts. False otherwise.
+    """
     if shifts is None:
         # Just the global shift
         shifts = [sym.ones(c1.shape[0], 1)]
@@ -243,8 +252,8 @@ def _equal_up_to_column_shift_and_sign(A: sym.Matrix, B: sym.Matrix, shifts: Uni
     Assumes that the columns in A and B are linearly independent
 
     Args:
-        A (sym.Matrix): _description_
-        B (sym.Matrix): _description_
+        A (sym.Matrix): Transformation matrix A
+        B (sym.Matrix): Transformation matrix B
         shifts (list[sym.Matrix], optional): _description_. Defaults to None.
 
     Returns:
@@ -351,6 +360,61 @@ def _nonzero_entries_str(X: Union[sym.Matrix, np.ndarray],
     if prepend_sum:
         bin_str = str(n_nz) + "-" + bin_str
     return bin_str 
+
+
+def _remove_permutation_equivalent_transformations(Z_list, perms):
+    """Filter transformations that are column permutations or sign-flips of each other. Considers
+    subsets of columns based on variable types. Substitutes dummy variables to allow for equality
+    checks even when symbolic variables differ.
+
+    For each transformation matrix in ``Z_list``, generates column permutations
+    based on perms and checks if it's equivalent (up to column shifts
+    and sign flips) to any previously kept transformation.
+
+    Parameters
+    ----------
+    Z_list : list[sym.Matrix]
+        List of transformation matrices to filter.
+    perms : list[tuple[int]]
+        List of column index permutations to consider for equivalence.
+
+    Returns
+    -------
+    tuple[list[sym.Matrix], list[str]]
+        Filtered lists of transformation matrices and their nonzero strings.
+    """
+    unique_Z = []
+    idx_keep = []
+    for k, Z_k in enumerate(Z_list):
+        Z_set = []
+        to_add = True
+        for perm in perms:
+            Z_perm = Z_k[:, perm]
+            # Make dummy variables to allow for equality check
+            subs = {}
+            v_count = 1
+            for j in range(Z_perm.shape[1]):
+                for i in range(Z_perm.shape[0]):
+                    for v in Z_perm[i, j].free_symbols:
+                        if v not in subs:
+                            subs[v] = sym.Symbol(f"v_{v_count}", real=True)
+                            v_count += 1
+            Z_perm = Z_perm.subs(subs)
+            
+            # Is there any past transformation equivalent to this one?
+            if any(any(_equal_up_to_column_shift_and_sign(Z_past, Z_perm, shifts=[]) 
+                      for Z_past in Z_past_set) 
+                  for Z_past_set in unique_Z):
+                to_add = False
+                break
+            Z_set.append(Z_perm)
+        
+        if to_add:
+            unique_Z.append(Z_set)
+            idx_keep.append(k)
+    
+    return [Z_set[0] for Z_set in unique_Z], idx_keep
+
 
 def _sort_wT(wT: Union[sym.Matrix, np.ndarray]):
     if not isinstance(wT, np.ndarray):
@@ -466,463 +530,6 @@ def _sub_equal_LC(X):
             X = X.subs(x, L)
     return X
 
-def _to_frozenset(eqs):
-    return frozenset(frozenset((x.lhs, x.rhs)) for x in eqs)
-
-
-def _to_eq_list(all_eq):
-    # Convert dictionary to equation
-    if isinstance(all_eq, dict):
-        all_eq = [sym.Eq(x[0], x[1]) for x in all_eq.items()]
-    # Convert list or frozenset or tuple of frozensets or expressions to equation
-    elif isinstance(all_eq, list) or isinstance(all_eq, frozenset) or isinstance(all_eq, tuple):
-        all_eq = list(all_eq)
-        # Frozen set
-        if isinstance(all_eq[0], frozenset):
-            all_eq = [list(x) for x in all_eq]
-            all_eq = [sym.Eq(x[0], x[1]) for x in all_eq if len(x) == 2]
-        elif isinstance(all_eq[0], dict):
-            all_eq = functools.reduce(lambda a,b: a+b, [[sym.Eq(x[0], x[1]) for x in eq.items()] for eq in all_eq], [])
-        # expression
-        elif not isinstance(all_eq[0], sym.Eq):
-            new_eq = []
-            for eq in all_eq:
-                if eq.is_number:
-                    if eq != 0:
-                        return []
-                else:
-                    new_eq.append(sym.Eq(eq, 0))
-            all_eq = new_eq
-
-    return all_eq
-
-def _eq_list_to_dict(all_eq):
-    all_eq = _to_eq_list(all_eq)
-    eq_dict = {}
-    for eq in all_eq:
-        var, val = eq.lhs, eq.rhs
-        if var.is_number and val.is_number:
-            if var != val:
-                return None
-        elif var.is_number and not val.is_number:
-            var, val = val, var
-        if var in eq_dict:
-            if eq_dict[var] != val:
-                return None
-        eq_dict[var] = val
-    return eq_dict
-
-def _maximally_compatible_set(terms, var_list, nonzero=[], tiebreaker_fn=lambda x: 0):
-
-
-         
-    # Keep track of which terms are incompatible/compatible
-    incompatible = set()
-    compatible = {}
-    best_subs = [{}]
-    n_terms = len(terms)
-    best_val = tiebreaker_fn([])
-    best_keys = []
-    best_nz = 0
-    # Assume each individual term is valid
-    for nz in range(1, n_terms+1):
-        # Pidgeonhole principle, is it possible to to select nz keys that
-        # might be compatible
-        if len(incompatible) > 0:
-            if nz > n_terms - max(len(incompat_keys) for incompat_keys in incompatible):
-                break
-        for keys in itertools.combinations(range(n_terms), nz):
-            # Check if a subset of the keys are incompatible
-            if any(all(k in keys for k in incompat_keys) for incompat_keys in incompatible):
-                continue
-
-            # Fill in rule set with possible simplifications
-            # from previous iterations
-            keys_left = [k for k in keys]
-            rules_sets = []
-            for keyset in sorted(compatible.keys(), key=len)[::-1]:
-                if all(k in keys_left for k in keyset):
-                    rules_sets.append(compatible[keyset])
-                    for k in keyset:
-                        keys_left.remove(k)
-                if keys_left == []:
-                    break
-            for k in keys_left:
-                rules_sets.append(terms[k])
-            
-            # Identify a set of rules that are fully compatible
-            res = _fully_compatible_set(rules_sets, var_list, depth_first=False)
-            if len(res) == 0:
-                incompatible.add(keys)
-                continue
-            # Verify that the nonzero entries are nonzero
-            good_subs = []
-            tiebreak_val = tiebreaker_fn(keys)
-            for i, compat_sub in enumerate(res):
-                if any(sym.simplify(d.subs(compat_sub)) == 0 for d in nonzero):
-                    continue
-                if (tiebreak_val < best_val and nz == best_nz) or (nz > best_nz):
-                    best_val = tiebreak_val
-                    best_subs = [compat_sub]
-                    best_keys = [keys]
-                    best_nz = nz
-                elif (tiebreak_val == best_val) and (nz == best_nz):
-                    best_subs.append(compat_sub)
-                    best_keys.append(keys)
-                good_subs.append(compat_sub)
-            # Save the results for these keys
-            if len(good_subs) == 0:
-                incompatible.add(keys)
-            else:
-                compatible[keys] = good_subs
-
-    return best_keys, best_subs
-
-
-COMPATIBLE_CACHE = {}
-# TODO: ADD CACHE?
-def _fully_compatible_set(assumptions, solve_vars, starting={}, nonzero=[], depth_first=False):
-    """
-    Returns all sets of assumptions fully compatible with
-    the starting one
-
-    Args:
-        starting (_type_): _description_
-        assumptions (_type_): _description_
-
-    Returns:
-        _type_: _description_
-    """
-    # ASS_KEY = []
-    # starting_eq = _to_eq_list(starting)
-    # ASS_KEY += _to_frozenset(starting_eq)
-    # for ass_set in assumptions:
-    #     ASS_KEY += _to_frozenset(ass)
-
-    # Record fixed substitutions for the starting assumptions
-    old_eq = []
-    const_subs = {}
-    for var, val in starting.items():
-        var, val = sym.simplify(var), sym.sympify(val)
-        if var.is_number and val.is_number:
-            if var != val:
-                return [], [0]
-        else:
-            old_eq.append(sym.Eq(var, val))
-        if val.is_number and isinstance(var, sym.Symbol):
-            const_subs[var] = val
-    if len(assumptions) == 0:
-        return [starting]
-    else:
-        next_set = assumptions[0]
-        # Sort to do lowest weights first
-        all_res = []
-        all_weights = []
-        for ass in next_set:
-            # quick check for incompatible constant values
-            const_compat = True
-            for var, val in ass.items():
-                var, val = sym.simplify(var), sym.sympify(val)
-                if var.is_number and val.is_number:
-                    if var != val:
-                        const_compat = False
-                        break
-                if val.is_number and isinstance(var, sym.Symbol):
-                    if var in const_subs:
-                        if val != const_subs[var]:
-                            const_compat = False
-                            break
-                if not const_compat:
-                    break
-            if not const_compat:
-                continue
-
-            # If it's not obviously wrong, then solve
-            new_eq = [sym.Eq(x[0], x[1]) for x in ass.items()]
-            sols = _cached_solve(new_eq + old_eq, solve_vars)
-            # sols = _sols_set_to_dict(sym.nonlinsolve(new_eq+old_eq, solve_vars), solve_vars)
-            is_compat = len(sols) > 0
-            if is_compat:
-                for sol in sols:
-                    # Make sure value isn't 0
-                    this_nz = [sym.simplify(d.subs(sol)) for d in nonzero]
-                    if any(d == 0 for d in this_nz):
-                        continue
-                    res = _fully_compatible_set(assumptions[1:], solve_vars, starting=sol,
-                                                          nonzero=this_nz, depth_first=depth_first)
-                    if res and depth_first:
-                        return res
-                    all_res += res
-        
-        return all_res
-
-
-def _sols_set_to_dict(sols_set, solve_vars):
-    sols = []
-    for sol in sols_set:
-        sol_dict = {}
-        for var, val in zip(solve_vars, sol):
-            var, val = sym.simplify(var), sym.simplify(val)
-            if isinstance(val, sym.Complement):
-                if {var} in val.args:
-                    continue
-            if val == sym.Complexes or val == sym.Reals:
-                continue
-            if var != val:
-                sol_dict[var] = val
-        sols.append(sol_dict)
-    return sols
-
-
-def _eq_as_numer_denom(eq: Union[sym.Eq, sym.Expr]):
-    if isinstance(eq, sym.Eq):
-        eq = (eq.lhs - eq.rhs) 
-    eq_new = sym.expand(eq).together(deep=True)
-    numer, denom = eq_new.as_numer_denom()
-    return numer, denom
-
-
-def _cached_solve(all_eq, solve_vars, simplify=True):
-
-    # Prevent undefined behavior from solve variable order
-    solve_vars = sorted(solve_vars, key=lambda x: str(x))
-
-    # Convert to list of equations
-    all_eq = _to_eq_list(all_eq)
-
-    # Recursive base case
-    if len(all_eq) == 0:
-        return []
-    
-    # Put equations together and grab numerators
-    all_eq_new = []
-    all_denom = []
-    for eq in all_eq:
-        numer, denom = _eq_as_numer_denom(eq)
-        all_denom.append(denom)
-        all_eq_new.append(sym.Eq(numer, 0))
-    all_eq = all_eq_new
-   
-    eq_set = frozenset(frozenset((eq.lhs, eq.rhs)) for eq in all_eq)
-
-    # Have we solved this set of equations before?
-    # If we haven't, look for subsets of them that we have
-    remaining_eq = [x for x in eq_set]
-    remaining_denom = [x for x in all_denom]
-    solved_eq = []
-    solved_denom = []
-    for solved in sorted(SOLVE_CACHE.keys(), key=len):
-        solved_sols = SOLVE_CACHE[solved]
-        # Strict subset of these equations were deemed unsolvable
-        # or the exact equation was solved
-        if eq_set == solved or (all(eq in eq_set for eq in solved) and solved_sols == []):
-            return solved_sols
-        # Strict subset of these equations were solved
-        # elif all(eq in remaining_eq for eq in solved) and len(solved_sols) == 1 and len(solved) > 1:
-        #     numer, denom = [], []
-        #     for eq in _to_eq_list(solved_sols[0]):
-        #         num, den = _eq_as_numer_denom(eq)
-        #         num.append(sym.Eq(num, 0))
-        #         denom.append(denom)
-        #     solved_eq += numer
-        #     print("Solved subset:", solved)
-        #     print("With solution:", solved_sols)
-        #     print("solved eq:", solved_eq)
-        #     # remove from remaining
-        #     for eq in solved:
-        #         idx = remaining_eq.index(eq)
-        #         remaining_eq.pop(idx)
-        #         remaining_denom.pop(idx)
-        # if not remaining_eq:
-        #     break
-
-    if remaining_eq:
-        remaining_eq = _to_eq_list(remaining_eq)
-    
-    # Make solution list of dictionaries
-    sols = _sols_set_to_dict(sym.nonlinsolve(remaining_eq+solved_eq, solve_vars), solve_vars)
-
-    # Make sure none of the original denominators are zero
-    sols = [s for s in sols if all(sym.simplify(d.subs(s)) != 0 for d in all_denom + solved_denom)]
-    
-    # Make sure none of the new denominators are zero from the original substitutions
-    # and filter out duplicate solutions
-    sol_denoms = [[_eq_as_numer_denom(sym.Eq(x, y))[1] for x, y in s.items()] for s in sols]
-    final_sols = []
-    final_sols_set = []
-    for i, sol in enumerate(sols):
-        denoms = sol_denoms[i]
-        s1 = _eq_list_to_dict(remaining_eq+solved_eq)
-        s2 = _eq_list_to_dict(all_eq)
-        if not any(sym.simplify(d.subs(s1)) == 0 for d in denoms):
-            if not any(sym.simplify(d.subs(s2)) == 0 for d in denoms):
-                sol_set = _to_frozenset(_to_eq_list(sol))
-                if sol_set not in final_sols_set:
-                    final_sols_set.append(sol_set)
-                    final_sols.append(sol)
-    sols = final_sols
-
-
-    SOLVE_CACHE[eq_set] = sols
-    SOLVE_CACHE[_to_frozenset(remaining_eq+solved_eq)] = sols
-    
-    return sols
-      
-
-def _sol_indep_of_vars(expr, solve_vars, nonzero=[]):
-    """
-    Determines whether a solution to the given expr exists that only
-    depends on the specified solve_variables
-
-    Args:
-        expr (sym.Expr): Expression to be set to 0
-        solve_vars (list): Variables to solve for
-
-    Returns:
-        list[dict]: list of solutions that do not depend on bad_vars
-    """
-
-    # Simplify to rational form
-    numer, denom = _eq_as_numer_denom(expr)
-
-    # No solutions if there are no solve variables
-    if not any(v in numer.free_symbols for v in solve_vars):
-        return []
-
-    # Get unique symbolic products of non-excluded vars
-    var_combos = _unique_products(numer, exclude=solve_vars)
-
-    # All coefficients must be able to be zero simultaneously
-    eqs = []
-    eqs.append(var_combos.get(1,0))
-    # Anything with a bad var multipled by it
-    for v in var_combos:
-        eqs.append(sym.simplify(var_combos[v]))
-    eqs = [eq for eq in eqs if eq != 0]
-    eqs = list(set(eqs))  # Remove duplicates
-
-    # Get solutions for each equation and
-    # check compatibility with each other
-    sols = []
-    for eq in eqs:
-        si = _cached_solve([eq], solve_vars)
-        if si:
-            sols.append(si)
-        # At least one of them is unsolvable
-        else:
-            return []
-
-    compat_sols = _fully_compatible_set(sols, solve_vars, nonzero=[])
-
-    # Remove redundant solutions
-    # i.e. ones where a
-    # proper subset of the substitutions
-    # also is a valid solution
-    final_sols = []
-    final_pairs = []
-    for sol in sorted(compat_sols, key=lambda x: len(x)):
-        is_redun = False
-        subs_pairs = list(sol.items())
-        for ref_pairs in final_pairs:
-            # Are all pairs from a previously examined
-            # substitution already there?
-            if all(p in subs_pairs for p in ref_pairs):
-                is_redun = True
-                break
-        if not is_redun:
-            final_sol = {}
-            for key, val in sol.items():
-                if key != val:
-                    final_sol[key] = val
-            final_sols.append(final_sol)
-            final_pairs.append(subs_pairs)
-    # Make sure none of the nonzero conditions are violated
-    final_sols = [s for s in final_sols if all(sym.simplify(d.subs(s)) != 0 for d in nonzero)]
-    final_sols = [s for s in final_sols if sym.simplify(denom.subs(s)) != 0]
-
-    # Verify that the original expression is indeed zero
-    if any(not sym.simplify(expr.subs(s)).is_zero for s in final_sols):
-        raise ValueError("Solution does not satisfy original expression")
-
-    return final_sols
-
-
-def _unique_products(expr: sym.Expr, exclude: list[sym.Symbol] = []):
-    """
-    Return a list of unique products of free symbols
-    from an expanded expression, excluding specified symbols.
-    """
-    expr = sym.expand(expr)
-    products = {}
-    for term in expr.as_ordered_terms():
-        # Extract multiplicative factors
-        factors = []
-        if isinstance(term, Mul):
-             #[f for f in term.args if isinstance(f, (sym.Symbol, sym.Pow)) and f not in exclude]
-            for f in term.args:
-                if isinstance(f, sym.Symbol) and f not in exclude:
-                    factors.append(f)
-                elif isinstance(f, sym.Pow):
-                    if f.base not in exclude:
-                        factors.append(f)
-        elif isinstance(term, sym.Pow):
-            if term.base not in exclude:
-                factors.append(term)
-        elif isinstance(term, sym.Symbol) and term not in exclude:
-            factors.append(term)
-        elif term.is_number:
-            factors.append(term)
-        factors = tuple(sorted(factors, key=lambda a: str(a))) + (1,)
-        prod = functools.reduce(lambda a,b: a*b, factors, sym.sympify(1))
-        coeff = term/prod
-        if factors in products:
-            products[factors].append(coeff)
-        else:
-            products[factors] = [coeff]
-            
-    to_return = {}
-    for factors, coeffs in products.items():
-        prod = functools.reduce(lambda a,b: a*b, factors, sym.sympify(1))
-        coeff = functools.reduce(lambda a,b: a+b, coeffs, sym.sympify(0))
-        to_return[prod] = sym.simplify(coeff)
-    
-    
-    
-    return to_return
-
-
-def _expr_valid(valid_expr: list[sym.Expr], subs):
-    """
-    Determines whether the given list of substitutions
-    are all "compatible," meaning they can be
-    simultaneously fulfilled.
-
-    Optionally include a sympy expression or matrix that must not
-    have undefined values with the specified substitutions.
-
-    Args:
-        subs_list (list[dict]): list of substitutions mapping
-                                sympy symbol to its value.
-
-    Returns:
-        (bool, list[dict]): first entry is whether the substitutions are compatible
-                            second entry is a refined set of substitutions that
-                            achieve them all simultaneously
-    """
-    if isinstance(valid_expr, sym.Expr):
-        valid_expr = [valid_expr]
-    is_finite = [x.subs(subs).simplify().is_finite for x in valid_expr]
-    return all([x for x in is_finite if not x is None])
-
-
-def _extract_denom(Z: sym.Matrix):
-
-    denom_list = []
-    for i in range(Z.shape[0]):
-        for j in range(Z.shape[1]):
-            if len(Z[i,j].free_symbols) > 0:
-                denom_list.append(sym.simplify(Z[i,j].together().as_numer_denom()[1]))
-    return list(set(denom_list))
 
 # Deterministic symbolic instantiation helper
 def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
@@ -991,7 +598,7 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
                 sols = []
                 weights = []
                 for v_possible in vals:
-                    specific_sols = _cached_solve([sym.Eq(val, v_possible)], [v for v in var_list if v in val.free_symbols])
+                    specific_sols = cached_solve([sym.Eq(val, v_possible)], [v for v in var_list if v in val.free_symbols])
                     sols += sorted(specific_sols, key=lambda x: (len(str(x)), str(x)))
                     weights += [abs(v_possible)]*len(specific_sols)
                     if specific_sols and v_possible == 0:
@@ -1003,7 +610,7 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
                     raise ValueError("No Valid Instance Present With Provided Values")
                 idx += 1
 
-    s2 = _fully_compatible_set(all_eqs, solve_vars=var_list, nonzero=nonzero+[det], depth_first=True)
+    s2 = fully_compatible_set(all_eqs, solve_vars=var_list, nonzero=nonzero+[det], depth_first=True)
     min_key = ""
     best_s = None
     WJ_zero = len(WJ_VALS)//2
@@ -1632,13 +1239,13 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
         if i2 <= i1:
             continue
         c_vars = [v for v in var_list if v in cTransInv2[i1, i2].free_symbols]
-        sol_c = _sol_indep_of_vars(cTransInv2[i1, i2], c_vars, nonzero=dets)
+        sol_c = sol_indep_of_vars(cTransInv2[i1, i2], c_vars, nonzero=dets)
         i,j = i1, i2
         if sol_c:
             coupling_c.append(sol_c)
         # L will be 0 if this is a real capacitance matrix
         l_vars = [v for v in var_list if v in lTrans2[i1, i2].free_symbols]
-        sol_l = _sol_indep_of_vars(lTrans2[i1, i2], l_vars, nonzero=dets)
+        sol_l = sol_indep_of_vars(lTrans2[i1, i2], l_vars, nonzero=dets)
         if sol_l:
             coupling_l.append(sol_l)
     
@@ -1651,71 +1258,29 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
     # If no couplings to decouple, return the general transformation
     if len(coupling_c) + len(coupling_l) == 0:
         return [Z]
-    best_keys, best_subs = _maximally_compatible_set(coupling_c + coupling_l, var_list=var_list,
-                                          nonzero=dets) #, tiebreaker_fn=lambda k: len(k))
-    
-    ## Remove any transformations that are "subsets" of
-    ## another, meaning it has a proper subset of the terms present
-    best_Z = [Z.subs(s) for s in best_subs]
+    best_keys, best_subs = maximally_compatible_set(coupling_c + coupling_l, solve_vars=var_list, nonzero=dets)
+
+    # Remove duplicate solutions and ones that are supersets of others
+    # Sort by tiebreaker function
     best_nz_str = [tiebreaker_fn(k) for k in best_keys]
-    nz_Z = [X.shape[0]*X.shape[1] - int(_nonzero_entries_str(X, full_mat=True)[0]) for X in best_Z]
-    sort_keys = np.array(list(zip(nz_Z, best_nz_str)), dtype=[("nz_Z", int), ("nz_str", f"<U{len(best_nz_str[0])+1}")])
-    subs_keys = {}
-    for i in np.argsort(sort_keys, order = ["nz_str", "nz_Z"]):
-        key = frozenset(tuple(best_subs[i].items()))
-        prev = [all(x in key for x in past_key) for past_key in subs_keys.keys()]
-        if any(prev):
-            continue
-        else:
-            subs_keys[key] = [best_Z[i], best_nz_str[i]]
-    best_Z = []
-    best_subs = []
-    best_nz_str = []
-    for sub_i, [Z_i, nz_str_i] in subs_keys.items():
-        best_Z.append(Z_i)
-        best_subs.append(sub_i)
-        best_nz_str.append(nz_str_i)
+    nz_str_order = np.argsort(best_nz_str)
+    best_subs = [best_subs[i] for i in nz_str_order]
+    best_subs, best_idx = unique_solutions(best_subs, return_idx=True)
+    best_Z = [Z.subs(s) for s in best_subs]
+    best_nz_str = [best_nz_str[nz_str_order[i]] for i in best_idx]
     
-    ## Remove any transformations that are column-wise
-    ## permutations or *-1 of another
-    unique_Z = []
-    final_Z = []
-    final_nz_str = []
-    # Order columns by number of nonzero entries and
-    # Then by row of nonzero entries
+    # Remove transformations that are column permutations or sign-flips of each other
     perms = _var_col_perms(var_types, dyn_only=True)
-    for Z_i, nz_str_i in zip(best_Z, best_nz_str):
-        Z_set = []
-        hashes = []
-        to_add = True
-        for perm in perms:
-            Z_perm = Z_i[:, :n_d][:, perm]
-            # Make dummy variables to allow for equality check
-            subs = {}
-            v_count = 1
-            for j in range(Z_perm.shape[1]):
-                for i in range(Z_perm.shape[0]):
-                    for v in Z_perm[i,j].free_symbols:
-                        if v not in subs:
-                            subs[v] = sym.Symbol(f"v_{v_count}", real=True)
-                        v_count += 1
-            Z_perm = Z_perm.subs(subs)
-            # Is there any past transformation equivalent to this one?
-            if any(any(_equal_up_to_column_shift_and_sign(Z_past, Z_perm, shifts=[]) for Z_past in Z_past_set) for Z_past_set in unique_Z):
-                to_add = False
-                break
-            Z_set.append(Z_perm)
-        if to_add:
-            unique_Z.append(Z_set)
-            # Guaranteed to have selected lowest hash by previous sorting
-            final_Z.append(Z_i)
-            final_nz_str.append(nz_str_i)
+    perms = [p + tuple(range(n_d, Z0.shape[0])) for p in perms]
+    _, idx_kept = _remove_permutation_equivalent_transformations(best_Z, perms)
+    final_nz_str = [best_nz_str[i] for i in idx_kept]
+    final_Z = [best_Z[i] for i in idx_kept]
 
     # Process transformation before returning
     if return_instance:
         final_Z = [_find_Z_instance(Z, var_list, wJ=wJ, var_types=var_types) for Z in final_Z]
     if ordering_matters:
-        return final_Z[np.argmin(nz_str_i)]
+        return final_Z[np.argmin(final_nz_str)]
     else:
         return final_Z
 
@@ -1796,7 +1361,7 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             for Z2_bi in Z2_b:
                 Z_tot = Z*Z2_bi
                 var_list = [x for x in Z2_bi.free_symbols if "Z" in str(x)]
-                Z_hash = _find_Z_instance_deterministic(Z_tot, var_list, nonzero=_extract_denom(Z_tot))
+                Z_hash = _find_Z_instance_deterministic(Z_tot, var_list, nonzero=extract_denom(Z_tot))
                 cTransInv = sym.simplify(Z_hash.transpose()*cMat*Z_hash)[:n_dyn, :n_dyn].inv()
                 lTrans2 = sym.simplify(Z_hash.transpose()*lMat*Z_hash)
                 wJtTrans = sym.simplify(wJ.transpose()*Z_hash)
@@ -1819,13 +1384,13 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         var_list = [x for x in Z.free_symbols if "Z" in str(x)]
         # val, Z_perm = H_hash(_find_Z_instance_random(Z_equal, var_list),
         #                     var_types, cMat, lMat, wJ, equalJ=True)
-        Z_hash1 = _find_Z_instance_deterministic(Z_equal, var_list, nonzero=_extract_denom(Z_equal))
+        Z_hash1 = _find_Z_instance_deterministic(Z_equal, var_list, nonzero=extract_denom(Z_equal))
         cTransInv = sym.simplify(Z_hash1.transpose()*cMat*Z_hash1)[:n_dyn, :n_dyn].inv()
         lTrans2 = sym.simplify(Z_hash1.transpose()*lMat*Z_hash1)
         wJtTrans = sym.simplify(wJ.transpose()*Z_hash1)
         val, Z_perm = H_hash(cTransInv, lTrans2, wJtTrans, EJ, var_types=var_types)
 
-        Z_hash2 = _find_Z_instance(Z, var_list, var_types=var_types, wJ=wJ, nonzero=_extract_denom(Z))
+        Z_hash2 = _find_Z_instance(Z, var_list, var_types=var_types, wJ=wJ, nonzero=extract_denom(Z))
 
         # Z_hash2 = Z_hash1
         cTransInv = sym.simplify(Z_hash2.transpose()*cMat*Z_hash2)[:n_dyn, :n_dyn].inv()
@@ -1863,7 +1428,7 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
     #     for Zf in Z_final:
     #         var_list = [x for x in Zf.free_symbols if "Z" in str(x)]
     #         Z_final_instance.append(_find_Z_instance(Zf, var_list, var_types=var_types,
-    #                                                 wJ=wJ, nonzero=_extract_denom(Zf)))
+    #                                                 wJ=wJ, nonzero=extract_denom(Zf)))
     #     Z_final = Z_final_instance
 
     return Z_final, var_types, lowest_hash

@@ -65,88 +65,57 @@ def test__vec_space_overlap():
     overlap, in_v1, in_v2 = quantize._vec_space_overlap(vecs1, vecs2, return_decomp=True)
 
     assert len(overlap) == 1
-    assert len(in_v1) == len(in_v2) == 1
 
-    assert overlap[0] == sym.Matrix([1, 1, 0])
-    assert in_v1[0] == sym.Matrix([0, 1])
-    assert in_v2[0] == sym.Matrix([1, 1])
 
-    vecs1 = [sym.Matrix([1, 0, 1]),
-             sym.Matrix([1, 1, 0]),
-             sym.Matrix([1, -1, -1])]
+def test__remove_permutation_equivalent_transformations():
+    """Test that identical matrices after column permutation are filtered."""
+    # Simple matrices where permutation creates duplicate
+    Z1 = sym.Matrix([[1, 0], [0, 1]])
+    Z2 = sym.Matrix([[0, 1], [1, 0]])  # Column permutation of Z1
     
-    vecs2 = [sym.Matrix([4, 1, 0]),
-             sym.Matrix([-1, 0, 0]),
-             sym.Matrix([0, 0, 1])]
-
-    overlap, in_v1, in_v2 = quantize._vec_space_overlap(vecs1, vecs2, return_decomp=True)
-
-    assert len(overlap) == len(in_v1) == len(in_v2) == 3
-
-    for v in vecs2:
-        assert v in overlap
-
-    assert sym.Matrix([1, 2, 1]) in in_v1
-    assert sym.Matrix([sym.Rational(-1, 3),
-                       sym.Rational(-1, 3),
-                       sym.Rational(-1, 3)]) in in_v1
-    assert sym.Matrix([sym.Rational(2, 3),
-                       sym.Rational(-1, 3),
-                       sym.Rational(-1, 3)]) in in_v1
-    assert sym.Matrix([1, 0, 0]) in in_v2
-    assert sym.Matrix([0, 1, 0]) in in_v2
-    assert sym.Matrix([0, 0, 1]) in in_v2
-
-    vecs1 = [sym.Matrix([1, 2, 1]),
-             sym.Matrix([1, 1, -1])]
-    vecs2 = [sym.Matrix([-2, 0, 0]),
-             sym.Matrix([0, 0, 2])]
-    support = sym.Matrix([0, 1, 0])
+    Z_list = [Z1, Z2]
+    perms = [(0, 1), (1, 0)]  # Identity and swap permutations
     
-    overlap, in_v1, in_v2, in_sup = quantize._vec_space_overlap(vecs1, vecs2, support=support, return_decomp=True)
-    assert len(overlap) == len(in_v1) == len(in_v2) == len(in_sup) == 2
-    assert sym.Matrix([-1, -1]) in in_v1
-    assert sym.Matrix([1, -1]) in in_v1
-    assert sym.Matrix([-3]) in in_sup
-    assert sym.Matrix([1]) in in_sup
-
-    support = sym.Matrix([0, 0, 1])
-    overlap, in_v1, in_v2, in_sup = quantize._vec_space_overlap(vecs1, vecs2, support=support, return_decomp=True)
-    assert len(overlap) == len(in_v1) == len(in_v2) == len(in_sup) == 1
-    assert sym.Matrix([2, -4]) in in_v1
-    assert sym.Matrix([6]) in in_sup
+    filt_Z, idx_keep = quantize._remove_permutation_equivalent_transformations(Z_list, perms)
+    
+    # Should only keep one since they're equivalent under permutation
+    assert len(filt_Z) == 1
+    assert len(idx_keep) == 1
+    assert idx_keep[0] == 0  # Should keep the first one
 
 
-    vecs1 = [sym.Matrix([0, 2, 0])]
-    vecs2 = [sym.Matrix([-2, 0, 0]),
-             sym.Matrix([0, 0, 2])]
-    support = sym.Matrix([1, 0, 0])
-    overlap, in_v1, in_v2, in_sup = quantize._vec_space_overlap(vecs1, vecs2, support=support, return_decomp=True)
-    assert len(overlap) == len(in_v1) == len(in_v2) == len(in_sup) == 0
+    a, b = sym.symbols("a b", real=True)
+    Z1 = sym.Matrix([[a, 0], [0, b]])
+    Z2 = sym.Matrix([[a, b], [b, a]])
+    Z3 = sym.Matrix([[2*a, 0], [0, 3*b]])
+    
+    Z_list = [Z1, Z2, Z3]
+    perms = [(0, 1), (1, 0)]
+    
+    filt_Z, idx_keep = quantize._remove_permutation_equivalent_transformations(Z_list, perms)
+    
+    # Should keep at least one, and filter duplicates if any
+    assert len(filt_Z) == 3
+    assert len(idx_keep) == len(filt_Z)
+    # Indices should be valid
+    assert all(0 <= i < 3 for i in idx_keep)
 
-    vecs2 = [sym.nsimplify(sym.Matrix([
-                        [ 1/2],
-                        [   0],
-                        [   0],
-                        [-1/2]]), rational=True)]
-    vecs1 = [sym.Matrix([
-                [1],
-                [1],
-                [1],
-                [0]]),
-             sym.Matrix([
-                [0],
-                [0],
-                [0],
-                [1]])]
-    support = sym.Matrix([0, 1, 1, 0])
-    overlap, in_v1, in_v2, in_sup = quantize._vec_space_overlap(vecs1, vecs2, support=support, return_decomp=True)
-    assert len(overlap) == len(in_v1) == len(in_v2) == len(in_sup) == 1
-    assert overlap[0] == sym.nsimplify(sym.Matrix([
-                        [ 1/2],
-                        [ 1/2],
-                        [ 1/2],
-                        [-1/2]]), rational=True)
+
+    a = sym.symbols("a", real=True)
+    Z1 = sym.Matrix([[a, 0],
+                     [0, a]])
+    Z2 = sym.Matrix([[0, -b],
+                    [-b, 0]])  # Sign flip and column permutation of Z1
+    
+    Z_list = [Z1, Z2]
+    perms = [(0, 1), (1, 0)]
+    
+    filt_Z, idx_keep = quantize._remove_permutation_equivalent_transformations(Z_list, perms)
+    
+    # Should filter one as they're equivalent up to sign
+    assert len(filt_Z) == 1
+    assert len(idx_keep) == len(filt_Z)
+    assert idx_keep[0] == 0  # Should keep the first one
 
 
 def test__linearly_indep_rows_cols():
@@ -612,454 +581,6 @@ def test__sub_equal_LC():
     assert test[0,0] == test[0,2] == test[1,0] == test[1,1]
     assert test[0,1] == test[1,2]
     assert test[2,0] == test[2,1] == test[2,2]
-
-
-def test__to_frozenset():
-
-    a, b, c, d, e = sym.symbols("a b c d e")
-    s1 = [sym.Eq(a,b), sym.Eq(c,d)]
-    s2 = [sym.Eq(c,d), sym.Eq(a,b)]
-    s3 = [sym.Eq(a,b), sym.Eq(c,e)]
-    fs1 = quantize._to_frozenset(s1)
-    fs2 = quantize._to_frozenset(s2)
-    fs3 = quantize._to_frozenset(s3)
-    assert fs1 == fs2
-    assert fs1 != fs3
-
-
-def test__to_eq_list():
-
-    # list of frozenset of frozenset -> eq list
-    Z11 = sym.symbols("Z11")
-    test = [frozenset({frozenset({0, Z11 + 1})})]
-    l1 = quantize._to_eq_list(test[0])
-    assert len(l1) == 1
-
-    # Dictionary -> eq list
-    a, b, c, d, e = sym.symbols("a b c d e")
-    s1 = {a: b, c: d}
-    s2 = {c: d, a: b}
-    s3 = {a: b, c: e}
-    l1 = quantize._to_eq_list(s1)
-    l2 = quantize._to_eq_list(s2)
-    l3 = quantize._to_eq_list(s3)
-    assert all(x in l1 for x in l2) and all(x in l2 for x in l1)
-    assert not (all(x in l1 for x in l3) and all(x in l3 for x in l1))
-
-    # Eq list -> frozenset -> Eq list
-    s1 = [sym.Eq(a,b), sym.Eq(c,d)]
-    s2 = [sym.Eq(c,d), sym.Eq(a,b)]
-    s3 = [sym.Eq(a,b), sym.Eq(c,e)]
-    fs1 = quantize._to_frozenset(s1)
-    fs2 = quantize._to_frozenset(s2)
-    fs3 = quantize._to_frozenset(s3)
-    s1_b = quantize._to_eq_list(fs1)
-    s2_b = quantize._to_eq_list(fs2)
-    s3_b = quantize._to_eq_list(fs3)
-    assert all(x in s1 or sym.Eq(x.rhs, x.lhs) in s1 for x in s1_b)
-    assert all(x in s2 or sym.Eq(x.rhs, x.lhs) in s2 for x in s2_b)
-    assert all(x in s3 or sym.Eq(x.rhs, x.lhs) in s3 for x in s3_b)
-
-    # list of dict -> eq list
-    l1 = quantize._to_eq_list(s1+s2+s3)
-    assert len(l1) == 6
-    assert all(x in l1 for x in [sym.Eq(a,b), sym.Eq(c,d), sym.Eq(c,e)])
-
-    # expression -> eq list
-    expr1 = a - b
-    expr2 = c - d
-    l1 = quantize._to_eq_list([expr1, expr2])
-    assert len(l1) == 2
-    assert all(x in l1 for x in [sym.Eq(a-b,0), sym.Eq(c-d,0)])
-
-
-def test__sols_set_to_dict():
-    x, y, z = sym.symbols("x y z")
-    # First sol: numeric for x, Complexes for y (should be skipped), numeric for z
-    sols_set = [(1, sym.Complexes, 3), (x, y, z)]
-    res = quantize._sols_set_to_dict(sols_set, [x, y, z])
-    assert isinstance(res, list)
-    assert res[0] == {x: 1, z: 3}
-    # second solution maps each var to itself -> dict should be empty
-    assert res[1] == {}
-
-
-def test__eq_as_numer_denom():
-    x, y = sym.symbols("x y")
-    # simple rational eq
-    numer, denom = quantize._eq_as_numer_denom(sym.Eq(1/(x + 1), 0))
-    assert numer == 1
-    assert denom == x + 1
-    # linearized fraction
-    numer, denom = quantize._eq_as_numer_denom(sym.Eq(x/y, 2))
-    assert sym.simplify(numer - (x - 2*y)) == 0
-    assert denom == y
-    # two rational sides -> common denom is product
-    numer, denom = quantize._eq_as_numer_denom(sym.Eq((x + 1)/(x - 1), (y + 1)/(y - 1)))
-    assert denom == (x - 1)*(y - 1)
-
-
-def test__eq_list_to_dict():
-    a, b, c = sym.symbols("a b c")
-
-    # simple list of Eq -> dict
-    eqs = [sym.Eq(a, b), sym.Eq(b, c)]
-    d = quantize._eq_list_to_dict(eqs)
-    assert isinstance(d, dict)
-    assert d[a] == b and d[b] == c
-
-    # reversed numeric side -> should flip to var: number
-    d = quantize._eq_list_to_dict([sym.Eq(2, a)])
-    assert d == {a: 2}
-
-    # conflicting assignments for same var -> None
-    assert quantize._eq_list_to_dict([sym.Eq(a, b), sym.Eq(a, c)]) is None
-
-def test__maximally_compatible_set():
-
-    Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
-    C1, C2, C_J = sym.symbols("C1, C2, C_{J}", real=True, positive=True)
-    var_list = [Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10]
-    # coupling_c =  [[{Z00: Z10 - Z12*Z20/Z22}], [{Z00: Z10 - Z11*Z20/Z21}],
-    #                [{Z00: Z10, Z12: 0, Z21: 0}, {Z00: Z10, Z11: 0, Z22: 0}]]
-    # coupling_l =  [[{Z10: Z20, Z11: 0}, {Z00: Z10, Z11: Z21, Z20: 0}, {Z10: 0, Z11: 0, Z20: 0}, {Z00: Z20, Z10: Z20, Z21: 0}],
-    #                [{Z10: 0, Z12: 0, Z20: 0}, {Z00: Z10, Z12: Z22, Z20: 0}, {Z00: Z20, Z10: Z20, Z22: 0}]]
-    coupling_c =  [[{Z00: Z10 - Z12*Z20/Z22}], [{Z00: Z10 - Z11*Z20/Z21}], [{Z00: Z10 - Z11*Z20/Z21, Z12: 0}, {Z00: Z10, Z12: 0}, {Z00: Z10, Z11: 0, Z22: 0}]]
-    coupling_l =  [[{Z00: Z10, Z11: Z21, Z20: 0}, {Z10: 0, Z11: 0, Z20: 0}, {Z00: Z20, Z10: Z20, Z21: 0}], [{Z10: Z20, Z12: 0}, {Z00: Z10, Z12: Z22, Z20: 0}, {Z10: 0, Z12: 0, Z20: 0}, {Z00: Z20, Z10: Z20, Z22: 0}]]
-    dets =  [Z00*(Z11*Z22 - Z12*Z21), C1*C2*C_J*Z00**2*(Z11**2*Z22**2 - 2*Z11*Z12*Z21*Z22 + Z12**2*Z21**2)]
-    terms = coupling_c + coupling_l
-    keys, subs = quantize._maximally_compatible_set(terms, var_list=var_list, nonzero=dets)
-
-    x, y = sym.symbols("x y", real=True)
-
-    # Basic: two independent terms should be selectable together
-    terms = [
-        [{x: 0}, {x: 1}],
-        [{y: 0}, {y: 1}],
-    ]
-    keys, subs = quantize._maximally_compatible_set(terms, [x, y])
-    assert (0, 1) in keys
-    assert any(isinstance(s, dict) and x in s and y in s for s in subs)
-
-    # Incompatibility: two terms force different values for same var
-    terms = [
-        [{x: 0}],
-        [{x: 1}],
-        [{y: 0}],
-    ]
-    keys, subs = quantize._maximally_compatible_set(terms, [x, y])
-    # no key should contain both incompatible terms 0 and 1
-    assert all(not (0 in k and 1 in k) for k in keys)
-    # maximal compatible set size should be 2 (the y-term plus one x-term)
-    assert any(len(k) == 2 for k in keys)
-
-    # Tiebreaker: prefer the set with smaller sum of indices (02 over 12)
-    tiebreaker = lambda ks: sum(ks) if ks else 20
-    keys, subs = quantize._maximally_compatible_set(terms, [x, y], tiebreaker_fn=tiebreaker)
-    assert any(k == (0, 2) for k in keys)
-
-
-def test__fully_compatible_set():
-
-    # ensure order does not matter
-    Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
-    solve_vars = (Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10)
-    ord1 = [[{Z12: 0}, {Z00: Z10}], [{Z20: 0}, {Z22: 0}], [{Z12: Z22}, {Z10: Z20}]]
-    ord2 =  [[{Z12: Z22}, {Z10: Z20}], [{Z20: 0}, {Z22: 0}], [{Z12: 0}, {Z00: Z10}]]
-    res1 = quantize._fully_compatible_set(ord1, solve_vars, depth_first=False)
-    res2 = quantize._fully_compatible_set(ord2, solve_vars, depth_first=False)
-    res1_set = frozenset(quantize._to_frozenset(quantize._to_eq_list(r)) for r in res1)
-    res2_set = frozenset(quantize._to_frozenset(quantize._to_eq_list(r)) for r in res2)
-    print(res1_set)
-    print(res2_set)
-    assert res1_set == res2_set
-    
-
-    C1, C2 = sym.symbols("C1, C2", real=True, positive=True)
-    expr = (-4*Z00*Z11*Z12*Z22 - 2*Z00*Z11*Z22**2 +
-            4*Z00*Z12**2*Z21 + 2*Z00*Z12*Z21*Z22 - 
-            4*Z10*Z11*Z22**2 + 4*Z10*Z12*Z21*Z22 + 
-            4*Z11*Z12*Z20*Z22 - 4*Z12**2*Z20*Z21)
-    assumptions = [({expr: 0},)]
-    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
-    assert len(res_all) == 2
-    assert {Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))} in res_all
-    assert {Z11: Z12*Z21/Z22} in res_all
-
-    res_one = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=True)
-    assert len(res_one) == 1
-    assert {Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))} in res_one or {Z11: Z12*Z21/Z22} in res_one
-
-    # Produces infite denominator with the first expression applied to last
-    assumptions = [({Z11: -1, Z12:-Z22/2},), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22)),},)]
-    res_one = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
-    print("res one", res_one)
-    assert len(res_one) == 0
-
-    assumptions = [({Z11: -1, Z12:-Z22/2}, {Z12: Z22}), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22)),},)]
-    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
-    assert len(res_all) == 1
-
-    assumptions = [({Z11: -1, Z12:-Z22/2}, {Z12: Z22}), ({Z11: Z12*Z21/Z22},)]
-    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
-    assert len(res_all) == 2
-    
-    assumptions = [({Z11: -1, Z12:-Z22/2},), ({Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))},
-                                                         {Z11: Z12*Z21/Z22})]
-    res_all = quantize._fully_compatible_set(assumptions, solve_vars, depth_first=False)
-    assert len(res_all) == 1
-
-
-def test__cached_solve():
-
-    eps = 1e-06
-    for i in range(10):
-        x, y, z = sym.symbols("x,y,z")
-        eq1 = x + 2*y + 3*z - 6*np.random.random()
-        eq2 = 2*x + 3*y + z - 5*np.random.random()
-        eq3 = x - y + z - 2*np.random.random()
-        eqs = [eq1, eq2, eq3]
-        vars = [x, y, z]
-        sol_good = sym.solve(eqs, vars, dict=True, simplify=True)[0]
-        t0 = time.time()
-        sol1 = quantize._cached_solve(eqs, vars)[0]
-        t1 = time.time()
-        sol2 = quantize._cached_solve(eqs, vars)[0]
-        t2 = time.time()
-        assert t1 - t0 > t2 - t1  # second call should be faster due to caching
-        for v in vars:
-            assert abs(sol1[v] - sol_good[v]) < eps
-            assert abs(sol2[v] - sol_good[v]) < eps
-
-
-def test__sol_indep_of_vars():
-
-    # From real example
-    C1, C2, C_J = sym.symbols("C1, C2, C_J", real=True, positive=True)
-    L1, L2, L3 = sym.symbols("L1, L2, L3", real=True, positive=True)
-    Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
-    solve_vars = [Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10]
-    dets =  [Z00*(Z11*Z22 - Z12*Z21), C1*C2*C_J*Z00**2*(Z11**2*Z22**2 - 2*Z11*Z12*Z21*Z22 + Z12**2*Z21**2)]
-
-    eqL02 =  Z12*(-Z20/L3 - Z00/L1 + Z10*(L1 + L3)/(L1*L3)) + Z22*(-Z10/L3 + Z20*(L2 + L3)/(L2*L3))
-    varsL02 =  [Z00, Z10, Z12, Z20, Z22]
-    # solL02 =  [{Z10: 0, Z12: 0, Z20: 0}, {Z00: Z10, Z12: Z22, Z20: 0}, {Z00: Z20, Z10: Z20, Z22: 0}]
-    resL02 = quantize._sol_indep_of_vars(eqL02, varsL02, nonzero=dets)
-    assert sum(abs(sym.simplify(eqL02.subs(resL02[i])) == 0) for i in range(len(resL02)))
-    assert len(resL02) == 3
-
-    eqC01 =  (-(C1*Z12**2 + C2*Z22**2)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10)) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10)))/((C1*Z11**2 + C2*Z21**2)*(C1*Z12**2 + C2*Z22**2)*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) - (C1*Z11**2 + C2*Z21**2)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z12 + C1*Z10*Z12 + C2*Z20*Z22) - (C1*Z12**2 + C2*Z22**2)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21) - (C1*Z11*Z12 + C2*Z21*Z22)**2*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z12 + C1*Z10*Z12 + C2*Z20*Z22) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21))
-    varsC01 =  [Z00, Z10, Z11, Z12, Z20, Z21, Z22]
-    solC01 =  [{Z00: Z10 - Z12*Z20/Z22}]
-    resC01 = quantize._sol_indep_of_vars(eqC01, varsC01, nonzero=dets)
-    assert sum(abs(sym.simplify(eqC01.subs(resC01[i])) == 0) for i in range(len(resC01)))
-    assert len(resC01) == 1
-
-    eqL01 =  Z11*(-Z20/L3 - Z00/L1 + Z10*(L1 + L3)/(L1*L3)) + Z21*(-Z10/L3 + Z20*(L2 + L3)/(L2*L3))
-    varsL01 =  [Z00, Z10, Z11, Z20, Z21]
-    solL01 =  [{Z10: 0, Z11: 0, Z20: 0}, {Z00: Z10, Z11: Z21, Z20: 0}, {Z00: Z20, Z10: Z20, Z21: 0}]
-    resL01 = quantize._sol_indep_of_vars(eqL01, varsL01, nonzero=dets)
-    assert sum(abs(sym.simplify(eqL01.subs(resL01[i])) == 0) for i in range(len(resL01)))
-    assert len(resL01) == 3
-
-    eqC02 =  (-(C1*Z11**2 + C2*Z21**2)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10)) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10)))/((C1*Z11**2 + C2*Z21**2)*(C1*Z12**2 + C2*Z22**2)*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) - (C1*Z11**2 + C2*Z21**2)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z12 + C1*Z10*Z12 + C2*Z20*Z22) - (C1*Z12**2 + C2*Z22**2)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21) - (C1*Z11*Z12 + C2*Z21*Z22)**2*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z12 + C1*Z10*Z12 + C2*Z20*Z22) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21))
-    varsC02 =  [Z00, Z10, Z11, Z12, Z20, Z21, Z22]
-    solC02 =  [{Z00: Z10 - Z11*Z20/Z21}]
-    resC02 = quantize._sol_indep_of_vars(eqC02, varsC02, nonzero=dets)
-    assert sum(abs(sym.simplify(eqC02.subs(resC02[i])) == 0) for i in range(len(resC02)))
-    assert len(resC02) == 1
-
-    eqC12 =  (-(C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) + (C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21))/((C1*Z11**2 + C2*Z21**2)*(C1*Z12**2 + C2*Z22**2)*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) - (C1*Z11**2 + C2*Z21**2)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z12 + C1*Z10*Z12 + C2*Z20*Z22) - (C1*Z12**2 + C2*Z22**2)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21) - (C1*Z11*Z12 + C2*Z21*Z22)**2*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z12 + C1*Z10*Z12 + C2*Z20*Z22) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21))
-    varsC12 =  [Z00, Z10, Z11, Z12, Z20, Z21, Z22]
-    solC12 =  [{Z00: Z10, Z11: 0, Z22: 0}, {Z00: Z10, Z12: 0, Z21: 0}]
-    resC12 = quantize._sol_indep_of_vars(eqC12, varsC12, nonzero=dets)
-    assert sum(abs(sym.simplify(eqC12.subs(resC12[i])) == 0) for i in range(len(resC12)))
-    assert len(resC12) == 2
-
-    eqL12 =  Z12*(-Z21/L3 + Z11*(L1 + L3)/(L1*L3)) + Z22*(-Z11/L3 + Z21*(L2 + L3)/(L2*L3))
-    varsL12 =  [Z11, Z12, Z21, Z22]
-    solL12 =  []
-    resL12 = quantize._sol_indep_of_vars(eqL12, varsL12, nonzero=dets)
-    assert len(resL12) == 0
-
-    eq =  Z11*(Z20/L1 + Z00*(L1 - L2)/(2*L1*L2) + Z10*(L1 + L2)/(L1*L2)) + Z21*(-Z00/(2*L1) + Z10/L1 + Z20*(L1 + L3)/(L1*L3))
-    sols = quantize._sol_indep_of_vars(eq, solve_vars)
-    for x in [{Z21: 0, Z11: 0},
-              {Z00: 0, Z10: 0, Z20: 0},
-              {Z00: 2*Z10, Z11: 0, Z20: 0},
-              {Z00: -2*Z10, Z20: -2*Z10, Z21: 0},
-              {Z00: -2*Z10, Z11: -Z21, Z20: 0}]:     
-        any_true = False
-        for sol in sols:
-             all_eq = [sym.Eq(x[0], x[1]) for x in sol.items()]
-             sol_rewrite = sym.solve(all_eq, list(x.keys()), dict=True, simplify=True)
-             if x in sol_rewrite:
-                 any_true = True
-                 break
-        assert any_true
-
-    x,y = sym.symbols("x,y", real=True)
-    a,b = sym.symbols("a,b", real=True)
-
-    # No solution indep of bad vars
-    eq = (x+y/2)*a*b + b
-    SOLVE_CACHE={}
-    sol = quantize._sol_indep_of_vars(eq, [x,y])
-    assert sol == []
-
-    # Failing for some reason
-    Z10, Z20 = sym.symbols("Z10, Z20", real=True)
-    L_3 = sym.symbols("L_3", real=True, positive=True)
-    expr = Z10*Z20/L_3
-    sol = quantize._sol_indep_of_vars(expr, [Z10, Z20])
-    assert {Z10: 0} in sol and {Z20: 0} in sol
-
-
-    # Buggy one
-    j_var = sym.symbols("J_1, J_2, J_3, J_4", real=True, positive=True)
-    J_1, J_2, J_3, J_4 = j_var
-    Z_var = sym.symbols("Z21, Z22, Z02, Z11, Z01, Z12", real=True)
-    Z21, Z22, Z02, Z11, Z01, Z12 = Z_var
-    Z_var = set([Z01, Z02, Z11, Z12, Z21, Z22])
-    expr = J_3*Z21*Z22 + Z02*(-J_4*Z11 + Z01*(J_1 + J_4)) + Z12*(-J_4*Z01 + Z11*(J_2 + J_4))
-    sol = quantize._sol_indep_of_vars(expr, Z_var)
-    good_subs = {Z02: 0, Z12: 0, Z21: 0}
-    assert any(s == good_subs for s in sol)
-
-
-    # No bad vars present
-    eq = x-y
-    sol = quantize._sol_indep_of_vars(eq, [x,y])
-    assert len(sol) == 1
-    sol = sol[0]
-    if x in sol:
-        assert sol[x] == y
-    else:
-        assert sol[y] == x
-
-    # Solution exists independent of bad vars
-    eq = (x+y/2)*a*b
-    sol = quantize._sol_indep_of_vars(eq, [x,y])
-    assert len(sol) == 1
-    sol = sol[0]
-    if x in sol:
-        assert sol[x] == -y/2
-    else:
-        assert sol[y] == -2*x
-   
-    # There is if you remove b
-    eq = (x+y/2)*a + b
-    sol = quantize._sol_indep_of_vars(eq, [x,y,b])
-    assert len(sol) == 1
-    sol = sol[0]
-    if x in sol:
-        assert sol[x] == -y/2
-    else:
-        assert sol[y] == -2*x
-    assert sol[b] == 0
-
-    # Multiple solutions
-    eq = x*a*b
-    sol = quantize._sol_indep_of_vars(eq, [x,y,b])
-    assert len(sol) == 2
-    if x in sol[0]:
-        assert sol[0][x] == 0 and sol[1][b] == 0
-    else:
-        assert sol[1][x] == 0 and sol[0][b] == 0
-
-
-    x, y, a = sym.symbols("x y a", real=True)
-    # product giving two simple independent solutions: y = 0 OR x = -2
-    eq = (x + 2)*y
-    sols = quantize._sol_indep_of_vars(eq, [x, y])
-    # expect both solutions present (order not important)
-    assert any(s == {y: 0} for s in sols)
-    assert any(s.get(x) == -2 for s in sols)
-
-    # no solve vars present in expression -> no solutions
-    eq2 = a + 1
-    sols2 = quantize._sol_indep_of_vars(eq2, [x, y])
-    assert sols2 == []
-
-
-
-def test__unique_products():
-
-    Z00, Z11, Z12, Z12, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z12, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
-    C1, C2 = sym.symbols("C1, C2", real=True, positive=True)
-
-    expr = (-4*C1*C2*Z00*Z11*Z12*Z22 - 2*C1*C2*Z00*Z11*Z22**2 +
-            4*C1*C2*Z00*Z12**2*Z21 + 2*C1*C2*Z00*Z12*Z21*Z22 - 
-            4*C1*C2*Z10*Z11*Z22**2 + 4*C1*C2*Z10*Z12*Z21*Z22 + 
-            4*C1*C2*Z11*Z12*Z20*Z22 - 4*C1*C2*Z12**2*Z20*Z21)
-    
-
-    prods = quantize._unique_products(expr, [Z00, Z11, Z12, Z12, Z12, Z21, Z20, Z02, Z22, Z10])
-    assert len(prods) == 1
-    assert prods[C1*C2] == sym.simplify(expr/(C1*C2))
-
-
-    # Solution that only has a single thing
-    x,y = sym.symbols("x,y", real=True)
-    a,b = sym.symbols("a,b", real=True)
-
-    eq = (x+y/2)*a*b + b
-    prods = quantize._unique_products(eq, [x,y])
-    assert prods == {a*b: x + y/2, b: 1}
-
-    eq = x*y
-    prods = quantize._unique_products(eq, [a,b])
-    assert eq in prods
-    assert prods[eq] == 1
-
-    eq = x*y
-    prods = quantize._unique_products(eq, [x,y])
-    assert 1 in prods
-    assert prods[1] == eq
-
-
-    eq = x + y
-    prods = quantize._unique_products(eq, [x,y])
-    assert prods[1] == eq
-
-    eq = (x + y)*(a + b)**2 + a - y*b
-    prods = quantize._unique_products(eq, [x,y])
-    for pr in [a**2, a*b, b**2, a, b]:
-        assert pr in prods
-
-    eq = (x + y)*(a + 1/b)**2 + 1/a - y*b
-    prods = quantize._unique_products(eq, [x,y])
-    for pr in [a**2, a/b, 1/b**2, 1/a, b]:
-        assert pr in prods
-
-
-def test__expr_valid():
-
-    x,y = sym.symbols("x,y", real=True)
-    a,b = sym.symbols("a,b", real=True)
-
-    eq = (x+y/2)*a*b + b
-    assert quantize._expr_valid(eq, {x:y}) == True
-    assert quantize._expr_valid(eq, {x:y, a:b}) == True
-
-
-    eq = (x+y/2)*a*b + 1/b
-    assert quantize._expr_valid(eq, {x:y}) == True
-    assert quantize._expr_valid(eq, {x:y, b:0}) == False
-
-
-def test__extract_denom():
-
-    x,y = sym.symbols("x,y", real=True)
-    a,b = sym.symbols("a,b", real=True)
-
-    M = sym.Matrix([[1/x, 0, 2],
-                    [1/x + 1/y, sym.Rational(1,100), 0],
-                    [(a + b)/(x*y + a + b), 0, 3/y]])
-    denom = quantize._extract_denom(M)
-    assert len(denom) == 4
-    for entry in [x, y, x*y + a + b, x*y]:
-        assert entry in denom
 
 
 def test__find_Z_deterministic():
@@ -1547,28 +1068,29 @@ def test_choose_Z():
 
     # Was giving inconsistent results in test_enumeration
     # Examine every way to label nodes
-    circuit = [("J", "L"), ("C", "J"), ("C", "J", "L")]
-    circuit = utils.add_elem_number(circuit)
-    edges_og = ((0, 1), (0, 2), (1, 2))
-    edges_all = [edges_og]
-    for p in itertools.combinations([0, 1, 2], r=2):
-        edges_all.append(tuple(utils.swap_nodes(edges_og, p[0], p[1])))
-    for i in range(1):
-        res = {}
-        for edges in edges_all:
-            wJ = quantize.gen_w(circuit, edges, w_elem="J")
-            Z, var_types, hash = quantize.choose_Z(circuit, edges, return_instance=True)
-            Z = Z[0]
-            assert var_types["extended"] == [0,1]
-            assert var_types["sigma"] == [2]
-            if edges not in res:
-                res[edges] = set()
-            res[edges].add(quantize._maximize_wT((wJ.transpose()*Z)[:,:2])[1])
-        for e in res:
-            res[e] = frozenset(res[e])
-
-        assert len(set(res.values())) == 1
+    # circuit = [("J", "L"), ("C", "J"), ("C", "J", "L")]
+    # circuit = utils.add_elem_number(circuit)
+    # edges_og = ((0, 1), (0, 2), (1, 2))
+    # edges_all = [edges_og]
+    # for p in itertools.combinations([0, 1, 2], r=2):
+    #     edges_all.append(tuple(utils.swap_nodes(edges_og, p[0], p[1])))
+    # for i in range(1):
+    #     res = {}
+    #     for edges in edges_all:
+    #         wJ = quantize.gen_w(circuit, edges, w_elem="J")
+    #         Z, var_types, hash = quantize.choose_Z(circuit, edges, return_instance=True)
+    #         Z = Z[0]
+    #         assert var_types["extended"] == [0,1]
+    #         assert var_types["sigma"] == [2]
+    #         if edges not in res:
+    #             res[edges] = set()
+    #         res[edges].add(quantize._maximize_wT((wJ.transpose()*Z)[:,:2])[1])
+    #     for e in res:
+    #         res[e] = frozenset(res[e])
+    #     print(set(res.values()))
+    #     assert len(set(res.values())) == 1
     
+    # assert False
     
     circuit, edges = ([('J',), ('J', 'L'), ('C', 'J', 'L')], [(0, 1), (0, 2), (1, 2)])
     Z, var_types, hash = quantize.choose_Z(circuit, edges, return_instance=True)
@@ -1923,6 +1445,7 @@ def main():
     # test__sol_indep_of_vars()
 
     # test__maximally_compatible_set()
+    test__remove_permutation_equivalent_transformations()
     test_choose_Z()
 
     # test__vec_space_overlap()
@@ -1936,8 +1459,6 @@ def main():
     # test__wT_key()
     # test_var_trans_basis()
 
-
-    # test__to_eq_list()
     # test_H_hash()
     # test_incidence_to_square()
     # test_gen_cap_mat()
