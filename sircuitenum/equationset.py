@@ -176,15 +176,12 @@ class EquationSet:
         return cls(tuple(), tuple())
 
     def __post_init__(self):
-        object.__setattr__(self, "_pair_key", frozenset(self._pair(eq) for eq in self.eqs))
+
+        # Build dictionary representation and constant substitutions
         _dict, const_subs = self._build_dict()
-        object.__setattr__(self, "_dict", _dict)
-        # Compute canonical representation (currently no-op, returns _pair_key)
-        canonical = self._compute_canonical_key()
-        object.__setattr__(self, "_canonical_key", canonical)
 
         # Check to see if any constant substitutions yield undefined behavior
-        # TODO: Pop out already set solve variables for simplification of solving
+        # and simplify equations accordingly
         eq_simplified = []
         solve_vars_simplified = set()
         for eq in self.eqs:
@@ -201,6 +198,12 @@ class EquationSet:
                 continue
         object.__setattr__(self, "_eqs_simplified", eq_simplified)
         object.__setattr__(self, "_solve_vars_simplified", eq_simplified)
+
+        object.__setattr__(self, "_pair_key", frozenset(self._pair(eq) for eq in self.eqs))
+        object.__setattr__(self, "_dict", _dict)
+        # Compute canonical representation (currently no-op, returns _pair_key)
+        canonical = self._compute_canonical_key()
+        object.__setattr__(self, "_canonical_key", canonical)
                 
 
     def _build_dict(self):
@@ -259,6 +262,16 @@ class EquationSet:
         """Compute canonical key with standardized variable names."""
         return frozenset((self._pair_key, frozenset(self.solve_vars)))
 
+    def get_solve_vars(self) -> list[sym.Symbol]:
+        """Get list of variables to solve for.
+        
+        Returns
+        -------
+        list[sym.Symbol]
+            List of variables to solve for.
+        """
+        return list(self._solve_vars_simplified)
+
     def as_eq_list(self) -> list[sym.Eq]:
         """Convert to list of SymPy equations.
         
@@ -268,6 +281,7 @@ class EquationSet:
             List of equations in this set.
         """
         return list(self.eqs)
+        # return list(self._eqs_simplified)
     
     def as_grobner_list(self) -> list[sym.Eq]:
         """Convert to list of SymPy equations in Groebner basis order.
