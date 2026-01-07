@@ -177,6 +177,7 @@ def test_eq_as_numer_denom():
 
 
 def test_maximally_compatible_set():
+
     Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
     C1, C2, C_J = sym.symbols("C1, C2, C_{J}", real=True, positive=True)
     var_list = [Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10]
@@ -184,7 +185,7 @@ def test_maximally_compatible_set():
     coupling_l = [[{Z00: Z10, Z11: Z21, Z20: 0}, {Z10: 0, Z11: 0, Z20: 0}, {Z00: Z20, Z10: Z20, Z21: 0}], [{Z10: Z20, Z12: 0}, {Z00: Z10, Z12: Z22, Z20: 0}, {Z10: 0, Z12: 0, Z20: 0}, {Z00: Z20, Z10: Z20, Z22: 0}]]
     dets = [Z00*(Z11*Z22 - Z12*Z21), C1*C2*C_J*Z00**2*(Z11**2*Z22**2 - 2*Z11*Z12*Z21*Z22 + Z12**2*Z21**2)]
     terms = coupling_c + coupling_l
-    keys, subs = eqs.maximally_compatible_set(terms, var_list=var_list, nonzero=dets)
+    keys, subs = eqs.maximally_compatible_set(terms, solve_vars=var_list, nonzero=dets)
     assert keys
     assert subs
 
@@ -204,8 +205,79 @@ def test_maximally_compatible_set():
     keys, subs = eqs.maximally_compatible_set(terms, [x, y], tiebreaker_fn=tiebreaker)
     assert any(k == (0, 2) for k in keys)
 
+    # From choose Z example
+    resL01 =  [{Z00: Z20, Z10: Z20, Z21: 0}, {Z00: Z10, Z11: Z21, Z20: 0}, {Z10: 0, Z11: 0, Z20: 0}]
+    resC02 =  [{Z00: Z10 - Z11*Z20/Z21}, {Z20: 0, Z21: 0}]
+    resC01 =  [{Z00: Z10 - Z12*Z20/Z22}, {Z20: 0, Z22: 0}]
+    dets = [Z00*(Z11*Z22 - Z12*Z21), C1*C2*C_J*Z00**2*(Z11**2*Z22**2 - 2*Z11*Z12*Z21*Z22 + Z12**2*Z21**2)]
+    keys, subs = eqs.maximally_compatible_set([resL01, resC02, resC01], solve_vars=var_list, nonzero=dets)
+    assert keys == [(0, 1, 2), (0, 1, 2)]
+    assert subs == [{Z00: Z10, Z11: Z21, Z20: 0}, {Z00: Z10, Z11: Z21, Z20: 0, Z22:0}]
+
+
 
 def test_cached_solve():
+
+    Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02', real=True)
+    solve_vars = (Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02)
+    # eq_set = eqs.EquationSet.from_any([sym.Eq(Z11, Z12*Z21/Z22)])
+    # sols = eqs.cached_solve(eq_set, solve_vars)
+
+    eq_set = [sym.Eq(Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21, 0),
+              sym.Eq(Z00*Z22*(Z12 - Z22) + 2*Z12**2*Z20 - 2*Z12*Z20*Z22 + 2*Z20*Z22**2, 0),
+              sym.Eq(Z10*Z22*(Z12 - Z22) + Z12**2*Z20 - Z12*Z20*Z22 + 2*Z20*Z22**2, 0),
+              sym.Eq(Z11*(2*Z12 - Z22) - Z12*Z21 + 2*Z21*Z22, 0)]
+    
+    v_in_eq = [v for v in solve_vars if any(v in eq.free_symbols for eq in eq_set)]
+    import itertools
+    new_sols = []
+    for combos in itertools.combinations(v_in_eq, 4):
+        # sol_subset = eqs._sols_set_to_dict(sym.nonlinsolve(eq_set, combos), combos)
+        # TODO: Figure out why caching is causing issues here
+        # eqs.SOLVE_CACHE = {}
+        # eqs.UNSOLVABLE_CACHE = set()
+        print("------------")
+        print("UNSOLVABLE CACHE:", eqs.UNSOLVABLE_CACHE)
+        print("SOLVE CACHE:", eqs.SOLVE_CACHE)
+        sol_subset = eqs.cached_solve(eq_set, combos)
+        if sol_subset:
+            print("Solving for:", combos, "gives", sol_subset)
+            for sol in sol_subset:
+                # if all(val.is_real for val in sol.values()):
+                new_sols.append(sol)
+    new_sols = eqs.unique_solutions(list(new_sols))
+    sol_sympy = sym.nonlinsolve(eq_set, solve_vars[:4])
+    sol_sympy = sym.solve(eq_set, solve_vars, dict=True)
+    sol_dict = eqs._sols_set_to_dict(sol_sympy, solve_vars)
+    print("sol solve", sol_sympy[2:])
+    breakpoint()
+
+    # Test from variable transformation equations
+    eq_set = [sym.Eq(Z00, Z10 - Z11*Z20/Z21), sym.Eq(Z00, Z10), sym.Eq(Z11, Z21), sym.Eq(Z20, 0)]
+    eq_set2 = [eq.subs({Z20:0}) for eq in eq_set[:-1]]  # remove last eq since we substitute it in
+    sol_sympy = eqs._sols_set_to_dict(sym.nonlinsolve(eq_set, solve_vars), solve_vars)
+    sol_cached = eqs.cached_solve(eq_set, solve_vars)
+    assert len(sol_cached) == len(sol_sympy)
+    assert len(sol_cached) == 1
+    assert eqs.EquationSet.from_any(sol_cached[0]) == eqs.EquationSet.from_any(sol_sympy[0])
+
+
+    # basic functionality test
+    Z10, Z01, Z11, Z12, Z22, Z21 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21')
+    eq_set = eqs.EquationSet.from_any((sym.Eq(Z12, 0), sym.Eq(Z22, 0)))
+    sols = eqs.cached_solve(eq_set, solve_vars)
+    assert sols == [{Z12: 0, Z22: 0}]
+
+    eq_set = [sym.Eq(Z00*Z12 - Z10*Z12 - Z20*Z22, 0), 
+                sym.Eq(Z11*Z12 + Z21*Z22, 0), 
+                sym.Eq(Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21, 0)]
+    eq_set = [eq.lhs for eq in eq_set]
+    sols = eqs.cached_solve(eq_set, solve_vars)
+    assert len(sols) == 12
+
+
+
+    # speed and accuracy test
     eps = 1e-06
     for _ in range(10):
         x, y, z = sym.symbols("x,y,z")
@@ -224,6 +296,34 @@ def test_cached_solve():
         for v in vars_list:
             assert abs(sol1[v] - sol_good[v]) < eps
             assert abs(sol2[v] - sol_good[v]) < eps
+    
+    # identify different branches
+    eq = sym.Eq(0, - Z10*Z01 - Z10*Z11 - Z01)
+    sols = eqs.cached_solve([eq], [Z10, Z01, Z11])
+    good_sols = [{Z01: -Z10*Z11/(Z10 + 1)}, {Z10: -1, Z11: 0}]
+    assert len(sols) == len(good_sols)
+    for gs in good_sols:
+        assert gs in sols
+    
+
+def test_expand_singular_branches():
+
+
+    C1, C2, C_J = sym.symbols("C1, C2, C_J", real=True, positive=True)
+    L1, L2, L3 = sym.symbols("L1, L2, L3", real=True, positive=True)
+    Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
+    solve_vars = [Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10]
+    dets = [Z00*(Z11*Z22 - Z12*Z21), C1*C2*C_J*Z00**2*(Z11**2*Z22**2 - 2*Z11*Z12*Z21*Z22 + Z12**2*Z21**2)]
+
+
+    eq = eqs.EquationSet.from_any([sym.Eq(Z11, Z12*Z21/Z22)])
+    sols = eqs._expand_singular_branches(eq, [{Z11: Z12*Z21/Z22}], solve_vars)
+    assert len(sols) == 1
+
+    eq = eqs.EquationSet.from_any((sym.Eq(-Z00**2*Z21*Z22 + 2*Z00*Z10*Z21*Z22 - Z00*Z11*Z20*Z22 - Z00*Z12*Z20*Z21 - Z10**2*Z21*Z22 + Z10*Z11*Z20*Z22 + Z10*Z12*Z20*Z21 - Z11*Z12*Z20**2, 0),))
+    sols = [{Z11: Z12*Z21/Z22}, {Z00: Z10 - Z11*Z20/Z21}]
+    sols = eqs._expand_singular_branches(eq, sols, solve_vars)
+    assert len(sols) == 11
 
 
 def test_sol_indep_of_vars():
@@ -243,25 +343,31 @@ def test_sol_indep_of_vars():
     varsC01 = [Z00, Z10, Z11, Z12, Z20, Z21, Z22]
     resC01 = eqs.sol_indep_of_vars(eqC01, varsC01, nonzero=dets)
     assert sum(abs(sym.simplify(eqC01.subs(resC01[i])) == 0) for i in range(len(resC01)))
-    assert len(resC01) == 1
+    assert not any(d.subs(resC01[i]) == 0 for d in dets for i in range(len(resC01)))
+    assert len(resC01) == 2
 
     eqL01 = Z11*(-Z20/L3 - Z00/L1 + Z10*(L1 + L3)/(L1*L3)) + Z21*(-Z10/L3 + Z20*(L2 + L3)/(L2*L3))
     varsL01 = [Z00, Z10, Z11, Z20, Z21]
     resL01 = eqs.sol_indep_of_vars(eqL01, varsL01, nonzero=dets)
     assert sum(abs(sym.simplify(eqL01.subs(resL01[i])) == 0) for i in range(len(resL01)))
+    assert not any(d.subs(resC01[i]) == 0 for d in dets for i in range(len(resC01)))
     assert len(resL01) == 3
 
     eqC02 = (-(C1*Z11**2 + C2*Z21**2)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10)) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10)))/((C1*Z11**2 + C2*Z21**2)*(C1*Z12**2 + C2*Z22**2)*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) - (C1*Z11**2 + C2*Z21**2)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z12 + C1*Z10*Z12 + C2*Z20*Z22) - (C1*Z12**2 + C2*Z22**2)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21) - (C1*Z11*Z12 + C2*Z21*Z22)**2*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z12 + C1*Z10*Z12 + C2*Z20*Z22) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21))
     varsC02 = [Z00, Z10, Z11, Z12, Z20, Z21, Z22]
     resC02 = eqs.sol_indep_of_vars(eqC02, varsC02, nonzero=dets)
     assert sum(abs(sym.simplify(eqC02.subs(resC02[i])) == 0) for i in range(len(resC02)))
-    assert len(resC02) == 1
+    assert not any(d.subs(resC01[i]) == 0 for d in dets for i in range(len(resC01)))
+    assert len(resC02) == 2
 
     eqC12 = (-(C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) + (C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21))/((C1*Z11**2 + C2*Z21**2)*(C1*Z12**2 + C2*Z22**2)*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) - (C1*Z11**2 + C2*Z21**2)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z12 + C1*Z10*Z12 + C2*Z20*Z22) - (C1*Z12**2 + C2*Z22**2)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21) - (C1*Z11*Z12 + C2*Z21*Z22)**2*(C2*Z20**2 + Z00*(-C1*Z10 + Z00*(C1 + C_J)) + Z10*(-C1*Z00 + C1*Z10)) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z21 + Z11*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z12 + C1*Z10*Z12 + C2*Z20*Z22) + (C1*Z11*Z12 + C2*Z21*Z22)*(C2*Z20*Z22 + Z12*(-C1*Z00 + C1*Z10))*(-C1*Z00*Z11 + C1*Z10*Z11 + C2*Z20*Z21))
     varsC12 = [Z00, Z10, Z11, Z12, Z20, Z21, Z22]
     resC12 = eqs.sol_indep_of_vars(eqC12, varsC12, nonzero=dets)
     assert sum(abs(sym.simplify(eqC12.subs(resC12[i])) == 0) for i in range(len(resC12)))
-    assert len(resC12) == 2
+    assert len(resC12) == 4
+    for r in resC12:
+        assert not any(d.subs(r) == 0 for d in dets)
+        assert sym.simplify(eqC12.subs(r)) == 0
 
     eqL12 = Z12*(-Z21/L3 + Z11*(L1 + L3)/(L1*L3)) + Z22*(-Z11/L3 + Z21*(L2 + L3)/(L2*L3))
     varsL12 = [Z11, Z12, Z21, Z22]
@@ -418,12 +524,10 @@ def test_unique_solutions():
         {x: 1, y: 2},  # Another duplicate
     ]
     
-    unique = eqs._unique_solutions(sols)
+    unique = eqs.unique_solutions(sols)
     assert len(unique) == 2
-    
-    # Check that we kept the first occurrence
-    assert unique[0] == {x: 1, y: 2}
-    assert unique[1] == {x: 1, y: 3}
+    assert {x: 1, y: 2} in unique
+    assert {x: 1, y: 3} in unique
     
     # Test with all unique solutions
     sols_unique = [
@@ -431,18 +535,18 @@ def test_unique_solutions():
         {x: 2},
         {y: 3},
     ]
-    unique2 = eqs._unique_solutions(sols_unique)
+    unique2 = eqs.unique_solutions(sols_unique)
     assert len(unique2) == 3
     
     # Test with empty list
-    assert eqs._unique_solutions([]) == []
+    assert eqs.unique_solutions([]) == []
     
     # Test that Eq(a,b) and Eq(b,a) are treated as same
     sols_sym = [
         {x: y},
         {y: x},  # Equivalent to x: y
     ]
-    unique3 = eqs._unique_solutions(sols_sym)
+    unique3 = eqs.unique_solutions(sols_sym)
     assert len(unique3) == 1
 
     # Subset solutions
@@ -452,7 +556,7 @@ def test_unique_solutions():
         {x: 1, y: 2},
         {x: 1},
     ]
-    minimized = eqs._unique_solutions(sols)
+    minimized = eqs.unique_solutions(sols)
     assert minimized == [{x: 1}]
 
 
@@ -462,7 +566,7 @@ def test_unique_solutions():
         {y: 2},
         {x: 1, y: 2},  # superset of both
     ]
-    minimized = eqs._unique_solutions(sols)
+    minimized = eqs.unique_solutions(sols)
     # Order of kept items should be sorted by size then first-seen
     assert minimized == [{x: 1}, {y: 2}]
 
@@ -472,7 +576,7 @@ def test_unique_solutions():
         {y: 2, x: 1},  # duplicate
         {x: 1},        # subset of the first
     ]
-    minimized = eqs._unique_solutions(sols)
+    minimized = eqs.unique_solutions(sols)
     # {x:1} is minimal; duplicates of {x:1,y:2} are removed and supersets dropped
     assert minimized == [{x: 1}]
 
@@ -480,8 +584,8 @@ def test_unique_solutions():
     x, y = sym.symbols("x y")
     sols1 = [{x: 1}, {x: 1, y: 2}]
     sols2 = [{x: 1, y: 2}, {x: 1}]
-    m1 = eqs._unique_solutions(sols1)
-    m2 = eqs._unique_solutions(sols2)
+    m1 = eqs.unique_solutions(sols1)
+    m2 = eqs.unique_solutions(sols2)
     assert m1 == m2 == [{x: 1}]
 
 
@@ -490,6 +594,17 @@ def test_fully_compatible_set():
     # ensure order does not matter
     Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
     solve_vars = (Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10)
+
+
+    # length 1 solutions
+    sols = [{Z11: Z12*Z21/Z22}, {Z00: Z10 - Z12*Z20/Z22}, {Z12: 0, Z22: 0}, {Z20: 0, Z22: 0}, {Z21: 0, Z22: 0}]
+    res1 = eqs.fully_compatible_set([sols], solve_vars, depth_first=False)
+    assert len(res1) == len(sols)
+    assert all(s in res1 for s in sols)
+    assert all(s in sols for s in res1)
+
+
+
     ord1 = [[{Z12: 0}, {Z00: Z10}], [{Z20: 0}, {Z22: 0}], [{Z12: Z22}, {Z10: Z20}]]
     ord2 =  [[{Z12: Z22}, {Z10: Z20}], [{Z20: 0}, {Z22: 0}], [{Z12: 0}, {Z00: Z10}]]
     res1 = eqs.fully_compatible_set(ord1, solve_vars, depth_first=False)
@@ -506,9 +621,12 @@ def test_fully_compatible_set():
             4*Z11*Z12*Z20*Z22 - 4*Z12**2*Z20*Z21)
     assumptions = [({expr: 0},)]
     res_all = eqs.fully_compatible_set(assumptions, solve_vars, depth_first=False)
-    assert len(res_all) == 2
+    assert len(res_all) == 7
     assert {Z00: sym.simplify(2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22))} in res_all
     assert {Z11: Z12*Z21/Z22} in res_all
+    # res_targ = [{Z00: 2*(-Z10*Z22 + Z12*Z20)/(2*Z12 + Z22)}, {Z11: Z12*Z21/Z22}, {Z11: -Z21/2, Z12: -Z22/2}, {Z10: -Z20/2, Z12: -Z22/2}, {Z12: 0, Z22: 0}, {Z21: 0, Z22: 0}, {Z00: Z20, Z22: 0}]
+    for sol in res_all:
+        assert sym.simplify(expr.subs(sol)) == 0
 
     res_one = eqs.fully_compatible_set(assumptions, solve_vars, depth_first=True)
     assert len(res_one) >= 1
@@ -545,4 +663,10 @@ if __name__ == "__main__":
     # test_fully_compatible_set()
     # test_maximally_compatible_set()
     # test_sol_indep_of_vars()
-    test_equationset_union()
+    # test_equationset_union()
+    test_cached_solve()
+    # test_equationset_nonconstant_conflict_no_flag()
+    # test_expand_singular_branches()
+    test_sol_indep_of_vars()
+    # test_unique_solutions()
+    test_fully_compatible_set()

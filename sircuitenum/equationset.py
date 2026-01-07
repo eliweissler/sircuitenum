@@ -47,11 +47,13 @@ class EquationSet:
     {x: 1, y: 2}
     """
     eqs: Tuple[sym.Eq, ...]
+    solve_vars: Tuple[sym.Symbol] = field(init=False, repr=True, default=tuple())
+    _eqs_simplified: Tuple[sym.Eq,...] = field(init=False, repr=False, default=None)
+    _solve_vars_simplified: Tuple[sym.Symbol] = field(init=False, repr=False, default=None)
     _pair_key: frozenset = field(init=False, repr=False)
     _dict: Optional[dict] = field(init=False, repr=False, default=None)
     _canonical_key: frozenset = field(init=False, repr=False)
     _constant_conflict: bool = field(init=False, repr=True, default=False)
-    _solve_vars: bool = field(init=False, repr=True, default=False)
 
     @staticmethod
     def _coerce(raw) -> Tuple[sym.Eq, ...]:
@@ -134,18 +136,33 @@ class EquationSet:
             - frozenset of frozensets
             - existing EquationSet (returns copy)
          solve_vars: Iterable, optional
-            The variables to solve for (required for canonicalization).
+            The variables to solve for
             
         Returns
         -------
         EquationSet
             New EquationSet with normalized equations.
         """
+        # if raw is None or empty, return empty EquationSet
+        if raw is None:
+            return cls.empty()
+        if isinstance(raw, (list, tuple, frozenset)) and len(raw) == 0:
+            return cls.empty()
         eqs = cls._coerce(raw)
         # normalize by removing trivially true eqs; keep ordering stable
-        norm = tuple(eq for eq in eqs if not (eq.lhs.is_number and eq.rhs.is_number and eq.lhs == eq.rhs))
+        try:
+            norm = tuple(eq for eq in eqs if not (eq.lhs.is_number and eq.rhs.is_number and eq.lhs == eq.rhs))
+        except:
+            breakpoint()
         obj = cls(norm)
-        object.__setattr__(obj, "_solve_vars", solve_vars)
+        if solve_vars:
+            object.__setattr__(obj, "solve_vars", tuple(solve_vars))
+        else:
+            # infer solve vars from equations
+            sv = set()
+            for eq in norm:
+                sv.update(x for x in eq.free_symbols)
+            object.__setattr__(obj, "solve_vars", tuple(sorted(sv, key=lambda x: str(x))))
         return obj
     
     @classmethod
@@ -161,10 +178,31 @@ class EquationSet:
 
     def __post_init__(self):
         object.__setattr__(self, "_pair_key", frozenset(self._pair(eq) for eq in self.eqs))
-        object.__setattr__(self, "_dict", self._build_dict())
+        _dict, const_subs = self._build_dict()
+        object.__setattr__(self, "_dict", _dict)
         # Compute canonical representation (currently no-op, returns _pair_key)
         canonical = self._compute_canonical_key()
         object.__setattr__(self, "_canonical_key", canonical)
+
+        # Check to see if any constant substitutions yield undefined behavior
+        # TODO: Pop out already set solve variables for simplification of solving
+        # eq_simplified = []
+        # solve_vars_simplified = set()
+        # for eq in self.eqs:
+        #     new_eq = eq.subs(const_subs)
+        #     if isinstance(new_eq, sym.Eq):
+        #         eq_simplified.append(new_eq)
+        #         solve_vars_simplified.add(x for x in new_eq.free_symbols if x in self._solve_vars)
+        #         if eq.lhs.is_finite == False or eq.rhs.is_finite == False:
+        #             object.__setattr__(self, "_constant_conflict", True)
+        #     if isinstance(new_eq, sym.logic.boolalg.BooleanFalse):
+        #         object.__setattr__(self, "_constant_conflict", True)
+        #         continue
+        #     elif isinstance(new_eq, sym.logic.boolalg.BooleanTrue):
+        #         continue
+        # object.__setattr__(self, "_eqs_simplified", eq_simplified)
+        # object.__setattr__(self, "_solve_vars_simplified", eq_simplified)
+                
 
     def _build_dict(self):
         """Build dictionary representation from equations.
@@ -176,13 +214,15 @@ class EquationSet:
             inconsistent (same variable maps to different values).
         """
         d = {}
+        const_subs = {}
+        dict_exists = True
         for eq in self.eqs:
             var, val = eq.lhs, eq.rhs
             # Number != Number
             if var.is_number and val.is_number:
                 if var != val:
                     object.__setattr__(self, "_constant_conflict", True)
-                    return None
+                    return None, {}
                 continue
             # val is number and var is not -> swap
             if var.is_number and not val.is_number:
@@ -191,11 +231,19 @@ class EquationSet:
             if not var.is_number and val.is_number:
                 if var in d and d[var].is_number and d[var] != val:
                     object.__setattr__(self, "_constant_conflict", True)
-                    return None
+                    return None, {}
             if var in d and d[var] != val:
-                return None
+                dict_exists = False
+                continue
             d[var] = val
-        return d
+            # Track constant substitutions for conflict checking
+            if val.is_number and not var.is_number:
+                const_subs[var] = val
+
+        if dict_exists:
+            return d, const_subs
+        else:
+            return None, const_subs
     
     def _compute_canonical_key(self) -> frozenset:
         """Compute canonical key with standardized variable names.
@@ -210,7 +258,7 @@ class EquationSet:
         Currently returns _pair_key unchanged. Variable canonicalization to be implemented.
         """
         """Compute canonical key with standardized variable names."""
-        return self._pair_key
+        return frozenset((self._pair_key, frozenset(self.solve_vars)))
 
     def as_eq_list(self) -> list[sym.Eq]:
         """Convert to list of SymPy equations.
@@ -221,6 +269,19 @@ class EquationSet:
             List of equations in this set.
         """
         return list(self.eqs)
+    
+    def as_grobner_list(self) -> list[sym.Eq]:
+        """Convert to list of SymPy equations in Groebner basis order.
+        
+        Returns
+        -------
+        list[sym.Eq]
+            List of equations in Groebner basis order.
+        """
+        if len(self.eqs) == 0:
+            return []
+        grob_eqs = sym.groebner([eq.lhs - eq.rhs for eq in self.as_eq_list()], *self._solve_vars)
+        return [sym.Eq(poly, 0) for poly in grob_eqs]
 
     def as_frozenset(self) -> frozenset:
         """Convert to frozenset of equation pairs.
@@ -271,7 +332,11 @@ class EquationSet:
     def __or__(self, other: "EquationSet") -> "EquationSet":
         if not isinstance(other, EquationSet):
             return NotImplemented
-        return EquationSet.from_any(self.eqs + other.eqs)
+        if self._pair_key == other._pair_key or len(other.eqs) == 0:
+            return self
+        if len(self.eqs) == 0:
+            return other
+        return EquationSet.from_any(self.as_eq_list() + other.as_eq_list())
 
     def __ior__(self, other: "EquationSet") -> "EquationSet":
         if not isinstance(other, EquationSet):
@@ -290,11 +355,11 @@ class EquationSet:
 
         numer_eqs = []
         denoms = []
-        for eq in self.eqs:
+        for eq in self.as_eq_list():
             numer, denom = _eq_as_numer_denom(eq)
             denoms.append(denom)
             numer_eqs.append(sym.Eq(numer, 0))
-        return EquationSet.from_any(numer_eqs), denoms
+        return EquationSet.from_any(numer_eqs, solve_vars=self.solve_vars), denoms
 
 
 def maximally_compatible_set(terms: Union[list[list[EquationSet]], list[list[dict]]], solve_vars: list[sym.Symbol],
@@ -342,9 +407,10 @@ def maximally_compatible_set(terms: Union[list[list[EquationSet]], list[list[dic
         # Pidgeonhole principle, is it possible to to select nz keys that
         # might be compatible
         if len(incompatible) > 0:
-            if nz > n_terms - max(len(incompat_keys) for incompat_keys in incompatible):
+            if nz > n_terms - max(len(incompat_keys) for incompat_keys in incompatible) + 1:
                 break
         for keys in itertools.combinations(range(n_terms), nz):
+
             # Check if a subset of the keys are incompatible
             if any(all(k in keys for k in incompat_keys) for incompat_keys in incompatible):
                 continue
@@ -370,15 +436,14 @@ def maximally_compatible_set(terms: Union[list[list[EquationSet]], list[list[dic
                 continue
             # Verify that the nonzero entries are nonzero
             good_subs = []
-            good_sub_sets = set()
             tiebreak_val = tiebreaker_fn(keys)
             for i, compat_sub in enumerate(res):
+                if any(sym.simplify(d.subs(compat_sub)) == 0 for d in nonzero):
+                    continue
                 compat_eq = EquationSet.from_any(compat_sub, solve_vars=solve_vars)
                 if compat_eq._constant_conflict:
                     continue
-                if compat_eq in good_sub_sets:
-                    continue
-                if any(sym.simplify(d.subs(compat_sub)) == 0 for d in nonzero):
+                if compat_eq in good_subs:
                     continue
                 if (tiebreak_val < best_val and nz == best_nz) or (nz > best_nz):
                     best_val = tiebreak_val
@@ -389,12 +454,12 @@ def maximally_compatible_set(terms: Union[list[list[EquationSet]], list[list[dic
                     best_subs.append(compat_sub)
                     best_keys.append(keys)
                 good_subs.append(compat_sub)
-                good_sub_sets.add(compat_eq)
             # Save the results for these keys
-            if len(good_subs) == 0:
-                incompatible.add(keys)
-            else:
-                compatible[keys] = good_subs
+            if len(keys) > 1:
+                if len(good_subs) == 0:
+                    incompatible.add(keys)
+                else:
+                    compatible[keys] = good_subs
 
     return best_keys, best_subs
 
@@ -435,6 +500,8 @@ def fully_compatible_set(assumptions: Union[frozenset[frozenset[EquationSet]], l
     -----
     Results are cached for efficiency when depth_first=False.
     """
+
+
     # Convert starting to EquationSet if needed
     if not isinstance(starting, EquationSet):
         starting = EquationSet.from_any(starting, solve_vars=solve_vars)
@@ -442,19 +509,17 @@ def fully_compatible_set(assumptions: Union[frozenset[frozenset[EquationSet]], l
     if isinstance(assumptions, list):
         assumptions = frozenset(frozenset(EquationSet.from_any(t, solve_vars=solve_vars) if not isinstance(t, EquationSet) else t for t in group) for group in assumptions)
 
-    if (starting, assumptions, frozenset(nonzero)) in COMPATIBLE_CACHE:
-        return COMPATIBLE_CACHE[(starting, assumptions, frozenset(nonzero))]
-
-    # Starting is not a valid set of substitutions
-    if starting._constant_conflict:
-        return []
-    
     # Base case: no more assumptions to process
     if len(assumptions) == 0:
         return [starting.as_dict()]
     
-    # Record fixed substitutions for the starting assumptions
-    const_subs = {var: val for var, val in starting.as_dict().items() if val.is_number and isinstance(var, sym.Symbol)}
+    # Starting is not a valid set of substitutions
+    if starting._constant_conflict:
+        return []
+    
+    # Check cache
+    if (starting, assumptions, frozenset(nonzero)) in COMPATIBLE_CACHE:
+        return COMPATIBLE_CACHE[(starting, assumptions, frozenset(nonzero))]
 
     # Existing equations from starting assumptions
     all_res = []
@@ -466,7 +531,7 @@ def fully_compatible_set(assumptions: Union[frozenset[frozenset[EquationSet]], l
         # Conflict in the substitutions of constants
         if combined_eq_set._constant_conflict:
             continue
-        sols = cached_solve(combined_eq_set.as_eq_list(), solve_vars)
+        sols = cached_solve(combined_eq_set, solve_vars)
         if len(sols) > 0:
             for sol in sols:
                 # Make sure value isn't 0
@@ -474,14 +539,14 @@ def fully_compatible_set(assumptions: Union[frozenset[frozenset[EquationSet]], l
                 if any(d == 0 for d in this_nz):
                     continue
                 res = fully_compatible_set(next_assumptions, solve_vars, starting=sol,
-                                            nonzero=this_nz, depth_first=depth_first)
+                                                nonzero=this_nz, depth_first=depth_first)
                 if res and depth_first:
                     return res
                 all_res += res
     
     # Save in cache if we're not doing depth first
     if not depth_first:
-        COMPATIBLE_CACHE[(starting, assumptions)] = all_res
+        COMPATIBLE_CACHE[(starting, assumptions, frozenset(nonzero))] = all_res
 
     return all_res
     
@@ -536,15 +601,15 @@ def sol_indep_of_vars(expr: Union[sym.Eq, sym.Expr], solve_vars, nonzero=[]):
 
     # Get solutions for each equation and
     # check compatibility with each other
-    sols = []
+    partial_sols = []
     for coeff in coeffs:
         si = cached_solve([coeff], solve_vars)
         if si:
-            sols.append(si)
+            partial_sols.append(si)
         # At least one of them is unsolvable
         else:
             return []
-    sols = unique_solutions(fully_compatible_set(sols, solve_vars, nonzero=[]))
+    sols = unique_solutions(fully_compatible_set(partial_sols, solve_vars, nonzero=[]))
 
     # Make sure none of the nonzero conditions are violated
     sols = [s for s in sols if all(sym.simplify(d.subs(s)) != 0 for d in nonzero)]
@@ -552,6 +617,7 @@ def sol_indep_of_vars(expr: Union[sym.Eq, sym.Expr], solve_vars, nonzero=[]):
 
     # Verify that the original expression is indeed zero
     if any(not sym.simplify(expr.subs(s)).is_zero for s in sols):
+        breakpoint()
         raise ValueError("Solution does not satisfy original expression")
 
     return sols
@@ -589,9 +655,16 @@ def cached_solve(all_eq: Union[EquationSet, list], solve_vars: list[sym.Symbol],
     else:
         eq_set_obj = all_eq
 
-    # Recursive base case
-    if len(eq_set_obj) == 0:
+    if not any(v in eq.free_symbols for eq in eq_set_obj.as_eq_list() for v in solve_vars):
         return []
+
+    # Recursive base case -- empty or single variable 1:1 mapping
+    if len(eq_set_obj) == 0 or eq_set_obj._constant_conflict:
+        return []
+    elif eq_set_obj.as_dict() is not None and len(eq_set_obj) == 1:
+        var, val = list(eq_set_obj.as_dict().items())[0]
+        if var.is_symbol and var.is_number or var.is_symbol:
+            return [{var: val}]
     
     # Check if we've solved before
     if eq_set_obj in UNSOLVABLE_CACHE:
@@ -615,7 +688,26 @@ def cached_solve(all_eq: Union[EquationSet, list], solve_vars: list[sym.Symbol],
         sols = SOLVE_CACHE[eq_set_numer]
     else:
         # Make solution list of dictionaries
-        sols = unique_solutions(_sols_set_to_dict(sym.nonlinsolve(eq_set_numer.as_eq_list(), solve_vars), solve_vars))
+        if _is_system_linear(eq_set_numer.as_eq_list(), solve_vars):
+            # print("Using linsolve for:", eq_set_numer.as_eq_list())
+            general_sols = unique_solutions(_sols_set_to_dict(sym.linsolve(eq_set_numer.as_eq_list(), solve_vars), solve_vars))
+        try:
+            # print("Using nonlinsolve for:", eq_set_numer.as_eq_list())
+            general_sols = unique_solutions(_sols_set_to_dict(sym.nonlinsolve(eq_set_numer.as_eq_list(), solve_vars), solve_vars))
+        except Exception as e:
+            try:
+                general_sols = sym.solve(eq_set_numer.as_eq_list(), solve_vars, dict=True)
+            except NotImplementedError:
+                general_sols = []
+        # Expand solutions by exploring singular branches
+        sols = []
+        for s in _expand_singular_branches(eq_set_numer, general_sols, solve_vars, nonzero=all_denom):
+            if all(d.subs(s) != 0 for d in all_denom):
+                sols.append(s)
+        # simplify solutions
+        if simplify:
+            sols = [{var: sym.simplify(val) for var, val in sol.items()} for sol in sols]
+        # Cache the results
         if sols:
             SOLVE_CACHE[eq_set_numer] = sols
         else:
@@ -624,6 +716,7 @@ def cached_solve(all_eq: Union[EquationSet, list], solve_vars: list[sym.Symbol],
 
     # Make sure none of the original denominators are zero
     sols = [s for s in sols if all(sym.simplify(d.subs(s)) != 0 for d in all_denom)]
+    sols = unique_solutions(sols)
 
     # Cache the results
     if sols:
@@ -632,6 +725,94 @@ def cached_solve(all_eq: Union[EquationSet, list], solve_vars: list[sym.Symbol],
         UNSOLVABLE_CACHE.add(eq_set_obj)
     
     return sols
+
+def _is_system_linear(equations, variables):
+    """Checks if all equations in a system are linear in all specified variables."""
+    for eq in equations:
+        # Rewrite the equation to the form expr = 0 for consistency
+        expr = sym.expand(eq.lhs - eq.rhs) if eq.rhs != 0 else sym.expand(eq)
+        for term in expr.args:
+            var_in_term = [x for x in variables if x in term.free_symbols]
+            if not var_in_term:
+                continue
+            elif len(var_in_term) > 1:
+                return False
+            elif not sym.Poly(term, var_in_term[0]).is_linear:
+                return False
+    return True
+
+
+def _expand_singular_branches(eq_set, initial_solutions, solve_vars, nonzero=[]):
+    """
+    Expand solutions by exploring branches where denominators are zero.
+
+    NOTE: By default it does not filter out solutions that make eq_set equations invalid.
+    This is left to the caller to input appropriate nonzero conditions.
+
+    Parameters
+    ----------
+    eq_set : EquationSet
+        The original set of equations. 
+    initial_solutions : list[dict]
+        Initial solutions to expand upon. Assumed to be unique already.
+    solve_vars : list[sym.Symbol]
+        Variables to solve for. Assumes to be sorted already.
+    """
+
+    # Check for trivial case
+    if eq_set == EquationSet.from_any(initial_solutions):
+        return initial_solutions
+    
+    # Master list of all unique solutions found
+    all_solutions = []
+    
+    # Queue for breadth first constraint traversal: stores (solution_dict, constraint_history_list)
+    # We assume initial solutions have NO constraints (empty EquationSet)
+    queue = [(sol, EquationSet.empty()) for sol in initial_solutions]
+    
+    # Loop Detection: Tracks sets of constraints we have already solved
+    visited_constraints = set()
+    visited_constraints.add(EquationSet.empty()) # Base case (no constraints) checked
+
+    # Add the initial batch first
+    for s in initial_solutions:
+        all_solutions.append(s)
+
+    # Expand each solution in the queue
+    while queue:
+        current_sol, current_constraints = queue.pop(0)
+        
+        # Extract all denominators from the current solution's values
+        denominators = set()
+        for val in current_sol.values():
+            _, d = _eq_as_numer_denom(val)
+            if any(v in d.free_symbols for v in solve_vars) and d not in nonzero:
+                denominators.add(d)
+
+        # Create New Branches
+        for denom in denominators:
+            # Create the new constraint: Denominator == 0
+            new_constraint = sym.Eq(denom, 0)
+            
+            # Form the new state (Previous Constraints + New Constraint)
+            next_constraints = current_constraints | EquationSet.from_any([new_constraint])
+
+            # STOP: We have already solved this exact scenario or we have a contradiction
+            if next_constraints in visited_constraints or next_constraints._constant_conflict:
+                continue 
+            
+            visited_constraints.add(next_constraints)
+            
+            # Solve original equation + all accumulated constraints
+            branch_system = eq_set | next_constraints
+            new_sols = unique_solutions(_sols_set_to_dict(sym.nonlinsolve(branch_system.as_eq_list(), solve_vars), solve_vars))
+            for s in new_sols:
+                all_solutions.append(s)
+                # Add to queue to check against further denominators
+                queue.append((s, next_constraints))
+                   
+
+    return all_solutions
 
 
 def _sols_set_to_dict(sols_set, solve_vars):
@@ -652,16 +833,39 @@ def _sols_set_to_dict(sols_set, solve_vars):
     sols = []
     for sol in sols_set:
         sol_dict = {}
+        invalid = False
         for var, val in zip(solve_vars, sol):
             var, val = sym.simplify(var), sym.simplify(val)
-            if isinstance(val, sym.Complement):
-                if {var} in val.args:
+            # If SymPy returns a set: allow Reals/Complexes (unconstrained), otherwise drop this solution
+            if isinstance(val, sym.Set) and not isinstance(val, sym.Complement):
+                if val in (sym.Reals, sym.Complexes):
                     continue
-            if val == sym.Complexes or val == sym.Reals:
+                if isinstance(val, sym.Interval):
+                    raise ValueError("Unbounded solution encountered")
+                invalid = True
+                break
+
+            if isinstance(val, sym.Complement):
+                # Complement has structure: Complement(base_set, excluded_set)
+                base_set = val.args[0]
+                if {var} == base_set:
+                    continue
+                elif len(base_set) == 1:
+                    base_elem = list(base_set)[0]
+                    val = base_elem
+                    continue
+            # Variable can be any real/complex number; don't constrain it
+            elif val == sym.Complexes or val == sym.Reals:
                 continue
+            elif (not isinstance(val, sym.Expr)) and (not isinstance(val, sym.Symbol)):
+                print(var, val)
+                breakpoint()
+                invalid = True
+                break
             if var != val:
                 sol_dict[var] = val
-        sols.append(sol_dict)
+        if not invalid:
+            sols.append(sol_dict)
     return sols
 
 
@@ -704,7 +908,10 @@ def unique_solutions(sols: Union[list[dict], list[EquationSet]], return_idx: boo
     as identical. Keeps only minimal solutions (removes supersets).
     """
     if sols == []:
-        return []
+        if return_idx:
+            return [], []
+        else:
+            return []
     if isinstance(sols[0], dict):
         sols = [EquationSet.from_any(sol) for sol in sols]
     kept: list[EquationSet] = []
