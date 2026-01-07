@@ -15,60 +15,6 @@ import sympy as sym
 import numpy as np
 import networkx as nx
 
-import warnings, traceback, sys
-from sympy.utilities.exceptions import SymPyDeprecationWarning
-
-def warn_with_traceback(message, category, filename, lineno, file=None, line=None):
-    """Print stack and the locals of user-defined frames (inputs included)."""
-    import os
-
-    stack = traceback.extract_stack()
-    mod_root = os.path.dirname(os.path.abspath(__file__))
-
-    sys.stderr.write("\n=== User-defined frames (with locals) ===\n")
-    live = sys._getframe()
-    for frame_info in stack:
-        if mod_root in frame_info.filename:
-            # Walk back to matching live frame
-            cur = live
-            while cur and cur.f_code.co_filename != frame_info.filename:
-                cur = cur.f_back
-            if cur and cur.f_code.co_name == frame_info.name:
-                locals_dict = cur.f_locals
-                args_str = ", ".join(
-                    f"{k}={v!r}" for k, v in sorted(locals_dict.items()) if not k.startswith("_")
-                )
-                # if len(args_str) > 400:
-                #     args_str = args_str[:400] + "…"
-                sys.stderr.write(f"  {frame_info.name}({args_str})\n")
-
-    # Also show key SymPy frames to reveal offending substitutions/args
-    sys.stderr.write("\n=== SymPy frames of interest (locals) ===\n")
-    for frame_info in stack:
-        if frame_info.filename.endswith("solveset.py") and frame_info.name in {"_solve_using_known_values", "substitution"}:
-            cur = live
-            while cur and cur.f_code.co_filename != frame_info.filename:
-                cur = cur.f_back
-            if cur and cur.f_code.co_name == frame_info.name:
-                loc = {k: v for k, v in cur.f_locals.items() if k in {"res", "eq", "remaining", "symbols", "result"}}
-                sys.stderr.write(f"  {frame_info.name} locals: {loc}\n")
-        if frame_info.filename.endswith("operations.py") and frame_info.name == "__new__":
-            cur = live
-            while cur and cur.f_code.co_filename != frame_info.filename:
-                cur = cur.f_back
-            if cur and cur.f_code.co_name == frame_info.name:
-                args_loc = cur.f_locals.get("args")
-                sys.stderr.write(f"  operations.__new__ args: {args_loc}\n")
-
-    sys.stderr.write("\n=== Full stack trace ===\n")
-    traceback.print_stack(file=sys.stderr)
-    sys.stderr.write("\n=== Warning message ===\n")
-    sys.stderr.write(warnings.formatwarning(message, category, filename, lineno, line))
-
-
-warnings.showwarning = warn_with_traceback
-warnings.filterwarnings("always", category=SymPyDeprecationWarning)
-
 from sympy import collect, expand_mul, Mul, Dummy
 from sympy.core.add import Add
 
@@ -1366,10 +1312,6 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         tuple[sym.Matrix, dict[str, list[int]], str]: _description_
     """
 
-    # Reset solve cache
-    global SOLVE_CACHE
-    SOLVE_CACHE = {}
-
     # Relabel nodes from 0
     edges, node_map = utils.renumber_nodes(edges, return_map=True)
     ground_node = [node_map[n] for n in ground_node]
@@ -1950,53 +1892,53 @@ if __name__ == "__main__":
     # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     # circuit = [("L1", "C1"), ("L2", "C2"), ("L3",), ("J",)]
 
-    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
-    circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
+    # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    # circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
 
-    cMat = gen_cap_mat(circuit, edges)
-    lMat = gen_ind_mat(circuit, edges)
-    # edges = utils.renumber_nodes(edges)
-    # all_Z, var_types = gen_spaced_var_trans(circuit, edges)
-    # Z0 = all_Z[0]
-    # cTrans = Z0.transpose()*cMat*Z0
-    # lTrans = Z0.transpose()*lMat*Z0
-    # print(Z0)
-    # import warnings
-    # warnings.filterwarnings('error')
-    times = []
-    from tqdm import tqdm
-    for i in tqdm(range(1)):
-        t0 = time.time()
-        # Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
-        Z, var_types, val = choose_Z(circuit, edges)
-        cTrans = Z[0].transpose()*cMat*Z[0]
-        lTrans = Z[0].transpose()*lMat*Z[0]
-        wJTrans = gen_w(circuit, edges, w_elem="J").transpose()*Z[0]
-        print(Z)
-        print(val)
-        tf = time.time()
-        times.append(tf-t0)
-    print("Max", np.max(times), "Min:", np.min(times))
-    print("Mean:", np.mean(times), "+/-", np.std(times))
+    # cMat = gen_cap_mat(circuit, edges)
+    # lMat = gen_ind_mat(circuit, edges)
+    # # edges = utils.renumber_nodes(edges)
+    # # all_Z, var_types = gen_spaced_var_trans(circuit, edges)
+    # # Z0 = all_Z[0]
+    # # cTrans = Z0.transpose()*cMat*Z0
+    # # lTrans = Z0.transpose()*lMat*Z0
+    # # print(Z0)
+    # # import warnings
+    # # warnings.filterwarnings('error')
+    # times = []
+    # from tqdm import tqdm
+    # for i in tqdm(range(1)):
+    #     t0 = time.time()
+    #     # Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
+    #     Z, var_types, val = choose_Z(circuit, edges)
+    #     cTrans = Z[0].transpose()*cMat*Z[0]
+    #     lTrans = Z[0].transpose()*lMat*Z[0]
+    #     wJTrans = gen_w(circuit, edges, w_elem="J").transpose()*Z[0]
+    #     print(Z)
+    #     print(val)
+    #     tf = time.time()
+    #     times.append(tf-t0)
+    # print("Max", np.max(times), "Min:", np.min(times))
+    # print("Mean:", np.mean(times), "+/-", np.std(times))
 
 
     # breakpoint()
 
-    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
-    # for n in range(4, 5):
-    #     df = utils.get_unique_qubits(db_path, n).iloc[:]
-    #     from tqdm import tqdm
-    #     order = np.arange(df.shape[0])
-    #     np.random.shuffle(order)
-    #     import time
-    #     for i in tqdm(order[:]):
-    #         t0 = time.time()
-    #         row = df.iloc[i]
-    #         circuit = row.circuit
-    #         circuit = utils.add_elem_number(circuit)
-    #         Z, var_types, hash = choose_Z(circuit, row.edges)
-    #         tf = time.time()
-    #         if tf-t0 > 5:
-    #             print("LONG CIRCUIT ------")
-    #             print("circuit=",circuit)
-    #             print("edges=",row.edges)
+    db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    for n in range(4, 5):
+        df = utils.get_unique_qubits(db_path, n).iloc[:]
+        from tqdm import tqdm
+        order = np.arange(df.shape[0])
+        np.random.shuffle(order)
+        import time
+        for i in tqdm(order[:10]):
+            t0 = time.time()
+            row = df.iloc[i]
+            circuit = row.circuit
+            circuit = utils.add_elem_number(circuit)
+            Z, var_types, hash = choose_Z(circuit, row.edges)
+            tf = time.time()
+            if tf-t0 > 5:
+                print("LONG CIRCUIT ------")
+                print("circuit=",circuit)
+                print("edges=",row.edges)

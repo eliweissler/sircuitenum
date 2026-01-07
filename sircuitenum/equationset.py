@@ -47,8 +47,8 @@ class EquationSet:
     {x: 1, y: 2}
     """
     eqs: Tuple[sym.Eq, ...]
-    solve_vars: Tuple[sym.Symbol] = field(init=False, repr=True, default=tuple())
-    _eqs_simplified: Tuple[sym.Eq,...] = field(init=False, repr=False, default=None)
+    solve_vars: Tuple[sym.Symbol, ...]
+    _eqs_simplified: Tuple[sym.Eq, ...] = field(init=False, repr=False, default=None)
     _solve_vars_simplified: Tuple[sym.Symbol] = field(init=False, repr=False, default=None)
     _pair_key: frozenset = field(init=False, repr=False)
     _dict: Optional[dict] = field(init=False, repr=False, default=None)
@@ -154,15 +154,14 @@ class EquationSet:
             norm = tuple(eq for eq in eqs if not (eq.lhs.is_number and eq.rhs.is_number and eq.lhs == eq.rhs))
         except:
             breakpoint()
-        obj = cls(norm)
-        if solve_vars:
-            object.__setattr__(obj, "solve_vars", tuple(solve_vars))
-        else:
+        if not solve_vars:
             # infer solve vars from equations
             sv = set()
             for eq in norm:
                 sv.update(x for x in eq.free_symbols)
-            object.__setattr__(obj, "solve_vars", tuple(sorted(sv, key=lambda x: str(x))))
+            solve_vars = sorted(sv, key=lambda x: str(x))
+        obj = cls(norm, solve_vars)
+       
         return obj
     
     @classmethod
@@ -174,7 +173,7 @@ class EquationSet:
         EquationSet
             Empty equation set with no equations.
         """
-        return cls(tuple())
+        return cls(tuple(), tuple())
 
     def __post_init__(self):
         object.__setattr__(self, "_pair_key", frozenset(self._pair(eq) for eq in self.eqs))
@@ -186,22 +185,22 @@ class EquationSet:
 
         # Check to see if any constant substitutions yield undefined behavior
         # TODO: Pop out already set solve variables for simplification of solving
-        # eq_simplified = []
-        # solve_vars_simplified = set()
-        # for eq in self.eqs:
-        #     new_eq = eq.subs(const_subs)
-        #     if isinstance(new_eq, sym.Eq):
-        #         eq_simplified.append(new_eq)
-        #         solve_vars_simplified.add(x for x in new_eq.free_symbols if x in self._solve_vars)
-        #         if eq.lhs.is_finite == False or eq.rhs.is_finite == False:
-        #             object.__setattr__(self, "_constant_conflict", True)
-        #     if isinstance(new_eq, sym.logic.boolalg.BooleanFalse):
-        #         object.__setattr__(self, "_constant_conflict", True)
-        #         continue
-        #     elif isinstance(new_eq, sym.logic.boolalg.BooleanTrue):
-        #         continue
-        # object.__setattr__(self, "_eqs_simplified", eq_simplified)
-        # object.__setattr__(self, "_solve_vars_simplified", eq_simplified)
+        eq_simplified = []
+        solve_vars_simplified = set()
+        for eq in self.eqs:
+            new_eq = eq.subs(const_subs)
+            if isinstance(new_eq, sym.Eq):
+                eq_simplified.append(new_eq)
+                solve_vars_simplified.add(x for x in new_eq.free_symbols if x in self._solve_vars)
+                if eq.lhs.is_finite == False or eq.rhs.is_finite == False:
+                    object.__setattr__(self, "_constant_conflict", True)
+            if isinstance(new_eq, sym.logic.boolalg.BooleanFalse):
+                object.__setattr__(self, "_constant_conflict", True)
+                continue
+            elif isinstance(new_eq, sym.logic.boolalg.BooleanTrue):
+                continue
+        object.__setattr__(self, "_eqs_simplified", eq_simplified)
+        object.__setattr__(self, "_solve_vars_simplified", eq_simplified)
                 
 
     def _build_dict(self):
@@ -622,9 +621,18 @@ def sol_indep_of_vars(expr: Union[sym.Eq, sym.Expr], solve_vars, nonzero=[]):
 
     return sols
 
+def cached_solve(all_eq: Union[EquationSet, list], solve_vars: list[sym.Symbol] = []):
+    """Wrapper for _cached_solve to handle unhashable types."""
+    # Convert equations to a hashable representation
+    solve_vars_key = tuple(sorted(solve_vars, key=lambda x: str(x)))
+    if isinstance(all_eq, EquationSet):
+        eq_key = all_eq
+    else:
+        eq_key = EquationSet.from_any(all_eq, solve_vars=solve_vars_key)
+    return _cached_solve(eq_key)
 
-def cached_solve(all_eq: Union[EquationSet, list], solve_vars: list[sym.Symbol],
-                 simplify: bool = True):
+@functools.cache
+def _cached_solve(all_eq: EquationSet):
     """Solve equations with caching for performance.
     
     Parameters
@@ -641,19 +649,9 @@ def cached_solve(all_eq: Union[EquationSet, list], solve_vars: list[sym.Symbol],
     list[dict]
         List of unique solution dictionaries, with zero denominators filtered out.
         
-    Notes
-    -----
-    Uses SOLVE_CACHE and UNSOLVABLE_CACHE for memoization.
     """
-
-    # Prevent undefined behavior from solve variable order
-    solve_vars = sorted(solve_vars, key=lambda x: str(x))
-
-    # Convert to EquationSet
-    if not isinstance(all_eq, EquationSet):
-        eq_set_obj = EquationSet.from_any(all_eq, solve_vars=solve_vars)
-    else:
-        eq_set_obj = all_eq
+    solve_vars = all_eq.solve_vars
+    eq_set_obj = all_eq
 
     if not any(v in eq.free_symbols for eq in eq_set_obj.as_eq_list() for v in solve_vars):
         return []
@@ -666,64 +664,28 @@ def cached_solve(all_eq: Union[EquationSet, list], solve_vars: list[sym.Symbol],
         if var.is_symbol and var.is_number or var.is_symbol:
             return [{var: val}]
     
-    # Check if we've solved before
-    if eq_set_obj in UNSOLVABLE_CACHE:
-        return []
-    elif any(unsolv.issubset(eq_set_obj) for unsolv in UNSOLVABLE_CACHE):
-        UNSOLVABLE_CACHE.add(eq_set_obj)
-        return []
-    if eq_set_obj in SOLVE_CACHE:
-        return SOLVE_CACHE[eq_set_obj]
-    
     # Put equations together and grab numerators
     eq_set_numer, all_denom = eq_set_obj.as_numer_denom()
-    # Check if this exact set or any subset is known to be unsolvable
-    if eq_set_numer in UNSOLVABLE_CACHE:
-        return []
-    elif any(unsolv.issubset(eq_set_numer) for unsolv in UNSOLVABLE_CACHE):
-        UNSOLVABLE_CACHE.add(eq_set_numer)
-        return []
-    # Have we solved this set of equations before?
-    if eq_set_numer in SOLVE_CACHE:
-        sols = SOLVE_CACHE[eq_set_numer]
-    else:
-        # Make solution list of dictionaries
-        if _is_system_linear(eq_set_numer.as_eq_list(), solve_vars):
-            # print("Using linsolve for:", eq_set_numer.as_eq_list())
-            general_sols = unique_solutions(_sols_set_to_dict(sym.linsolve(eq_set_numer.as_eq_list(), solve_vars), solve_vars))
+    if _is_system_linear(eq_set_numer.as_eq_list(), solve_vars):
+        general_sols = unique_solutions(_sols_set_to_dict(sym.linsolve(eq_set_numer.as_eq_list(), solve_vars), solve_vars))
+    try:
+        general_sols = unique_solutions(_sols_set_to_dict(sym.nonlinsolve(eq_set_numer.as_eq_list(), solve_vars), solve_vars))
+    except Exception as e:
         try:
-            # print("Using nonlinsolve for:", eq_set_numer.as_eq_list())
-            general_sols = unique_solutions(_sols_set_to_dict(sym.nonlinsolve(eq_set_numer.as_eq_list(), solve_vars), solve_vars))
-        except Exception as e:
-            try:
-                general_sols = sym.solve(eq_set_numer.as_eq_list(), solve_vars, dict=True)
-            except NotImplementedError:
-                general_sols = []
-        # Expand solutions by exploring singular branches
-        sols = []
-        for s in _expand_singular_branches(eq_set_numer, general_sols, solve_vars, nonzero=all_denom):
-            if all(d.subs(s) != 0 for d in all_denom):
-                sols.append(s)
-        # simplify solutions
-        if simplify:
-            sols = [{var: sym.simplify(val) for var, val in sol.items()} for sol in sols]
-        # Cache the results
-        if sols:
-            SOLVE_CACHE[eq_set_numer] = sols
-        else:
-            UNSOLVABLE_CACHE.add(eq_set_numer)
-            return []
+            general_sols = sym.solve(eq_set_numer.as_eq_list(), solve_vars, dict=True)
+        except NotImplementedError:
+            general_sols = []
+    # Expand solutions by exploring singular branches
+    sols = []
+    for s in _expand_singular_branches(eq_set_numer, general_sols, solve_vars, nonzero=all_denom):
+        if all(d.subs(s) != 0 for d in all_denom):
+            sols.append(s)
 
     # Make sure none of the original denominators are zero
     sols = [s for s in sols if all(sym.simplify(d.subs(s)) != 0 for d in all_denom)]
     sols = unique_solutions(sols)
+    sols = [{var: sym.simplify(val) for var, val in sol.items()} for sol in sols]
 
-    # Cache the results
-    if sols:
-        SOLVE_CACHE[eq_set_obj] = sols
-    else:
-        UNSOLVABLE_CACHE.add(eq_set_obj)
-    
     return sols
 
 def _is_system_linear(equations, variables):

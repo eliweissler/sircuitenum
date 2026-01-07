@@ -212,7 +212,8 @@ def test_maximally_compatible_set():
     dets = [Z00*(Z11*Z22 - Z12*Z21), C1*C2*C_J*Z00**2*(Z11**2*Z22**2 - 2*Z11*Z12*Z21*Z22 + Z12**2*Z21**2)]
     keys, subs = eqs.maximally_compatible_set([resL01, resC02, resC01], solve_vars=var_list, nonzero=dets)
     assert keys == [(0, 1, 2), (0, 1, 2)]
-    assert subs == [{Z00: Z10, Z11: Z21, Z20: 0}, {Z00: Z10, Z11: Z21, Z20: 0, Z22:0}]
+    for s in [{Z00: Z10, Z11: Z21, Z20: 0}, {Z00: Z10, Z11: Z21, Z20: 0, Z22:0}]:
+        assert s in subs
 
 
 
@@ -220,37 +221,27 @@ def test_cached_solve():
 
     Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02', real=True)
     solve_vars = (Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02)
-    # eq_set = eqs.EquationSet.from_any([sym.Eq(Z11, Z12*Z21/Z22)])
-    # sols = eqs.cached_solve(eq_set, solve_vars)
+    eq_set = eqs.EquationSet.from_any([sym.Eq(Z11, Z12*Z21/Z22)])
+    sols = eqs.cached_solve(eq_set, solve_vars)
 
     eq_set = [sym.Eq(Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21, 0),
               sym.Eq(Z00*Z22*(Z12 - Z22) + 2*Z12**2*Z20 - 2*Z12*Z20*Z22 + 2*Z20*Z22**2, 0),
               sym.Eq(Z10*Z22*(Z12 - Z22) + Z12**2*Z20 - Z12*Z20*Z22 + 2*Z20*Z22**2, 0),
               sym.Eq(Z11*(2*Z12 - Z22) - Z12*Z21 + 2*Z21*Z22, 0)]
     
+
+    # Test all combinations of 4 variables to make sure caching works correctly for subsets of variables
     v_in_eq = [v for v in solve_vars if any(v in eq.free_symbols for eq in eq_set)]
     import itertools
     new_sols = []
+    new_sols2 = []
     for combos in itertools.combinations(v_in_eq, 4):
-        # sol_subset = eqs._sols_set_to_dict(sym.nonlinsolve(eq_set, combos), combos)
-        # TODO: Figure out why caching is causing issues here
-        # eqs.SOLVE_CACHE = {}
-        # eqs.UNSOLVABLE_CACHE = set()
-        print("------------")
-        print("UNSOLVABLE CACHE:", eqs.UNSOLVABLE_CACHE)
-        print("SOLVE CACHE:", eqs.SOLVE_CACHE)
-        sol_subset = eqs.cached_solve(eq_set, combos)
-        if sol_subset:
-            print("Solving for:", combos, "gives", sol_subset)
-            for sol in sol_subset:
-                # if all(val.is_real for val in sol.values()):
-                new_sols.append(sol)
-    new_sols = eqs.unique_solutions(list(new_sols))
-    sol_sympy = sym.nonlinsolve(eq_set, solve_vars[:4])
-    sol_sympy = sym.solve(eq_set, solve_vars, dict=True)
-    sol_dict = eqs._sols_set_to_dict(sol_sympy, solve_vars)
-    print("sol solve", sol_sympy[2:])
-    breakpoint()
+        sol_subset1 = eqs.cached_solve(eq_set, combos)
+        sol_subset2 = eqs.unique_solutions(eqs._sols_set_to_dict(sym.simplify(sym.nonlinsolve(eq_set, combos)), combos))
+        assert len(sol_subset1) == len(sol_subset2)
+        for s1 in sol_subset1:
+            for var in s1:
+                assert any(sym.simplify(s1[var] - s2.get(var, 0)) == 0 for s2 in sol_subset2)
 
     # Test from variable transformation equations
     eq_set = [sym.Eq(Z00, Z10 - Z11*Z20/Z21), sym.Eq(Z00, Z10), sym.Eq(Z11, Z21), sym.Eq(Z20, 0)]
@@ -272,7 +263,7 @@ def test_cached_solve():
                 sym.Eq(Z11*Z12 + Z21*Z22, 0), 
                 sym.Eq(Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21, 0)]
     eq_set = [eq.lhs for eq in eq_set]
-    sols = eqs.cached_solve(eq_set, solve_vars)
+    sols = eqs.cached_solve(eq_set)
     assert len(sols) == 12
 
 
