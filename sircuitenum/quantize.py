@@ -1232,6 +1232,17 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
         cTrans = None
     lTrans2 = (Z.transpose()*lTrans*Z)
 
+    print("Z_2 = ", sym.latex(Z))
+    print("Z_1 = ", sym.latex(Z0))
+    if not cMat is None:
+        print("C_1 = ", sym.latex(sym.simplify(cTrans)))
+    print("L_1 = ", sym.latex(sym.simplify(lTrans)))
+    c_symbols = [var for var in cTransInv2.free_symbols if "C" in str(var).upper()]
+    print("C_2 = ",sym.latex(sym.expand(cTransInv2).applyfunc(lambda expr: sym.collect(expr, c_symbols))))
+    l_symbols = [1/var for var in lTrans2.free_symbols if "L" in str(var).upper()]
+    print("L_2 = ", sym.latex(sym.expand(lTrans2).applyfunc(lambda expr: sym.collect(expr, l_symbols))))
+
+
 
     # Determine which entries are possible to decouple
     # without depending on system parameters
@@ -1894,51 +1905,60 @@ if __name__ == "__main__":
 
     # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     # circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
+    # circuit = utils.add_elem_number(circuit)
 
-    # cMat = gen_cap_mat(circuit, edges)
-    # lMat = gen_ind_mat(circuit, edges)
-    # # edges = utils.renumber_nodes(edges)
-    # # all_Z, var_types = gen_spaced_var_trans(circuit, edges)
-    # # Z0 = all_Z[0]
-    # # cTrans = Z0.transpose()*cMat*Z0
-    # # lTrans = Z0.transpose()*lMat*Z0
-    # # print(Z0)
-    # # import warnings
-    # # warnings.filterwarnings('error')
-    # times = []
-    # from tqdm import tqdm
-    # for i in tqdm(range(1)):
-    #     t0 = time.time()
-    #     # Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
-    #     Z, var_types, val = choose_Z(circuit, edges)
-    #     cTrans = Z[0].transpose()*cMat*Z[0]
-    #     lTrans = Z[0].transpose()*lMat*Z[0]
-    #     wJTrans = gen_w(circuit, edges, w_elem="J").transpose()*Z[0]
-    #     print(Z)
-    #     print(val)
-    #     tf = time.time()
-    #     times.append(tf-t0)
-    # print("Max", np.max(times), "Min:", np.min(times))
-    # print("Mean:", np.mean(times), "+/-", np.std(times))
+    from sircuitenum.visualize import draw_circuit_diagram
+
+    edges = [(0, 1), (1, 2), (2, 0)]
+    circuit = [("L", "C"), ("J", "C"), ("L",)]
+    circuit = utils.add_elem_number(circuit)
+    # draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="spring")
+
+
+    cMat = gen_cap_mat(circuit, edges)
+    lMat = gen_ind_mat(circuit, edges)
+    # edges = utils.renumber_nodes(edges)
+    # all_Z, var_types = gen_spaced_var_trans(circuit, edges)
+    # Z0 = all_Z[0]
+    # cTrans = Z0.transpose()*cMat*Z0
+    # lTrans = Z0.transpose()*lMat*Z0
+    # print(Z0)
+    # import warnings
+    # warnings.filterwarnings('error')
+    times = []
+    from tqdm import tqdm
+    for i in tqdm(range(1)):
+        t0 = time.time()
+        # Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
+        Z, var_types, val = choose_Z(circuit, edges)
+        cTrans = Z[0].transpose()*cMat*Z[0]
+        lTrans = Z[0].transpose()*lMat*Z[0]
+        wJTrans = gen_w(circuit, edges, w_elem="J").transpose()*Z[0]
+        print(Z)
+        print(val)
+        tf = time.time()
+        times.append(tf-t0)
+    print("Max", np.max(times), "Min:", np.min(times))
+    print("Mean:", np.mean(times), "+/-", np.std(times))
 
 
     # breakpoint()
 
-    db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
-    for n in range(4, 5):
-        df = utils.get_unique_qubits(db_path, n).iloc[:]
-        from tqdm import tqdm
-        order = np.arange(df.shape[0])
-        np.random.shuffle(order)
-        import time
-        for i in tqdm(order[:10]):
-            t0 = time.time()
-            row = df.iloc[i]
-            circuit = row.circuit
-            circuit = utils.add_elem_number(circuit)
-            Z, var_types, hash = choose_Z(circuit, row.edges)
-            tf = time.time()
-            if tf-t0 > 5:
-                print("LONG CIRCUIT ------")
-                print("circuit=",circuit)
-                print("edges=",row.edges)
+    # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
+    # for n in range(4, 5):
+    #     df = utils.get_unique_qubits(db_path, n).iloc[:]
+    #     from tqdm import tqdm
+    #     order = np.arange(df.shape[0])
+    #     np.random.shuffle(order)
+    #     import time
+    #     for i in tqdm(order[:10]):
+    #         t0 = time.time()
+    #         row = df.iloc[i]
+    #         circuit = row.circuit
+    #         circuit = utils.add_elem_number(circuit)
+    #         Z, var_types, hash = choose_Z(circuit, row.edges)
+    #         tf = time.time()
+    #         if tf-t0 > 5:
+    #             print("LONG CIRCUIT ------")
+    #             print("circuit=",circuit)
+    #             print("edges=",row.edges)

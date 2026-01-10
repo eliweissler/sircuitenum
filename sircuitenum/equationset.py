@@ -612,17 +612,23 @@ def sol_indep_of_vars(expr: Union[sym.Eq, sym.Expr], solve_vars, nonzero=[]):
     for v in var_combos:
         coeffs.append(sym.simplify(var_combos[v]))
 
+    print("Coefficients to solve: (len)", len(coeffs), "coeff:", coeffs)
+    # print(sym.groebner(coeffs, *solve_vars))
+
     # Get solutions for each equation and
     # check compatibility with each other
-    partial_sols = []
-    for coeff in coeffs:
-        si = cached_solve([coeff], solve_vars)
-        if si:
-            partial_sols.append(si)
-        # At least one of them is unsolvable
-        else:
-            return []
-    sols = unique_solutions(fully_compatible_set(partial_sols, solve_vars, nonzero=[]))
+    # partial_sols = []
+    # for coeff in coeffs:
+    #     si = cached_solve([coeff], solve_vars)
+    #     if si:
+    #         partial_sols.append(si)
+    #     # At least one of them is unsolvable
+    #     else:
+    #         return []
+    # sols = unique_solutions(fully_compatible_set(partial_sols, solve_vars, nonzero=[]))
+    sols = cached_solve(coeffs, solve_vars)
+    # breakpoint()
+    print("Found sols:", sols)
 
     # Make sure none of the nonzero conditions are violated
     sols = [s for s in sols if all(sym.simplify(d.subs(s)) != 0 for d in nonzero)]
