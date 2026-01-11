@@ -34,8 +34,7 @@ class TestSingularSolver():
         # Expectation: 
         # Branch 1: Generic (x = b/a)
         # Branch 2: Singular (a=0, b=0, x=Free)
-        breakpoint()
-        assert len(branches) >= 2
+        assert len(branches) == 2
         # "Should find at least 2 branches (Generic + Singular)"
         
         has_generic = False
@@ -52,7 +51,7 @@ class TestSingularSolver():
             # Check for Singular Case (Constraints contain a and b)
             # Note: exact constraint check can be tricky due to formatting, 
             # but usually it's [b, a] or similar.
-            if constraints and self.x in mappings and mappings[self.x] == "Free Parameter":
+            if constraints and self.a in mappings and self.b in mappings and self.x in b["free_vars"]:
                 has_singular = True
         
         # Failed to find generic solution x = b/a
@@ -143,6 +142,8 @@ class TestSingularSolver():
             for var in [self.x, self.y, self.z]:
                 val = b['mappings'].get(var)
                 assert val != "Free Parameter", "Cyclic-3 is 0-dim, should not have free parameters"
+        
+        breakpoint()
 
     def test_06_algebraic_number(self):
         """

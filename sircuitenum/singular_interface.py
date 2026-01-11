@@ -17,8 +17,7 @@ from typing import List, Dict, Any, Optional
 
 from sage.interfaces.singular import singular
 
-import sympy
-from sympy import symbols, sympify, simplify
+import sympy as sym
 
 
 def solve_with_singular(equations, solve_vars=None):
@@ -52,10 +51,24 @@ def solve_with_singular(equations, solve_vars=None):
             - 'basis': The Groebner basis for this segment
             - 'mappings': Dict mapping variables to their solutions or "Free Parameter"
     """
+    # Quick inconsistency check: if any equation is a non-zero constant, system is inconsistent
+    eq_simplified = []
+    for eq in equations:
+        simplified = sym.simplify(eq)
+        if simplified.is_number and simplified != 0:
+            return []  # Inconsistent system
+        eq_simplified.append(simplified)
+    equations = eq_simplified
+    
     # Collect all symbols from equations
     all_symbols = set()
     for eq in equations:
         all_symbols.update(eq.free_symbols)
+    
+    # Handle edge case: no variables in the system
+    if not all_symbols and all(sym.simplify(eq) == 0 for eq in equations):
+        # All equations are 0 = 0, trivially satisfied
+        return []
     
     # Determine fixed parameters (symbols that can never be solve vars)
     if solve_vars is not None:
@@ -129,6 +142,27 @@ def solve_with_singular(equations, solve_vars=None):
         '    // Skip if no dependent variables',
         '    if (size(var_str) == 0) { continue; }',
         '',
+        # '    // Handle zero-parameter case (no grobcov needed)',
+        # '    if (size(param_str) == 0)',
+        # '    {',
+        # '        branch_id = branch_id + 1;',
+        # '',
+        # '        out = out + "|||BRANCH|||" + string(branch_id) + newline;',
+        # '        out = out + "|||COMPONENT|||" + string(p) + newline;',
+        # '        out = out + "|||PARAMS|||" + newline;',
+        # '        out = out + "|||VARS|||" + var_str + newline;',
+        # '        out = out + "|||constraints|||" + newline;',
+        # '        out = out + "|||NONNULL|||" + newline;',
+        # '        out = out + "|||PARAM_DIM|||0" + newline;',
+        # '        out = out + "|||PARAM_SOLCOUNT|||1" + newline;',
+        # '        out = out + "|||BASIS|||" + newline;',
+        # '        for (j=1; j<=size(comp); j++)',
+        # '        {',
+        # '            out = out + string(comp[j]) + newline;',
+        # '        }',
+        # '        continue;',
+        # '    }',
+        '',
         '    // Create ring with proper structure for grobcov',
         '    // Combine fixed_params with discovered independent vars',
         '    string ring_cmd;',
@@ -183,7 +217,7 @@ def solve_with_singular(equations, solve_vars=None):
         '        out = out + "|||PARAMS|||" + param_str + newline;',
         '        out = out + "|||VARS|||" + var_str + newline;',
         '',
-        '        out = out + "|||PARAM_CONSTRAINTS|||" + newline;',
+        '        out = out + "|||constraints|||" + newline;',
         '        for (j=1; j<=size(E_null); j++)',
         '        {',
         '            if (E_null[j] != 0) { out = out + string(E_null[j]) + newline; }',
@@ -195,6 +229,50 @@ def solve_with_singular(equations, solve_vars=None):
         '            if (N_nonnull[j] != 0) { out = out + string(N_nonnull[j]) + newline; }',
         '        }',
         '',
+    ])
+
+    # Compute and emit parameter dimension for E_null
+    if fixed_params:
+        script_parts.extend([
+            '        // Compute parameter dimension and solution count (if zero-dim) of E_null',
+            '        string rpar_cmd;',
+            '        if (size(param_str) > 0)',
+            '        {',
+            f'            rpar_cmd = "ring r_par = 0, ({str_fixed_params}," + param_str + "), dp;";',
+            '        }',
+            '        else',
+            '        {',
+            f'            rpar_cmd = "ring r_par = 0, ({str_fixed_params}), dp;";',
+            '        }',
+            '        execute(rpar_cmd);',
+            '        ideal E_par = imap(r_gc, E_null);',
+            '        int dimE = dim(E_par);',
+            '        out = out + "|||PARAM_DIM|||" + string(dimE) + newline;',
+            '        if (dimE == 0) { out = out + "|||PARAM_SOLCOUNT|||" + string(vdim(E_par)) + newline; }',
+            '        setring r_gc;',
+        ])
+    else:
+        script_parts.extend([
+            '        // Compute parameter dimension and solution count (if zero-dim) of E_null',
+            '        if (size(param_str) > 0)',
+            '        {',
+            '            string rpar_cmd = "ring r_par = 0, (" + param_str + "), dp;";',
+            '            execute(rpar_cmd);',
+            '            ideal E_par = imap(r_gc, E_null);',
+            '            int dimE = dim(E_par);',
+            '            out = out + "|||PARAM_DIM|||" + string(dimE) + newline;',
+            '            if (dimE == 0) { out = out + "|||PARAM_SOLCOUNT|||" + string(vdim(E_par)) + newline; }',
+            '            setring r_gc;',
+            '        }',
+            '        else',
+            '        {',
+            '            out = out + "|||PARAM_DIM|||0" + newline;',
+            '            out = out + "|||PARAM_SOLCOUNT|||1" + newline;',
+            '        }',
+        ])
+
+    # Continue emitting basis and wrap up
+    script_parts.extend([
         '        out = out + "|||BASIS|||" + newline;',
         '        for (j=1; j<=size(basis); j++)',
         '        {',
@@ -244,7 +322,7 @@ def solve_with_singular(equations, solve_vars=None):
             'component': None,
             'params': list(fixed_params),  # Start with fixed params
             'vars': [],
-            'param_constraints': [],
+            'constraints': [],
             'nonnull': [],
             'basis': [],
             'mappings': {}
@@ -271,11 +349,23 @@ def solve_with_singular(equations, solve_vars=None):
                 vars_str = line.replace("|||VARS|||", "").strip()
                 branch_data['vars'] = [v.strip() for v in vars_str.split(",") if v.strip()]
                 continue
-            if "|||PARAM_CONSTRAINTS|||" in line:
-                mode = "param_constraints"
+            if "|||constraints|||" in line:
+                mode = "constraints"
                 continue
             if "|||NONNULL|||" in line:
                 mode = "nonnull"
+                continue
+            if "|||PARAM_DIM|||" in line:
+                try:
+                    branch_data['param_dim'] = int(line.replace("|||PARAM_DIM|||", "").strip())
+                except:
+                    branch_data['param_dim'] = None
+                continue
+            if "|||PARAM_SOLCOUNT|||" in line:
+                try:
+                    branch_data['param_solcount'] = int(line.replace("|||PARAM_SOLCOUNT|||", "").strip())
+                except:
+                    branch_data['param_solcount'] = None
                 continue
             if "|||BASIS|||" in line:
                 mode = "basis"
@@ -286,45 +376,60 @@ def solve_with_singular(equations, solve_vars=None):
             clean_line = fix_powers(clean_line, all_var_names)
             
             try:
-                expr = simplify(sympify(clean_line))
+                expr = sym.simplify(sym.sympify(clean_line))
                 if expr == 0:
                     continue
                 
-                if mode == "param_constraints":
-                    branch_data['param_constraints'].append(expr)
+                if mode == "constraints":
+                    branch_data['constraints'].append(expr)
                 elif mode == "nonnull":
                     branch_data['nonnull'].append(expr)
                 elif mode == "basis":
                     branch_data['basis'].append(expr)
             except:
                 pass
-        
-        # Extract mappings from basis
-        dep_vars = [symbols(v) for v in branch_data['vars']]
-        for basis_poly in branch_data['basis']:
-            for var in dep_vars:
-                try:
-                    coeff = basis_poly.coeff(var)
-                    if coeff != 0 and basis_poly.as_poly(var).degree() == 1:
-                        rest = basis_poly - coeff * var
-                        mapping = simplify(-rest / coeff)
-                        branch_data['mappings'][var] = mapping
-                except:
-                    pass
-        
-        # Mark unmapped vars as Free
-        for var in dep_vars:
-            if var not in branch_data['mappings']:
-                branch_data['mappings'][var] = "Free Parameter"
-        
-        # Alias for backwards compatibility
-        branch_data['constraints'] = branch_data['param_constraints']
-        
-        # Skip inconsistent branches (basis = [1] means no solutions)
         if branch_data['basis'] == [1]:
+            # Inconsistent branch, skip
             continue
+
+        # Substitute mappings for paramters if trivial
+        param_eqs = branch_data['constraints']
+        # No constraints
+        if not param_eqs:
+            param_sol_dict = {}
+        # Each constraint is a simple equality
+        elif all(len(eq.free_symbols) == 1 for eq in param_eqs):
+            param_solutions = sym.solve(param_eqs, [sym.symbols(p) for p in branch_data['params']], dict=True)
+            if len(param_solutions) != 1:
+                raise ValueError(f"Expected a unique solution set for branch {branch_data['id']}, got {len(param_solutions)}")
+            param_sol_dict = param_solutions[0]
+        else:
+            param_sol_dict = {}
+            for eq in param_eqs:
+                param_sol_dict[eq] = 0  # Keep as constraint
+        # Extract mappings from basis using sympy.solve on triangular structure
+        dep_vars = [sym.symbols(v) for v in branch_data['vars']]
+        dep_eqs = branch_data['basis']
+        if branch_data["basis"]:
+            dep_vars_in_basis = [v for v in dep_vars if any(eq.has(v) for eq in dep_eqs)]
+            solutions = sym.solve(dep_eqs, dep_vars_in_basis, dict=True, simplify=True)
+            if len(solutions) != 1:
+                raise ValueError(f"Expected a unique solution set for branch {branch_data['id']}, got {len(solutions)}")
+            sol_dict = solutions[0]
+        else:
+            sol_dict = {}  # No equations means all dep_vars are free
+
+        # Combine with parameter solutions
+        branch_data['mappings'] = {**sol_dict, **param_sol_dict}
+        
+        # Mark unbounded variables as "Free Parameter"
+        branch_data["free_vars"] = [v for v in dep_vars if v not in sol_dict]
         
         parsed_results.append(branch_data)
+    
+    # renumber branch IDs to be sequential
+    for idx, br in enumerate(parsed_results):
+        br['id'] = idx + 1
     
     return parsed_results
 
@@ -333,7 +438,7 @@ def solve_with_singular(equations, solve_vars=None):
 # EXAMPLE USAGE
 # =========================================
 if __name__ == "__main__":
-    a, b, x, y = symbols('a b x y')
+    a, b, x, y = sym.symbols('a b x y')
 
     # Test 1: Auto-discover structure (no solve_vars specified)
     print("=== Test 1: ax = b (auto-discover) ===")
@@ -341,26 +446,18 @@ if __name__ == "__main__":
     branches = solve_with_singular(eqs)
     print(f"Found {len(branches)} Branches:")
     for br in branches:
-        print(f"  Branch {br['id']}: params={br['params']}, vars={br['vars']}")
-        print(f"    constraints={br['constraints']}, nonnull={br.get('nonnull', [])}")
-        print(f"    mappings={br['mappings']}")
-
+        print(br)
     # Test 2: Explicitly specify solve_vars (a, b are parameters)
     print("\n=== Test 2: ax = b (solve for x, treat a,b as params) ===")
     eqs = [a*x - b]
     branches = solve_with_singular(eqs, solve_vars=[x])
     print(f"Found {len(branches)} Branches:")
     for br in branches:
-        print(f"  Branch {br['id']}: params={br['params']}, vars={br['vars']}")
-        print(f"    constraints={br['constraints']}, nonnull={br.get('nonnull', [])}")
-        print(f"    mappings={br['mappings']}")
-
+        print(br)
     # Test 3: Two equations with explicit solve_vars
     print("\n=== Test 3: x^2 + y = a, a*x = b (solve for x,y) ===")
     eqs = [x**2 + y - a, a*x - b]
     branches = solve_with_singular(eqs, solve_vars=[x, y])
     print(f"Found {len(branches)} Branches:")
     for br in branches:
-        print(f"  Branch {br['id']}: params={br['params']}, vars={br['vars']}")
-        print(f"    constraints={br['constraints']}, nonnull={br.get('nonnull', [])}")
-        print(f"    mappings={br['mappings']}")
+        print(br)
