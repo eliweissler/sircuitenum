@@ -263,46 +263,6 @@ def solve_with_singular(equations, solve_vars=None):
         '',
     ])
 
-    # Compute and emit parameter dimension for E_null
-    if fixed_params:
-        script_parts.extend([
-            '        // Compute parameter dimension and solution count (if zero-dim) of E_null',
-            '        string rpar_cmd;',
-            '        if (size(param_str) > 0)',
-            '        {',
-            f'            rpar_cmd = "ring r_par = 0, ({str_fixed_params}," + param_str + "), dp;";',
-            '        }',
-            '        else',
-            '        {',
-            f'            rpar_cmd = "ring r_par = 0, ({str_fixed_params}), dp;";',
-            '        }',
-            '        execute(rpar_cmd);',
-            '        ideal E_par = imap(r_gc, E_null);',
-            '        int dimE = dim(E_par);',
-            '        out = out + "|||PARAM_DIM|||" + string(dimE) + newline;',
-            '        if (dimE == 0) { out = out + "|||PARAM_SOLCOUNT|||" + string(vdim(E_par)) + newline; }',
-            '        setring r_gc;',
-        ])
-    else:
-        script_parts.extend([
-            '        // Compute parameter dimension and solution count (if zero-dim) of E_null',
-            '        if (size(param_str) > 0)',
-            '        {',
-            '            string rpar_cmd = "ring r_par = 0, (" + param_str + "), dp;";',
-            '            execute(rpar_cmd);',
-            '            ideal E_par = imap(r_gc, E_null);',
-            '            int dimE = dim(E_par);',
-            '            out = out + "|||PARAM_DIM|||" + string(dimE) + newline;',
-            '            if (dimE == 0) { out = out + "|||PARAM_SOLCOUNT|||" + string(vdim(E_par)) + newline; }',
-            '            setring r_gc;',
-            '        }',
-            '        else',
-            '        {',
-            '            out = out + "|||PARAM_DIM|||0" + newline;',
-            '            out = out + "|||PARAM_SOLCOUNT|||1" + newline;',
-            '        }',
-        ])
-
     # Continue emitting basis and wrap up
     script_parts.extend([
         '        out = out + "|||BASIS|||" + newline;',
@@ -324,14 +284,9 @@ def solve_with_singular(equations, solve_vars=None):
     ])
     script = '\n'.join(script_parts)
 
-    print("Running Singular Groebner Cover computation...")
-    print(script)
-    
     # Run Singular
     raw_output = singular.eval(script)
 
-    print("Singular computation completed. Parsing output...")
-    print(raw_output)
     
     # Parse Output
     if "|||START|||" not in raw_output:
