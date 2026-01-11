@@ -128,7 +128,7 @@ def solve_with_singular(equations, solve_vars=None):
         '    // Dependent vars are what we solve for',
         '    string param_str = "";',
         '    string var_str = "";',
-        '',
+
         '    for (m=1; m<=nvars(basering); m++)',
         '    {',
         '        if (indep[m] == 1)',
@@ -142,7 +142,19 @@ def solve_with_singular(equations, solve_vars=None):
         '            var_str = var_str + string(var(m));',
         '        }',
         '    }',
-        '',
+        '    string param_str_in = "' + str_fixed_params.replace(" ", "") + '";',
+        '    param_str = param_str + param_str_in;',
+        '    system("sh", "echo param_str: " + param_str_in + " >> /tmp/sing_debug.log");'
+        '    system("sh", "echo param_str_in: " + param_str_in + " >> /tmp/sing_debug.log");'
+        # '',
+        # '    // Prepare full parameter list including fixed params',
+        # f'    string params_fixed = "{str_fixed_params}";',
+        # '    if (size(param_str) > 0)',
+        # '    {',
+        # '        if (size(param_str) > 0) { param_str = param_str + ","; }',
+        # '        param_str = param_str + param_str;',
+        # '    }',
+        # '',
         # '    // Skip if no dependent variables',
         # '    if (var_str == "")',
         # '{',
@@ -150,7 +162,6 @@ def solve_with_singular(equations, solve_vars=None):
         # '    out = out + "|||BRANCH|||" + string(branch_id) + newline;',
         # '    out = out + "|||COMPONENT|||" + string(p) + newline;',
         # '    out = out + "|||PARAMS|||" + param_str + newline;',
-        # '    out = out + "|||VARS|||" + var_str + newline;',
         # '    out = out + "|||constraints|||" + newline;',
         # '    out = out + "|||NONNULL|||" + newline;',
         # '    out = out + "|||PARAM_DIM|||0" + newline;',
@@ -179,34 +190,39 @@ def solve_with_singular(equations, solve_vars=None):
         '}',
         '    else',
         '    {',
+        '    if (size(var_str) == 0)',
+        '    {',
+        '        // No dependent variables; skip grobcov',
+        '        system("sh", "var str 0 >> /tmp/sing_debug.log");',
+        '    }',
         '    // Has parameters: run grobcov',
         '    // Combine fixed_params with discovered independent vars',
         '    string ring_cmd;',
     ]
     
     # Handle the ring creation differently based on whether we have fixed params
-    if fixed_params:
-        script_parts.extend([
-            '    if (size(param_str) > 0)',
-            '    {',
-            f'        ring_cmd = "ring r_gc = (0,{str_fixed_params}," + param_str + "), (" + var_str + "), lp;";',
-            '    }',
-            '    else',
-            '    {',
-            f'        ring_cmd = "ring r_gc = (0,{str_fixed_params}), (" + var_str + "), lp;";',
-            '    }',
-        ])
-    else:
-        script_parts.extend([
-            '    if (size(param_str) > 0)',
-            '    {',
-            '        ring_cmd = "ring r_gc = (0," + param_str + "), (" + var_str + "), lp;";',
-            '    }',
-            '    else',
-            '    {',
-            '        ring_cmd = "ring r_gc = 0, (" + var_str + "), lp;";',
-            '    }',
-        ])
+    # if fixed_params:
+    #     script_parts.extend([
+    #         '    if (size(param_str) > 0)',
+    #         '    {',
+    #         f'        ring_cmd = "ring r_gc = (0,{str_fixed_params}," + param_str + "), (" + var_str + "), lp;";',
+    #         '    }',
+    #         '    else',
+    #         '    {',
+    #         f'        ring_cmd = "ring r_gc = (0,{str_fixed_params}), (" + var_str + "), lp;";',
+    #         '    }',
+    #     ])
+    # else:
+    script_parts.extend([
+        '    if (size(param_str) > 0)',
+        '    {',
+        '        ring_cmd = "ring r_gc = (0," + param_str + "), (" + var_str + "), lp;";',
+        '    }',
+        '    else',
+        '    {',
+        '        ring_cmd = "ring r_gc = 0, (" + var_str + "), lp;";',
+        '    }',
+    ])
     
     script_parts.extend([
         '',
@@ -364,9 +380,9 @@ def solve_with_singular(equations, solve_vars=None):
                 continue
             if "|||PARAMS|||" in line:
                 params_str = line.replace("|||PARAMS|||", "").strip()
-                discovered_params = [v.strip() for v in params_str.split(",") if v.strip()]
-                # Add discovered params to the fixed params list
-                branch_data['params'] = [str(p) for p in fixed_params] + discovered_params
+                params = [v.strip() for v in params_str.split(",") if v.strip()]
+                # Add params -- fixed params are already included
+                branch_data['params'] = params
                 continue
             if "|||VARS|||" in line:
                 vars_str = line.replace("|||VARS|||", "").strip()
@@ -464,12 +480,12 @@ if __name__ == "__main__":
     a, b, x, y = sym.symbols('a b x y')
 
     # Test 1: Auto-discover structure (no solve_vars specified)
-    # print("=== Test 1: ax = b (auto-discover) ===")
-    # eqs = [a*x - b]
-    # branches = solve_with_singular(eqs)
-    # print(f"Found {len(branches)} Branches:")
-    # for br in branches:
-    #     print(br)
+    print("=== Test 1: ax = b (auto-discover) ===")
+    eqs = [a*x - b]
+    branches = solve_with_singular(eqs)
+    print(f"Found {len(branches)} Branches:")
+    for br in branches:
+        print(br)
     # Test 2: Explicitly specify solve_vars (a, b are parameters)
     print("\n=== Test 2: ax = b (solve for x, treat a,b as params) ===")
     eqs = [a*x - b]
@@ -477,10 +493,10 @@ if __name__ == "__main__":
     print(f"Found {len(branches)} Branches:")
     for br in branches:
         print(br)
-    # # Test 3: Two equations with explicit solve_vars
-    # print("\n=== Test 3: x^2 + y = a, a*x = b (solve for x,y) ===")
-    # eqs = [x**2 + y - a, a*x - b]
-    # branches = solve_with_singular(eqs, solve_vars=[x, y])
-    # print(f"Found {len(branches)} Branches:")
-    # for br in branches:
-    #     print(br)
+    # Test 3: Two equations with explicit solve_vars
+    print("\n=== Test 3: x^2 + y = a, a*x = b (solve for x,y) ===")
+    eqs = [x**2 + y - a, a*x - b]
+    branches = solve_with_singular(eqs, solve_vars=[x, y])
+    print(f"Found {len(branches)} Branches:")
+    for br in branches:
+        print(br)
