@@ -15,7 +15,10 @@ __all__ = [
 import re
 from typing import List, Dict, Any, Optional
 
+from sage.misc.verbose import set_verbose
 from sage.interfaces.singular import singular
+from sage.all import Integer
+set_verbose(Integer(0))  # Set verbosity for Singular interface
 
 import sympy as sym
 
@@ -97,7 +100,7 @@ def solve_with_singular(equations, solve_vars=None):
     script_parts = [
         'LIB "grobcov.lib";',
         'LIB "primdec.lib";',
-        '',
+        'system("sh", "echo '" ---- START ---- "' > /tmp/sing_debug.log");', 
         ring_def,
         f'ideal i = {str_eqs};',
         '',
@@ -113,6 +116,7 @@ def solve_with_singular(equations, solve_vars=None):
         '// Step 2: For each prime component',
         'for (p=1; p<=size(prime_comps); p++)',
         '{',
+        '    system("sh", "echo outer_loop_p=" + string(p) + "_size=" + string(size(prime_comps)) + " >> /tmp/sing_debug.log");',
         '    ideal comp = prime_comps[p];',
         '    comp = std(comp);',
         '',
@@ -139,31 +143,43 @@ def solve_with_singular(equations, solve_vars=None):
         '        }',
         '    }',
         '',
-        '    // Skip if no dependent variables',
-        '    if (size(var_str) == 0) { continue; }',
-        '',
-        # '    // Handle zero-parameter case (no grobcov needed)',
-        # '    if (size(param_str) == 0)',
-        # '    {',
-        # '        branch_id = branch_id + 1;',
-        # '',
-        # '        out = out + "|||BRANCH|||" + string(branch_id) + newline;',
-        # '        out = out + "|||COMPONENT|||" + string(p) + newline;',
-        # '        out = out + "|||PARAMS|||" + newline;',
-        # '        out = out + "|||VARS|||" + var_str + newline;',
-        # '        out = out + "|||constraints|||" + newline;',
-        # '        out = out + "|||NONNULL|||" + newline;',
-        # '        out = out + "|||PARAM_DIM|||0" + newline;',
-        # '        out = out + "|||PARAM_SOLCOUNT|||1" + newline;',
-        # '        out = out + "|||BASIS|||" + newline;',
-        # '        for (j=1; j<=size(comp); j++)',
-        # '        {',
-        # '            out = out + string(comp[j]) + newline;',
-        # '        }',
-        # '        continue;',
-        # '    }',
-        '',
-        '    // Create ring with proper structure for grobcov',
+        # '    // Skip if no dependent variables',
+        # '    if (var_str == "")',
+        # '{',
+        # '    branch_id = branch_id + 1;',
+        # '    out = out + "|||BRANCH|||" + string(branch_id) + newline;',
+        # '    out = out + "|||COMPONENT|||" + string(p) + newline;',
+        # '    out = out + "|||PARAMS|||" + param_str + newline;',
+        # '    out = out + "|||VARS|||" + var_str + newline;',
+        # '    out = out + "|||constraints|||" + newline;',
+        # '    out = out + "|||NONNULL|||" + newline;',
+        # '    out = out + "|||PARAM_DIM|||0" + newline;',
+        # '    out = out + "|||PARAM_SOLCOUNT|||1" + newline;',
+        # '    out = out + "|||BASIS|||" + newline;',
+        # '    // Emit the already computed std basis of the component',
+        # '    for (j=1; j<=size(comp); j++) { out = out + string(comp[j]) + newline; }',
+        # '}',
+        'if (param_str == "")',
+        '{',
+        '    // No independent parameters discovered; single branch with comp basis',
+        '    branch_id = branch_id + 1;',
+        '    system("sh", "echo entering_no_param_case >> /tmp/sing_debug.log");',
+        '    system("sh", "echo component_" + string(p) + " >> /tmp/sing_debug.log");',
+        '    out = out + "|||BRANCH|||" + string(branch_id) + newline;',
+        '    out = out + "|||COMPONENT|||" + string(p) + newline;',
+        '    out = out + "|||PARAMS|||" + param_str + newline;',
+        '    out = out + "|||VARS|||" + var_str + newline;',
+        '    out = out + "|||constraints|||" + newline;',
+        '    out = out + "|||NONNULL|||" + newline;',
+        '    out = out + "|||PARAM_DIM|||0" + newline;',
+        '    out = out + "|||PARAM_SOLCOUNT|||1" + newline;',
+        '    out = out + "|||BASIS|||" + newline;',
+        '    for (j=1; j<=size(comp); j++) { out = out + string(comp[j]) + newline; }',
+        '    system("sh", "echo after_no_param_case >> /tmp/sing_debug.log");',
+        '}',
+        '    else',
+        '    {',
+        '    // Has parameters: run grobcov',
         '    // Combine fixed_params with discovered independent vars',
         '    string ring_cmd;',
     ]
@@ -280,9 +296,10 @@ def solve_with_singular(equations, solve_vars=None):
         '        }',
         '',
         '        kill seg, constraints_info, E_null, N_nonnull, seginfo;',
-        '    }',
+        '        }',
         '',
-        '    kill C;',
+        '        kill C;',
+        '    }',
         '    setring r;',
         '}',
         '',
@@ -290,9 +307,15 @@ def solve_with_singular(equations, solve_vars=None):
         'out;',
     ])
     script = '\n'.join(script_parts)
+
+    print("Running Singular Groebner Cover computation...")
+    print(script)
     
     # Run Singular
     raw_output = singular.eval(script)
+
+    print("Singular computation completed. Parsing output...")
+    print(raw_output)
     
     # Parse Output
     if "|||START|||" not in raw_output:
@@ -441,12 +464,12 @@ if __name__ == "__main__":
     a, b, x, y = sym.symbols('a b x y')
 
     # Test 1: Auto-discover structure (no solve_vars specified)
-    print("=== Test 1: ax = b (auto-discover) ===")
-    eqs = [a*x - b]
-    branches = solve_with_singular(eqs)
-    print(f"Found {len(branches)} Branches:")
-    for br in branches:
-        print(br)
+    # print("=== Test 1: ax = b (auto-discover) ===")
+    # eqs = [a*x - b]
+    # branches = solve_with_singular(eqs)
+    # print(f"Found {len(branches)} Branches:")
+    # for br in branches:
+    #     print(br)
     # Test 2: Explicitly specify solve_vars (a, b are parameters)
     print("\n=== Test 2: ax = b (solve for x, treat a,b as params) ===")
     eqs = [a*x - b]
@@ -454,10 +477,10 @@ if __name__ == "__main__":
     print(f"Found {len(branches)} Branches:")
     for br in branches:
         print(br)
-    # Test 3: Two equations with explicit solve_vars
-    print("\n=== Test 3: x^2 + y = a, a*x = b (solve for x,y) ===")
-    eqs = [x**2 + y - a, a*x - b]
-    branches = solve_with_singular(eqs, solve_vars=[x, y])
-    print(f"Found {len(branches)} Branches:")
-    for br in branches:
-        print(br)
+    # # Test 3: Two equations with explicit solve_vars
+    # print("\n=== Test 3: x^2 + y = a, a*x = b (solve for x,y) ===")
+    # eqs = [x**2 + y - a, a*x - b]
+    # branches = solve_with_singular(eqs, solve_vars=[x, y])
+    # print(f"Found {len(branches)} Branches:")
+    # for br in branches:
+    #     print(br)
