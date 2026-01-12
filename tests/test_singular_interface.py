@@ -12,7 +12,61 @@ import sympy
 from sympy import symbols, sympify
 
 # IMPORT YOUR SOLVER HERE
-from sircuitenum.singular_interface import solve_with_singular
+from sircuitenum.singular_interface import solve_with_singular, parse_singular_output 
+
+class TestSingularParser():
+   
+    def test_parse(self):
+        
+        raw_output = """
+        |||START||||||BRANCH|||1
+        |||COMPONENT|||1
+        |||PARAMS|||a,b
+        |||VARS|||x,y
+        |||CONSTRAINTS|||
+        |||NUM_CONSTRAINT_SOLUTIONS|||-1
+        |||NONNULL|||
+        (a)
+        |||BASIS|||
+        (a2)*y+(-a3+b2)
+        (a)*x+(-b)
+        |||NUM_SOLUTIONS|||1
+        |||BRANCH|||2
+        |||COMPONENT|||1
+        |||PARAMS|||a,b
+        |||VARS|||x,y
+        |||CONSTRAINTS|||
+        (a)
+        |||NUM_CONSTRAINT_SOLUTIONS|||1
+        |||CONSTRAINT_BASIS|||
+        a
+        |||NONNULL|||
+        (b),(a)
+        |||BASIS|||
+        1
+        |||NUM_SOLUTIONS|||0
+        |||BRANCH|||3
+        |||COMPONENT|||1
+        |||PARAMS|||a,b
+        |||VARS|||x,y
+        |||CONSTRAINTS|||
+        (b)
+        (a)
+        |||NUM_CONSTRAINT_SOLUTIONS|||1
+        |||CONSTRAINT_BASIS|||
+        b
+        a
+        |||NONNULL|||
+        1
+        |||BASIS|||
+        |||NUM_SOLUTIONS|||-1
+        |||END|||
+        """
+        branches = parse_singular_output(raw_output, potential_vars=['x', 'y'], fixed_params=['a', 'b'])
+        assert len(branches) == 2 # One branch has zero solutions
+        assert branches[0]['vars'] == ['x', 'y']
+        assert branches[0]['num_solutions'] == 1
+        assert [str(x) for x in branches[1]['constraints']] == ['b', 'a']
 
 class TestSingularSolver():
 

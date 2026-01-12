@@ -15,7 +15,7 @@ __all__ = [
 import re
 import itertools
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 
 # Load the Singular library and define the procedure
 from sage.interfaces.singular import singular
@@ -25,76 +25,9 @@ singular.eval(f'LIB "{str(lib_path)}";')
 import sympy as sym
 
 
-def solve_with_singular(equations, solve_vars=None):
-    """
-    Solves a system of SymPy equations using minAssGTZ -> indepSet -> grobcov.
-    
-    This approach uses the Groebner Cover algorithm to find all solution branches
-    including singular/degenerate cases where parameters take special values.
-    
-    The workflow is:
-    1. Compute minimal associated primes (irreducible components)
-    2. For each component, find the maximal independent set (free variables)
-    3. Run grobcov with those as parameters to get the full stratification
-    
-    Args:
-        equations (list): List of SymPy expressions (assumed equal to 0).
-        solve_vars (list, optional): List of SymPy symbols to solve for (potential unknowns).
-            If provided, only these variables can become dependent variables, and all
-            other symbols are treated as parameters from the start.
-            If None, the algorithm auto-discovers which variables are independent
-            vs dependent for each component.
+def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol], list[str]],
+                          fixed_params: Union[list[sym.Symbol], list[str]] = []) -> List[Dict[str, Any]]:
 
-    Returns:
-        list[dict]: A list of branches. Each branch is a dict with:
-            - 'id': Branch identifier
-            - 'component': Which prime component this came from
-            - 'params': List of parameter names (independent variables)
-            - 'vars': List of variable names (dependent variables)
-            - 'constraints': List of SymPy expressions (parameter constraints, = 0)
-            - 'nonnull': List of SymPy expressions (must be != 0)
-            - 'basis': The Groebner basis for this segment
-            - 'mappings': Dict mapping variables to their solutions or "Free Parameter"
-    """
-    # Quick inconsistency check: if any equation is a non-zero constant, system is inconsistent
-    eq_simplified = []
-    for eq in equations:
-        simplified = sym.simplify(eq)
-        if simplified.is_number and simplified != 0:
-            return []  # Inconsistent system
-        eq_simplified.append(simplified)
-    equations = eq_simplified
-    
-    # Collect all symbols from equations
-    all_symbols = set()
-    for eq in equations:
-        all_symbols.update(eq.free_symbols)
-    
-    # Handle edge case: no variables in the system
-    if not all_symbols and all(sym.simplify(eq) == 0 for eq in equations):
-        # All equations are 0 = 0, trivially satisfied
-        return []
-    
-    # Determine fixed parameters (symbols that can never be solve vars)
-    if solve_vars is not None:
-        solve_vars_set = set(solve_vars)
-        fixed_params = sorted(list(all_symbols - solve_vars_set), key=str)
-        potential_vars = sorted(list(solve_vars_set & all_symbols), key=str)
-    else:
-        fixed_params = []
-        potential_vars = sorted(list(all_symbols), key=str)
-    
-    # Build input strings for the Singular proc (no spaces)
-    str_fixed_params = ",".join(str(p) for p in fixed_params)
-    str_potential_vars = ",".join(str(v) for v in potential_vars)
-    str_eqs = ",".join(str(eq).replace("**", "^") for eq in equations)
-
-    # Run Singular
-    raw_output = singular.eval(f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");')
-    print("Singular Output:\n", raw_output)  # Print first 500 chars for debugging
-
-
-    # TODO: separate out the parser
     # Parse Output
     if "|||START|||" not in raw_output:
         print("ERROR: Singular script did not produce expected output markers")
@@ -235,6 +168,75 @@ def solve_with_singular(equations, solve_vars=None):
         br['id'] = idx + 1
     
     return parsed_results
+
+def solve_with_singular(equations, solve_vars=None):
+    """
+    Solves a system of SymPy equations using minAssGTZ -> indepSet -> grobcov.
+    
+    This approach uses the Groebner Cover algorithm to find all solution branches
+    including singular/degenerate cases where parameters take special values.
+    
+    The workflow is:
+    1. Compute minimal associated primes (irreducible components)
+    2. For each component, find the maximal independent set (free variables)
+    3. Run grobcov with those as parameters to get the full stratification
+    
+    Args:
+        equations (list): List of SymPy expressions (assumed equal to 0).
+        solve_vars (list, optional): List of SymPy symbols to solve for (potential unknowns).
+            If provided, only these variables can become dependent variables, and all
+            other symbols are treated as parameters from the start.
+            If None, the algorithm auto-discovers which variables are independent
+            vs dependent for each component.
+
+    Returns:
+        list[dict]: A list of branches. Each branch is a dict with:
+            - 'id': Branch identifier
+            - 'component': Which prime component this came from
+            - 'params': List of parameter names (independent variables)
+            - 'vars': List of variable names (dependent variables)
+            - 'constraints': List of SymPy expressions (parameter constraints, = 0)
+            - 'nonnull': List of SymPy expressions (must be != 0)
+            - 'basis': The Groebner basis for this segment
+            - 'mappings': Dict mapping variables to their solutions or "Free Parameter"
+    """
+    # Quick inconsistency check: if any equation is a non-zero constant, system is inconsistent
+    eq_simplified = []
+    for eq in equations:
+        simplified = sym.simplify(eq)
+        if simplified.is_number and simplified != 0:
+            return []  # Inconsistent system
+        eq_simplified.append(simplified)
+    equations = eq_simplified
+    
+    # Collect all symbols from equations
+    all_symbols = set()
+    for eq in equations:
+        all_symbols.update(eq.free_symbols)
+    
+    # Handle edge case: no variables in the system
+    if not all_symbols and all(sym.simplify(eq) == 0 for eq in equations):
+        # All equations are 0 = 0, trivially satisfied
+        return []
+    
+    # Determine fixed parameters (symbols that can never be solve vars)
+    if solve_vars is not None:
+        solve_vars_set = set(solve_vars)
+        fixed_params = sorted(list(all_symbols - solve_vars_set), key=str)
+        potential_vars = sorted(list(solve_vars_set & all_symbols), key=str)
+    else:
+        fixed_params = []
+        potential_vars = sorted(list(all_symbols), key=str)
+    
+    # Build input strings for the Singular proc (no spaces)
+    str_fixed_params = ",".join(str(p) for p in fixed_params)
+    str_potential_vars = ",".join(str(v) for v in potential_vars)
+    str_eqs = ",".join(str(eq).replace("**", "^") for eq in equations)
+
+    # Run Singular
+    raw_output = singular.eval(f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");')
+
+    return parse_singular_output(raw_output, potential_vars, fixed_params)
 
 
 # =========================================
