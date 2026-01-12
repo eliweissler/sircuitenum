@@ -45,13 +45,13 @@ class TestSingularSolver():
             constraints = b['constraints']
             
             # Check for Generic Case
-            if self.x in mappings and mappings[self.x] == self.b / self.a:
+            if self.x in mappings[0] and mappings[0][self.x] == self.b / self.a:
                 has_generic = True
             
             # Check for Singular Case (Constraints contain a and b)
             # Note: exact constraint check can be tricky due to formatting, 
             # but usually it's [b, a] or similar.
-            if constraints and self.a in mappings and self.b in mappings and self.x in b["free_vars"]:
+            if constraints and self.a in mappings[0] and self.b in mappings[0] and self.x in b["free_vars"]:
                 has_singular = True
         
         # Failed to find generic solution x = b/a
@@ -74,7 +74,7 @@ class TestSingularSolver():
         # Branch 2: x = -y (or vice versa)
         assert len(branches) == 2, "Should split x^2-y^2 into exactly 2 linear branches"
         
-        solutions = [b['mappings'][self.x] for b in branches]
+        solutions = [b['mappings'][0][self.x] for b in branches]
         assert self.y in solutions
         assert -self.y in solutions
 
@@ -108,7 +108,7 @@ class TestSingularSolver():
         found_y_one = False
         
         for b in branches:
-            m = b['mappings']
+            m = b['mappings'][0]
             if m.get(self.x) == 0: found_x_zero = True
             if m.get(self.y) == 1: found_y_one = True
             
@@ -117,8 +117,6 @@ class TestSingularSolver():
 
     def test_05_cyclic_3(self):
         """
-        The "Benchmark" Test: Cyclic-3 Roots
-        Tests performance and complexity handling.
         x + y + z = 0
         xy + yz + zx = 0
         xyz - 1 = 0
@@ -133,46 +131,36 @@ class TestSingularSolver():
         # This system has exactly 6 discrete solutions (permutations of roots of unity)
         branches = solve_with_singular(eqs, [self.x, self.y, self.z])
         
-        print(f"Cyclic-3 found {len(branches)} branches.")
-        assert len(branches) > 0, "Cyclic-3 should have solutions"
+        assert len(branches) == 3, "Cyclic-3 should have 3 solutions"
         
         # Check if the mappings are discrete (no free parameters)
         # Note: Cyclic-3 is 0-dimensional, so all vars should be mapped to numbers/algebraic values.
         for b in branches:
-            for var in [self.x, self.y, self.z]:
-                val = b['mappings'].get(var)
-                assert val != "Free Parameter", "Cyclic-3 is 0-dim, should not have free parameters"
-        
-        breakpoint()
+            assert b["free_vars"] == [], "Cyclic-3 solutions should have no free variables"
+            assert b["vars"] == ['x', 'y', 'z'], "Cyclic-3 should have x,y,z as variables"
+
 
     def test_06_algebraic_number(self):
         """
-        The "Sqrt" Test: x^2 - 2 = 0
         Tests if Singular returns the reduced algebraic form properly.
         """
         self.setup_method()
         print("\n--- Test 06: Algebraic Number (x^2 - 2 = 0) ---")
         eqs = [self.x**2 - 2]
         branches = solve_with_singular(eqs, [self.x])
-        
-        # Since Singular can't output sqrt(2) explicitly without field extensions,
-        # it usually outputs the Defining Polynomial in the 'constraints' or keeps x implicit.
-        # However, our script logic attempts 'reduce(x)'. 
-        # In a standard ring, reduce(x, x^2-2) is just 'x'.
-        # This checks if your parser handles "Explicit vs Implicit" correctly.
-        
-        for b in branches:
-            # If x maps to 'Free' or itself, it means it's an algebraic number constraint
-            # Check constraints for x^2 - 2
-            constraints = b['constraints']
-            has_poly = any(str(c).replace(" ", "") in ["x**2-2", "-x**2+2"] for c in constraints)
-            if has_poly:
-                print("Confirmed: Returned x implicitly defined by x^2 - 2")
-                return
-
-        # If we reach here without finding the constraint, warn (but don't fail, behavior varies by ring setup)
-        print("Warning: explicit x^2-2 constraint checking is tricky with floats/ints.")
+        assert len(branches) == 1
+        assert branches[0]["num_solutions"] == 2, "Should have 2 solutions for x^2 - 2 = 0"
+        for var, val in branches[0]['mappings'][0].items():
+            assert var == self.x
+            assert val == sympy.sqrt(2) or val == -sympy.sqrt(2), "Algebraic number solution incorrect"
 
 if __name__ == "__main__":
     # Run tests
-    pytest.main([__file__, "-v"])
+    # pytest.main([__file__, "-v"])
+    test_solver = TestSingularSolver()
+    test_solver.test_01_parametric_singularity()
+    test_solver.test_02_reducible_geometry()
+    test_solver.test_03_inconsistent_system()
+    test_solver.test_04_mixed_dimension()
+    test_solver.test_05_cyclic_3()
+    test_solver.test_06_algebraic_number()
