@@ -14,9 +14,13 @@ __all__ = [
 
 import re
 import itertools
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+# Load the Singular library and define the procedure
 from sage.interfaces.singular import singular
+lib_path = Path(__file__).with_name("poly_solver.sing")
+singular.eval(f'LIB "{str(lib_path)}";')
 
 import sympy as sym
 
@@ -80,200 +84,17 @@ def solve_with_singular(equations, solve_vars=None):
         fixed_params = []
         potential_vars = sorted(list(all_symbols), key=str)
     
-    # Build variable strings for Singular
-    str_fixed_params = ", ".join(str(p) for p in fixed_params)
-    str_potential_vars = ", ".join(str(v) for v in potential_vars)
-    
-    # Format equations (SymPy ** -> Singular ^)
-    str_eqs = ",\n  ".join(str(eq).replace("**", "^") for eq in equations)
-    
-    # Build ring definition
-    # If we have fixed params, put them in the coefficient field
-    # The potential_vars go into the ring for minAssGTZ to analyze
-    if fixed_params:
-        ring_def = f'ring r = (0, {str_fixed_params}), ({str_potential_vars}), dp;'
-    else:
-        ring_def = f'ring r = 0, ({str_potential_vars}), dp;'
-    
-    script_parts = [
-        'LIB "grobcov.lib";',
-        'LIB "primdec.lib";',
-        ring_def,
-        f'ideal i = {str_eqs};',
-        '',
-        '// Step 1: Compute minimal associated primes',
-        'list prime_comps = minAssGTZ(i);',
-        '',
-        'string out = "";',
-        'out = out + "|||START|||";',
-        '',
-        'int p, k, j, m;',
-        'int branch_id = 0;',
-        '',
-        '// Step 2: For each prime component',
-        'for (p=1; p<=size(prime_comps); p++)',
-        '{',
-        '    ideal comp = prime_comps[p];',
-        '    comp = std(comp);',
-        '',
-        '    // Find maximal independent set within potential_vars',
-        '    intvec indep = indepSet(comp);',
-        '',
-        '    // Build parameter and variable lists',
-        '    // Independent vars become additional parameters for grobcov',
-        '    // Dependent vars are what we solve for',
-        '    string param_str = "";',
-        '    string var_str = "";',
-
-        '    for (m=1; m<=nvars(basering); m++)',
-        '    {',
-        '        if (indep[m] == 1)',
-        '        {',
-        '            if (size(param_str) > 0) { param_str = param_str + ","; }',
-        '            param_str = param_str + string(var(m));',
-        '        }',
-        '        else',
-        '        {',
-        '            if (size(var_str) > 0) { var_str = var_str + ","; }',
-        '            var_str = var_str + string(var(m));',
-        '        }',
-        '    }',
-        '    string param_str_in = "' + str_fixed_params.replace(" ", "") + '";',
-        '    param_str = param_str + param_str_in;',
-        'if (param_str == "")',
-        '{',
-        '    // No independent parameters discovered; single branch with comp basis',
-        '    branch_id = branch_id + 1;',
-        '    out = out + "|||BRANCH|||" + string(branch_id) + newline;',
-        '    out = out + "|||COMPONENT|||" + string(p) + newline;',
-        '    out = out + "|||PARAMS|||" + param_str + newline;',
-        '    out = out + "|||VARS|||" + var_str + newline;',
-        '    out = out + "|||CONSTRAINTS|||" + newline;',
-        '    out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||" + newline;',
-        '    out = out + "|||NONNULL|||" + newline;',
-        '    out = out + "|||BASIS|||" + newline;',
-        '    for (j=1; j<=size(comp); j++) { out = out + string(comp[j]) + newline; }',
-        '    // Count expected number of solutions',
-        '    int num_solutions = vdim(comp);',
-        '    out = out + "|||NUM_SOLUTIONS|||" + string(num_solutions) + newline;',
-        '}',
-        '    else',
-        '    {',
-        '    // Has parameters: run grobcov',
-        '    // Combine fixed_params with discovered independent vars',
-        '    string ring_cmd_dp;',
-        '    string ring_cmd_lp;',
-        '    string ring_cmd_pr;',
-    ]
-    script_parts.extend([
-        'ring_cmd_dp = "ring r_gc_dp = (0," + param_str + "), (" + var_str + "), dp;";',
-        'ring_cmd_lp = "ring r_gc_lp = (0," + param_str + "), (" + var_str + "), lp;";',
-        'ring_cmd_pr = "ring r_gc_pr = 0, (" + param_str + "), lp;";',
-    ])
-    script_parts.extend([
-        '',
-        # '    system("sh", "ring_cmd_param=" + string(ring_cmd_param) + " >> /tmp/sing_debug.log");',
-        '    execute(ring_cmd_pr);',
-        '    execute(ring_cmd_lp);',
-        '    execute(ring_cmd_dp);',
-        '    // Use dp for speedy grobcov, lp for fglm conversions',
-        '    ideal comp_gc = imap(r, comp);',
-        '',
-        '    // Run grobcov',
-        '    def C = grobcov(comp_gc, "ext", 1);',
-        '',
-        '    for (k=1; k<=size(C); k++)',
-        '    {',
-        '        branch_id = branch_id + 1;',
-        '',
-        '        def seg = C[k];',
-        '        // seg[1] = lpp, seg[2] = actual basis, seg[3] = segment info',
-        '        // Count expected number of solutions',
-        '        ideal basis = seg[2];',
-        '        int num_solutions = vdim(basis);',
-        '        def seginfo = seg[3];',
-        '        def constraints_info = seginfo[1];',
-        '        ideal E_null = constraints_info[1];',
-        '        list N_nonnull = constraints_info[2];',
-        '',
-        '        out = out + "|||BRANCH|||" + string(branch_id) + newline;',
-        '        out = out + "|||COMPONENT|||" + string(p) + newline;',
-        '        out = out + "|||PARAMS|||" + param_str + newline;',
-        '        out = out + "|||VARS|||" + var_str + newline;',
-        '',
-        '        out = out + "|||CONSTRAINTS|||" + newline;',
-        '        for (j=1; j<=size(E_null); j++)',
-        '        {',
-        '            if (E_null[j] != 0) { out = out + string(E_null[j]) + newline; }',
-        '        }',
-        '        // Count number of solutions to parameter constraints',
-        '        '
-        '        setring r_gc_pr;'
-        '        ideal E_null_pr = imap(r_gc_dp, E_null);'
-        '        if (size(variables(E_null_pr)) > 0)',
-        '        {',
-        '            execute("ring r_temp = 0, (" + string(variables(E_null_pr)) + "), dp;");',
-        '            ideal E_null_temp = std(imap(r_gc_pr, E_null_pr));',   
-        '            int num_param_sols = vdim(E_null_temp);'
-        '            out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||" + string(num_param_sols) + newline;',
-        '            if (num_param_sols > 0)',
-        '            {',
-        '                execute("ring r_temp_lp = 0, (" + string(variables(E_null_temp)) + "), lp;");',
-        '                ideal E_null_temp_lp = fglm(r_temp, E_null_temp);',
-        '                system("sh", "echo E_null_temp_lp=" + string(E_null_temp_lp) + " >> /tmp/sing_debug.log");',
-        '                out = out + "|||CONSTRAINT_BASIS|||" + newline;',
-        '                for (j=1; j<=size(E_null_temp_lp); j++)',
-        '                {',
-        '                    out = out + string(E_null_temp_lp[j]) + newline;',
-        '                }',
-        '            }',
-        '        }',
-        '        else',
-        '        {',
-        '            out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||-1" + newline;',
-        '        }',
-        '        setring r_gc_dp;',
-        '',
-        '        out = out + "|||NONNULL|||" + newline;',
-        '        for (j=1; j<=size(N_nonnull); j++)',
-        '        {',
-        '            if (N_nonnull[j] != 0) { out = out + string(N_nonnull[j]) + newline; }',
-        '        }',
-        '',
-    ])
-    # Continue emitting basis and wrap up
-    script_parts.extend([
-        '        out = out + "|||BASIS|||" + newline;',
-        '        if (num_solutions > 0) {',
-        '           setring r_gc_lp;',
-        '           ideal basis = imap(r_gc_dp, basis);',
-        '           basis = fglm(r_gc_dp, basis);'
-        '        }',
-        '',
-        '        for (j=1; j<=size(basis); j++)',
-        '        {',
-        '            out = out + string(basis[j]) + newline;',
-        '        }',
-        '        setring r_gc_dp;',
-        '        out = out + "|||NUM_SOLUTIONS|||" + string(num_solutions) + newline;',
-        '        kill seg, constraints_info, E_null, N_nonnull, seginfo;',
-        '',
-        '        }',
-        '',
-        '        kill C;',
-        '    }',
-        '    setring r;',
-        '}',
-        '',
-        'out = out + "|||END|||";',
-        'out;',
-    ])
-    script = '\n'.join(script_parts)
+    # Build input strings for the Singular proc (no spaces)
+    str_fixed_params = ",".join(str(p) for p in fixed_params)
+    str_potential_vars = ",".join(str(v) for v in potential_vars)
+    str_eqs = ",".join(str(eq).replace("**", "^") for eq in equations)
 
     # Run Singular
-    raw_output = singular.eval(script)
-    # print(raw_output)
+    raw_output = singular.eval(f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");')
+    print("Singular Output:\n", raw_output)  # Print first 500 chars for debugging
 
+
+    # TODO: separate out the parser
     # Parse Output
     if "|||START|||" not in raw_output:
         print("ERROR: Singular script did not produce expected output markers")
@@ -382,15 +203,10 @@ def solve_with_singular(equations, solve_vars=None):
         else:
             param_solutions = []
             param_branches = []
-            print("Parametric branch detected, solving parameter constraints symbolically...")
             for param_branch in solve_with_singular(param_eqs):
                 param_solutions += param_branch['mappings']
                 param_branches.append(param_branch)
             branch_data['param_branches'] = param_branches
-
-            # param_sol_dict = {}
-            # for eq in param_eqs:
-            #     param_sol_dict[eq] = 0  # Keep as constraint
 
         # Extract mappings from basis using sympy.solve on triangular structure
         dep_vars = [sym.symbols(v) for v in branch_data['vars']]

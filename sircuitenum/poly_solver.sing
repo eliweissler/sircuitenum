@@ -1,0 +1,165 @@
+// Library: Poly Solver via Groebner Cover
+// Loads required libs and defines a reusable proc to compute branches.
+
+LIB "grobcov.lib";
+LIB "primdec.lib";
+
+// solve_cover(fixed_params_csv, potential_vars_csv, eqs_csv)
+// - fixed_params_csv: comma-separated parameter names (no spaces), e.g. "a,b"
+// - potential_vars_csv: comma-separated variable names (no spaces), e.g. "x,y"
+// - eqs_csv: comma-separated polynomial equations, e.g. "a*x-b, x^2+y-a"
+// Returns a single string with markers suitable for parsing in Python.
+proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
+{
+    string out = "";
+    out = out + "|||START|||";
+
+    // Build base ring r (parameters in coefficient field, variables as ring vars)
+    string ring_cmd;
+    if (size(fixed_params) > 0)
+    {
+        ring_cmd = "ring r = (0," + fixed_params + "), (" + pot_vars + "), dp;";
+    }
+    else
+    {
+        ring_cmd = "ring r = 0, (" + pot_vars + "), dp;";
+    }
+    execute(ring_cmd);
+
+    // Define ideal from CSV (assumes eqs_csv uses '^' for powers)
+    execute("ideal i = " + eqs_csv + ";");
+
+    list prime_comps = minAssGTZ(i);
+    int p, k, j, m;
+    int branch_id = 0;
+
+    // Step 2: For each prime component
+    for (p=1; p<=size(prime_comps); p++)
+    {
+        ideal comp = prime_comps[p];
+        comp = std(comp);
+        // Find maximal independent set within potential_vars
+        intvec indep = indepSet(comp);
+        // Build parameter and variable lists
+        // Independent vars become additional parameters for grobcov
+        // Dependent vars are what we solve for
+        string param_str = "";
+        string var_str = "";
+        for (m=1; m<=nvars(basering); m++)
+        {
+            if (indep[m] == 1)
+            {
+                if (size(param_str) > 0) { param_str = param_str + ","; }
+                param_str = param_str + string(var(m));
+            }
+            else
+            {
+                if (size(var_str) > 0) { var_str = var_str + ","; }
+                var_str = var_str + string(var(m));
+            }
+        }
+        param_str = param_str + fixed_params;
+    if (param_str == "")
+    {
+        // No independent parameters discovered; single branch with comp basis
+        branch_id = branch_id + 1;
+        out = out + "|||BRANCH|||" + string(branch_id) + newline;
+        out = out + "|||COMPONENT|||" + string(p) + newline;
+        out = out + "|||PARAMS|||" + param_str + newline;
+        out = out + "|||VARS|||" + var_str + newline;
+        out = out + "|||CONSTRAINTS|||" + newline;
+        out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||" + newline;
+        out = out + "|||NONNULL|||" + newline;
+        out = out + "|||BASIS|||" + newline;
+        for (j=1; j<=size(comp); j++) { out = out + string(comp[j]) + newline; }
+        // Count expected number of solutions
+        int num_solutions = vdim(comp);
+        out = out + "|||NUM_SOLUTIONS|||" + string(num_solutions) + newline;
+    }
+        else
+        {
+        // Has parameters: run grobcov
+        // Combine fixed_params with discovered independent vars
+        string ring_cmd_dp;
+        string ring_cmd_lp;
+        string ring_cmd_pr;
+        ring_cmd_dp = "ring r_gc_dp = (0," + param_str + "), (" + var_str + "), dp;";
+        ring_cmd_lp = "ring r_gc_lp = (0," + param_str + "), (" + var_str + "), lp;";
+        ring_cmd_pr = "ring r_gc_pr = 0, (" + param_str + "), lp;";
+        execute(ring_cmd_pr);
+        execute(ring_cmd_lp);
+        execute(ring_cmd_dp);
+        // Use dp for speedy grobcov, lp for fglm conversions
+        ideal comp_gc = imap(r, comp);
+        def C = grobcov(comp_gc, "ext", 1);
+        for (k=1; k<=size(C); k++)
+        {
+            branch_id = branch_id + 1;
+            def seg = C[k];
+            // seg[1] = lpp, seg[2] = actual basis, seg[3] = segment info
+            // Count expected number of solutions
+            ideal basis = seg[2];
+            int num_solutions = vdim(basis);
+            def seginfo = seg[3];
+            def constraints_info = seginfo[1];
+            ideal E_null = constraints_info[1];
+            list N_nonnull = constraints_info[2];
+            out = out + "|||BRANCH|||" + string(branch_id) + newline;
+            out = out + "|||COMPONENT|||" + string(p) + newline;
+            out = out + "|||PARAMS|||" + param_str + newline;
+            out = out + "|||VARS|||" + var_str + newline;
+            out = out + "|||CONSTRAINTS|||" + newline;
+            for (j=1; j<=size(E_null); j++)
+            {
+                if (E_null[j] != 0) { out = out + string(E_null[j]) + newline; }
+            }
+            // Count number of solutions to parameter constraints
+            setring r_gc_pr;
+            ideal E_null_pr = imap(r_gc_dp, E_null);
+            if (size(variables(E_null_pr)) > 0)
+            {
+                execute("ring r_temp = 0, (" + string(variables(E_null_pr)) + "), dp;");
+                ideal E_null_temp = std(imap(r_gc_pr, E_null_pr));
+                int num_param_sols = vdim(E_null_temp);
+                out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||" + string(num_param_sols) + newline;
+                if (num_param_sols > 0)
+                {
+                    execute("ring r_temp_lp = 0, (" + string(variables(E_null_temp)) + "), lp;");
+                    ideal E_null_temp_lp = fglm(r_temp, E_null_temp);
+                    out = out + "|||CONSTRAINT_BASIS|||" + newline;
+                    for (j=1; j<=size(E_null_temp_lp); j++)
+                    {
+                        out = out + string(E_null_temp_lp[j]) + newline;
+                    }
+                }
+            }
+            else
+            {
+                out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||-1" + newline;
+            }
+            setring r_gc_dp;
+            out = out + "|||NONNULL|||" + newline;
+            for (j=1; j<=size(N_nonnull); j++)
+            {
+                if (N_nonnull[j] != 0) { out = out + string(N_nonnull[j]) + newline; }
+            }
+            out = out + "|||BASIS|||" + newline;
+            if (num_solutions > 0) {
+            setring r_gc_lp;
+            ideal basis = imap(r_gc_dp, basis);
+            basis = fglm(r_gc_dp, basis);        }
+            for (j=1; j<=size(basis); j++)
+            {
+                out = out + string(basis[j]) + newline;
+            }
+            setring r_gc_dp;
+            out = out + "|||NUM_SOLUTIONS|||" + string(num_solutions) + newline;
+            kill seg, constraints_info, E_null, N_nonnull, seginfo;
+            }
+            kill C;
+        }
+        setring r;
+    }
+    out = out + "|||END|||";
+    return(out);
+}
