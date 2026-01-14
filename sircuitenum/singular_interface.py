@@ -318,8 +318,7 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
 
     branches = parse_singular_output(raw_output, str_potential_vars, str_fixed_params, inv_dummy_map=inv_dummy_map)
     branches_flat = flatten_branches(branches)
-    # branches_filtered = filter_redundant_branches(branches_flat)
-    branches_filtered = branches_flat
+    branches_filtered = filter_redundant_branches(branches_flat)
     return branches_filtered
 
 
