@@ -11,155 +11,341 @@ LIB "primdec.lib";
 // Returns a single string with markers suitable for parsing in Python.
 proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
 {
+    system("sh", " echo '----------------------------------------------------------'>> /tmp/sing_debug.log");
+    system("sh", " echo '----------------------------------------------------------'>> /tmp/sing_debug.log");
+    system("sh", " echo 'STARTING solve_cover'>> /tmp/sing_debug.log");
     string out = "";
     out = out + "|||START|||";
 
     // Build base ring r (parameters in coefficient field, variables as ring vars)
+    int n_fixed = countCleanChars(fixed_params);
+    int n_pot = countCleanChars(pot_vars);
     string ring_cmd;
     if (size(fixed_params) > 0)
     {
-        ring_cmd = "ring r = (0," + fixed_params + "), (" + pot_vars + "), dp;";
+        ring_cmd = "ring r = 0, (" + pot_vars + "," + fixed_params + "), (dp(" + string(n_pot) + "),"+"dp(" + string(n_fixed) + "));";
     }
     else
     {
         ring_cmd = "ring r = 0, (" + pot_vars + "), dp;";
     }
+    system("sh", " echo 'ring cmd " + ring_cmd + "'>> /tmp/sing_debug.log");
+
+    
     execute(ring_cmd);
+
+    system("sh", " echo 'nvars_total " + string(nvars_total) + "'>> /tmp/sing_debug.log");
+    system("sh", " echo 'n_fixed " + string(n_fixed) + "'>> /tmp/sing_debug.log");
+    system("sh", " echo 'n_pot " + string(n_pot) + "'>> /tmp/sing_debug.log");
 
     // Define ideal from CSV (assumes eqs_csv uses '^' for powers)
     execute("ideal i = " + eqs_csv + ";");
+    system("sh", " echo 'generated ideal " + string(i) + "'>> /tmp/sing_debug.log");
+    system("sh", " echo 'generated ideal degree " + string(deg(i)) + "'>> /tmp/sing_debug.log");
+    system("sh", " echo 'fixed params " + fixed_params + "'>> /tmp/sing_debug.log");
+    system("sh", " echo 'pot vars " + pot_vars + "'>> /tmp/sing_debug.log");
 
-    list prime_comps = minAssGTZ(i);
-    int p, k, j, m;
+
+    // Step 1: Factor the ideal
+    // For each factorization component, run minAssGTZ to get prime components
+    list fac_basis = facstd(i);
+    system("sh", " echo 'factored ideal into " + string(size(fac_basis)) + " components'>> /tmp/sing_debug.log");
+    int p, k, j, m, q;
     int branch_id = 0;
+    for (q=1; q <= size(fac_basis); q++)
+    {
+        system("sh", " echo '-----------------------------------'>> /tmp/sing_debug.log");
+        system("sh", " echo 'factor basis " + string(q) + " : " + string(fac_basis[q]) + "'>> /tmp/sing_debug.log");
+        list prime_comps = minAssGTZ(fac_basis[q]);
+        // Step 2: For each prime component, find maximal independent sets and run grobcov
+        for (p=1; p<=size(prime_comps); p++)
+        {
+            ideal comp = prime_comps[p];
+            comp = std(comp);
+            system("sh", " echo '---------------------------'>> /tmp/sing_debug.log");
+            system("sh", " echo 'prime component number " + string(p) + "'>> /tmp/sing_debug.log");
+            system("sh", " echo 'prime component " + string(comp) + "'>> /tmp/sing_debug.log");
+            // Find maximal independent set that respects fixed parameters
+            intvec indep;
+            int max_score = -1;
+            if (n_fixed == 0){
+                // No fixed params: take the first indep set
+                indep = indepSet(comp);
+            }
+            else{
+                // Need to find an indep set that maximized number of fixed params
+                list all_MIS = indepSet(comp, 1);
+                for (int k=1; k<=size(all_MIS); k++) {
+                    intvec current_mis = all_MIS[k];
+                    int current_score = 0;
+                    // Check if desired_indices are a SUBSET of current_mis
+                    int subset_check = 1;
+                    for (int j=n_pot+1; j<=n_pot+n_fixed; j++) {
+                        // If we want var X, but current_mis has 0 for X, fail.
+                        if (current_mis[j] == 0) {
+                            subset_check = 0;
+                        }
+                        else{
+                            current_score = current_score + 1;
+                        }
+                    }
+                    if (current_score > max_score)
+                    {
+                        max_score = current_score;
+                        indep = current_mis;
+                    }
+                    if (subset_check == 1) {
+                        indep = current_mis;
+                        break; // We found a set that includes all sure params.
+                    }
+                }
+            }
 
-    // Step 2: For each prime component
-    for (p=1; p<=size(prime_comps); p++)
-    {
-        ideal comp = prime_comps[p];
-        comp = std(comp);
-        // Find maximal independent set within potential_vars
-        intvec indep = indepSet(comp);
-        // Build parameter and variable lists
-        // Independent vars become additional parameters for grobcov
-        // Dependent vars are what we solve for
-        string param_str = "";
-        string var_str = "";
-        for (m=1; m<=nvars(basering); m++)
-        {
-            if (indep[m] == 1)
+            system("sh", " echo 'indep set " + string(indep) + "'>> /tmp/sing_debug.log");
+            // Build parameter and variable lists
+            // Independent vars become additional parameters for grobcov
+            // Dependent vars are what we solve for
+            string param_str = "";
+            string var_str = "";
+            for (m=1; m<=nvars(basering); m++)
             {
-                if (size(param_str) > 0) { param_str = param_str + ","; }
-                param_str = param_str + string(var(m));
+                if (indep[m] == 1)
+                {
+                    if (size(param_str) > 0) { param_str = param_str + ","; }
+                    param_str = param_str + string(var(m));
+                }
+                else
+                {
+                    if (size(var_str) > 0) { var_str = var_str + ","; }
+                    var_str = var_str + string(var(m));
+                }
             }
-            else
-            {
-                if (size(var_str) > 0) { var_str = var_str + ","; }
-                var_str = var_str + string(var(m));
-            }
-        }
-        param_str = param_str + fixed_params;
-    if (param_str == "")
-    {
-        // No independent parameters discovered; single branch with comp basis
-        branch_id = branch_id + 1;
-        out = out + "|||BRANCH|||" + string(branch_id) + newline;
-        out = out + "|||COMPONENT|||" + string(p) + newline;
-        out = out + "|||PARAMS|||" + param_str + newline;
-        out = out + "|||VARS|||" + var_str + newline;
-        out = out + "|||CONSTRAINTS|||" + newline;
-        out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||" + newline;
-        out = out + "|||NONNULL|||" + newline;
-        out = out + "|||BASIS|||" + newline;
-        for (j=1; j<=size(comp); j++) { out = out + string(comp[j]) + newline; }
-        // Count expected number of solutions
-        int num_solutions = vdim(comp);
-        out = out + "|||NUM_SOLUTIONS|||" + string(num_solutions) + newline;
-    }
-        else
+            system("sh", " echo 'param_str " + param_str + "'>> /tmp/sing_debug.log");
+            system("sh", " echo 'var_str " + var_str + "'>> /tmp/sing_debug.log");
+        if (param_str == "")
         {
-        // Has parameters: run grobcov
-        // Combine fixed_params with discovered independent vars
-        string ring_cmd_dp;
-        string ring_cmd_lp;
-        string ring_cmd_pr;
-        ring_cmd_dp = "ring r_gc_dp = (0," + param_str + "), (" + var_str + "), dp;";
-        ring_cmd_lp = "ring r_gc_lp = (0," + param_str + "), (" + var_str + "), lp;";
-        ring_cmd_pr = "ring r_gc_pr = 0, (" + param_str + "), lp;";
-        execute(ring_cmd_pr);
-        execute(ring_cmd_lp);
-        execute(ring_cmd_dp);
-        // Use dp for speedy grobcov, lp for fglm conversions
-        ideal comp_gc = imap(r, comp);
-        def C = grobcov(comp_gc, "ext", 1);
-        for (k=1; k<=size(C); k++)
-        {
+            // No independent parameters discovered; single branch with comp basis
             branch_id = branch_id + 1;
-            def seg = C[k];
-            // seg[1] = lpp, seg[2] = actual basis, seg[3] = segment info
-            // Count expected number of solutions
-            ideal basis = seg[2];
-            int num_solutions = vdim(basis);
-            def seginfo = seg[3];
-            def constraints_info = seginfo[1];
-            ideal E_null = constraints_info[1];
-            list N_nonnull = constraints_info[2];
             out = out + "|||BRANCH|||" + string(branch_id) + newline;
             out = out + "|||COMPONENT|||" + string(p) + newline;
             out = out + "|||PARAMS|||" + param_str + newline;
             out = out + "|||VARS|||" + var_str + newline;
             out = out + "|||CONSTRAINTS|||" + newline;
-            for (j=1; j<=size(E_null); j++)
-            {
-                if (E_null[j] != 0) { out = out + string(E_null[j]) + newline; }
+            out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||" + newline;
+            out = out + "|||NONNULL|||" + newline;
+            out = out + "|||BASIS|||" + newline;
+            // Count expected number of solutions
+            if (size(variables(comp)) > 0){
+                execute("ring r_temp = 0, (" + string(variables(comp)) + "), dp;");
+                ideal comp_temp = std(imap(r, comp));
+                for (j=1; j<=size(comp_temp); j++) {out = out + string(comp_temp[j]) + newline; }
+                out = out + "|||NUM_SOLUTIONS|||" + string(vdim(comp_temp)) + newline;
+                setring r;
             }
-            // Count number of solutions to parameter constraints
-            setring r_gc_pr;
-            ideal E_null_pr = imap(r_gc_dp, E_null);
-            if (size(variables(E_null_pr)) > 0)
-            {
-                execute("ring r_temp = 0, (" + string(variables(E_null_pr)) + "), dp;");
-                ideal E_null_temp = std(imap(r_gc_pr, E_null_pr));
-                int num_param_sols = vdim(E_null_temp);
-                out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||" + string(num_param_sols) + newline;
-                if (num_param_sols > 0)
-                {
-                    execute("ring r_temp_lp = 0, (" + string(variables(E_null_temp)) + "), lp;");
-                    ideal E_null_temp_lp = fglm(r_temp, E_null_temp);
-                    out = out + "|||CONSTRAINT_BASIS|||" + newline;
-                    for (j=1; j<=size(E_null_temp_lp); j++)
-                    {
-                        out = out + string(E_null_temp_lp[j]) + newline;
-                    }
-                }
+            else{
+                for (j=1; j<=size(comp); j++) {out = out + string(comp[j]) + newline;}
+                out = out + "|||NUM_SOLUTIONS|||" + string(vdim(comp)) + newline;
+
             }
+        }
             else
             {
-                out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||-1" + newline;
-            }
-            setring r_gc_dp;
-            out = out + "|||NONNULL|||" + newline;
-            for (j=1; j<=size(N_nonnull); j++)
+            // Has parameters: run grobcov
+            // Combine fixed_params with discovered independent vars
+            string ring_cmd_dp;
+            string ring_cmd_lp;
+            string ring_cmd_pr;
+            ring_cmd_dp = "ring r_gc_dp = (0," + param_str + "), (" + var_str + "), dp;";
+            ring_cmd_lp = "ring r_gc_lp = (0," + param_str + "), (" + var_str + "), lp;";
+            if(size(var_str)>0){
+                ring_cmd_pr = "ring r_gc_pr = (0," + var_str + "), (" + param_str + "), lp;";
+                }
+            else{
+                ring_cmd_pr = "ring r_gc_pr = (0,), (" + param_str + "), lp;";
+                };
+            execute(ring_cmd_pr);
+            execute(ring_cmd_lp);
+            execute(ring_cmd_dp);
+            // Use dp for speedy grobcov, lp for fglm conversions
+            ideal comp_gc = imap(r, comp);
+            def C = grobcov(comp_gc, "ext", 1, "rep", 1);
+            for (k=1; k<=size(C); k++)
             {
-                if (N_nonnull[j] != 0) { out = out + string(N_nonnull[j]) + newline; }
+                system("sh", " echo '--------------'>> /tmp/sing_debug.log");
+                branch_id = branch_id + 1;
+                def seg = C[k];
+                ideal basis = seg[2];
+                system("sh", " echo 'grobcov branch " + string(k) + "'>> /tmp/sing_debug.log");
+                system("sh", " echo 'basis:  " + string(basis) + "'>> /tmp/sing_debug.log");
+                // Test whether we have a solution here
+                if (basis[1] != 1)
+                { 
+                    // seg[1] = lpp, seg[2] = actual basis, seg[3] = segment info
+                    // Count expected number of solutions
+                    //def seginfo = seg[3];
+                    def constraints_info = seg[3];
+                    system("sh", " echo 'grobcov lpp " + string(seg[1]) + "'>> /tmp/sing_debug.log");
+                    // TODO: INSIDE OF SEGINFO THERES INFO ABOUT IT BEING BAD -- Maybe look at Grob1Levels
+                    //system("sh", " echo 'grobcov seginfo " + string(seginfo) + "'>> /tmp/sing_debug.log");
+                    system("sh", " echo 'grobcov constraints_info " + string(constraints_info) + "'>> /tmp/sing_debug.log");
+                    ideal E_null = constraints_info[1];
+                    ideal N_nonnull = constraints_info[2];
+                    out = out + "|||BRANCH|||" + string(branch_id) + newline;
+                    out = out + "|||COMPONENT|||" + string(p) + newline;
+                    out = out + "|||PARAMS|||" + param_str + newline;
+                    out = out + "|||VARS|||" + var_str + newline;
+                    out = out + "|||CONSTRAINTS|||" + newline;
+                    for (j=1; j<=size(E_null); j++)
+                    {
+                        if (E_null[j] != 0) { out = out + string(E_null[j]) + newline; }
+                    }
+                    // Count number of solutions to parameter constraints
+
+                    system("sh", " echo 'E_null " + string(E_null) + "'>> /tmp/sing_debug.log");
+                    setring r_gc_pr;
+                    ideal E_null_pr = imap(r_gc_dp, E_null);
+                    system("sh", " echo 'E_null_pr " + string(E_null_pr) + "'>> /tmp/sing_debug.log");
+                    if (size(variables(E_null_pr)) > 0)
+                    {
+                        string ring_cmd_temp;
+                        if(size(var_str)>0){
+                            ring_cmd_temp = "ring r_temp = (0," + var_str + "), (" + string(variables(E_null_pr)) + "), lp;";
+                            }
+                        else{
+                            ring_cmd_temp = "ring r_temp = (0,), (" + string(variables(E_null_pr)) + "), lp;";
+                            };
+                        execute(ring_cmd_temp);
+                        ideal E_null_temp = std(imap(r_gc_pr, E_null_pr));
+                        system("sh", " echo 'E_null_temp " + string(E_null_temp) + "'>> /tmp/sing_debug.log");
+                        int num_param_sols = vdim(E_null_temp);
+                        out = out + "|||CONSTRAINT_BASIS|||"+newline;
+                        if (num_param_sols > 0)
+                        {
+                            for (j=1; j<=size(E_null_temp); j++)
+                            {
+                                out = out + string(E_null_temp[j]) + newline;
+                            }
+                        }
+                        out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||" + string(num_param_sols) + newline;
+                    }
+                    else
+                    {
+                        out = out + "|||NUM_CONSTRAINT_SOLUTIONS|||-1" + newline;
+                    }
+                    setring r_gc_dp;
+                    out = out + "|||NONNULL|||" + newline;
+                    for (j=1; j<=size(N_nonnull); j++)
+                    {
+                        if (N_nonnull[j] != 0) { out = out + string(N_nonnull[j]) + newline; }
+                    }
+                    out = out + "|||BASIS|||" + newline;
+                    if (size(variables(basis)) > 0) {
+                        system("sh", " echo 'in loop basis " + string(basis) + "'>> /tmp/sing_debug.log");
+                        execute("ring r_temp = (0," + param_str + "), (" + string(variables(basis)) + "), lp;");
+                        ideal basis_temp = std(imap(r_gc_dp, basis));
+                        int num_solutions = vdim(basis_temp);
+                        system("sh", " echo 'in loop bt " + string(basis_temp) + "'>> /tmp/sing_debug.log");
+                        system("sh", " echo 'in loop num_solutions " + string(num_solutions) + "'>> /tmp/sing_debug.log");
+                        for (j=1; j<=size(basis_temp); j++)
+                        {
+                            out = out + string(basis_temp[j]) + newline;
+                        }
+                        int num_solutions = vdim(basis_temp);
+                        out = out + "|||NUM_SOLUTIONS|||" + string(num_solutions) + newline;
+                        setring r_gc_dp;
+                    }
+                    else{
+                        for (j=1; j<=size(basis); j++)
+                        {
+                            out = out + string(basis[j]) + newline;
+                        }
+                        out = out + "|||NUM_SOLUTIONS|||" + string(vdim(basis)) + newline;
+                    }
+                    kill seg, constraints_info, E_null, N_nonnull;
+                }
+                else{
+                    system("sh", " echo 'no solution ----'>> /tmp/sing_debug.log");
+                }
+                }
+                kill C;
             }
-            out = out + "|||BASIS|||" + newline;
-            if (num_solutions > 0) {
-            setring r_gc_lp;
-            ideal basis = imap(r_gc_dp, basis);
-            basis = fglm(r_gc_dp, basis);        }
-            for (j=1; j<=size(basis); j++)
-            {
-                out = out + string(basis[j]) + newline;
-            }
-            setring r_gc_dp;
-            out = out + "|||NUM_SOLUTIONS|||" + string(num_solutions) + newline;
-            kill seg, constraints_info, E_null, N_nonnull, seginfo;
-            }
-            kill C;
+            setring r;
         }
-        setring r;
     }
     out = out + "|||END|||";
     return(out);
+}
+
+
+proc makeParamRing(ideal I, string ordType)
+{
+    // 1. Get the ideal of used variable
+    system("sh", " echo IN makeParamRing >> /tmp/sing_debug.log");
+    ideal V = variables(I);
+    string idealStr = string(I);
+
+    string s_vars, s_pars;
+    string sep_v, sep_p;
+    int i;
+    
+    // 2. Classify by reducing every ring variable against V
+    for (i = 1; i <= nvars(basering); i++)
+    {
+        // If reduce returns 0, var(i) is in V (it is used)
+        if (reduce(var(i), V) == 0)
+        {
+            s_vars = s_vars + sep_v + string(var(i));
+            sep_v = ",";
+        }
+        else
+        {
+            s_pars = s_pars + sep_p + string(var(i));
+            sep_p = ",";
+        }
+        system("sh", " echo IN makeParamRing " + string(i) + ">> /tmp/sing_debug.log");
+    }
+    system("sh", " echo IN makeParamRing strings " + s_vars + " - " + s_pars + " >> /tmp/sing_debug.log");
+
+    if (size(s_vars) == 0) { ERROR("No variables found in ideal!"); }
+
+    // 3. Construct and export the new ring
+    string coef_str;
+    coef_str = "0";
+    string ringName = "R_split"; 
+    string cmd;
+    if (size(s_pars) > 0) {
+        coef_str = coef_str + "," + s_pars; 
+        cmd = "ring " + ringName + " = (" + coef_str + "), (" + s_vars + ")," + ordType + ";";
+    }
+    else{
+        cmd = "ring " + ringName + " = 0, (" + s_vars + ")," + ordType + ";";
+    }
+    
+
+    system("sh", " echo 'IN makeParamRing cmd " + cmd + "' >> /tmp/sing_debug.log");
+    
+    execute(cmd);
+
+    system("sh", " echo IN makeParamRing EXITING >> /tmp/sing_debug.log");
+    
+    return(basering);
+}
+
+// Define the helper procedure
+proc countCleanChars(string s)
+{
+    int len = size(s);
+    int count = 0;
+    string charac;
+    
+    for (int i=1; i<=len; i++)
+    {
+        charac = s[i];
+        // Check if charac is NOT a comma and NOT whitespace (space, tab, newline)
+        if (charac != "," && charac != " " && charac != "	" && charac != "\n")
+        {
+            count++;
+        }
+    }
+    return(count);
 }

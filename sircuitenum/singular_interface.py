@@ -24,9 +24,36 @@ singular.eval(f'LIB "{str(lib_path)}";')
 
 import sympy as sym
 
+# Helper to convert Singular power notation back to SymPy
+# (e.g. x2 -> x**2)
+def fix_powers(text, var_names):
+    new_text = ""
+    i = 0
+    n_chars = len(text)
+    while i < n_chars:
+        this_char = text[i]
+        if this_char in var_names:
+            # Check for following digits
+            j = i + 1
+            power_str = ""
+            while j < n_chars and text[j].isdigit():
+                power_str += text[j]
+                j += 1
+            if power_str:
+                new_text += this_char + "**" + power_str
+                i = j
+            else:
+                new_text += this_char
+                i += 1
+        else:
+            new_text += this_char
+            i += 1
+    return new_text
+    
 
-def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol], list[str]],
-                          fixed_params: Union[list[sym.Symbol], list[str]] = []) -> List[Dict[str, Any]]:
+def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol], list[str], str],
+                          fixed_params: Union[list[sym.Symbol], list[str], str] = [],
+                          inv_dummy_map: dict[str, sym.Symbol] = {}) -> List[Dict[str, Any]]:
 
     # Parse Output
     if "|||START|||" not in raw_output:
@@ -37,15 +64,8 @@ def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol
     content = raw_output.split("|||START|||")[1].split("|||END|||")[0]
     raw_branches = content.split("|||BRANCH|||")[1:]
     
-    # Helper to convert Singular power notation back to SymPy
-    def fix_powers(text, var_names):
-        for v in var_names:
-            pattern = rf'(?<![a-zA-Z])({v})(\d+)'
-            text = re.sub(pattern, rf'\1**\2', text)
-        return text
-    
     # All variable names for power fixing
-    all_var_names = [str(v) for v in fixed_params] + [str(v) for v in potential_vars]
+    all_var_names = [str(v) for v in fixed_params if str(v) != ","] + [str(v) for v in potential_vars if str(v) != ","]
     
     parsed_results = []
     
@@ -54,7 +74,7 @@ def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol
         branch_data = {
             'id': int(lines[0]),
             'component': None,
-            'params': list(fixed_params),  # Start with fixed params
+            'params': [],
             'vars': [],
             'constraints': [],
             'constraint_basis': [],
@@ -77,13 +97,14 @@ def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol
                 continue
             if "|||PARAMS|||" in line:
                 params_str = line.replace("|||PARAMS|||", "").strip()
-                params = [v.strip() for v in params_str.split(",") if v.strip()]
+                params = [inv_dummy_map.get(v.strip(), v.strip()) for v in params_str.split(",") if v.strip()]
                 # Add params -- fixed params are already included
-                branch_data['params'] = params
+                branch_data['params'] = [sym.sympify(p) for p in params]
                 continue
             if "|||VARS|||" in line:
                 vars_str = line.replace("|||VARS|||", "").strip()
-                branch_data['vars'] = [v.strip() for v in vars_str.split(",") if v.strip()]
+                vars = [inv_dummy_map.get(v.strip(), v.strip()) for v in vars_str.split(",") if v.strip()]
+                branch_data['vars'] = [sym.sympify(v) for v in vars]
                 continue
             if "|||CONSTRAINTS|||" in line:
                 mode = "constraints"
@@ -112,7 +133,17 @@ def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol
             clean_line = fix_powers(clean_line, all_var_names)
             
             if mode in ["constraints", "nonnull", "basis", "constraint_basis"]:
-                expr = sym.simplify(sym.sympify(clean_line))
+                # ac -> a*c
+                sym_line = ""
+                for i in range(len(clean_line)):
+                    ch = clean_line[i]
+                    sym_line += inv_dummy_map.get(ch, ch)
+                    if ch in all_var_names or ch.isnumeric():
+                        if i + 1 < len(clean_line):
+                            next_ch = clean_line[i + 1]
+                            if next_ch in all_var_names:
+                                sym_line += '*'
+                expr = sym.simplify(sym.sympify(sym_line))
                 if expr == 0:
                     continue
                 branch_data[mode].append(expr)
@@ -136,30 +167,48 @@ def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol
         else:
             param_solutions = []
             param_branches = []
-            for param_branch in solve_with_singular(param_eqs):
-                param_solutions += param_branch['mappings']
+            for param_branch in solve_with_singular(branch_data["constraints"]):
+                param_solutions += [param_branch['mapping']]
                 param_branches.append(param_branch)
             branch_data['param_branches'] = param_branches
 
         # Extract mappings from basis using sympy.solve on triangular structure
-        dep_vars = [sym.symbols(v) for v in branch_data['vars']]
+        dep_vars = branch_data['vars']
+        param_vars = branch_data['params']
         dep_eqs = branch_data['basis']
         if branch_data["basis"]:
             dep_vars_in_basis = [v for v in dep_vars if any(eq.has(v) for eq in dep_eqs)]
             solutions = sym.solve(dep_eqs, dep_vars_in_basis, dict=True, simplify=True)
-            if len(solutions) != branch_data['num_solutions']:
-                breakpoint()
-                raise ValueError(f"Expected {branch_data['num_solutions']} sols for branch {branch_data['id']}, got {len(solutions)}")
+            if branch_data['num_solutions'] == -1:
+                dep_solutions = []
+                dep_branches = []
+                for dep_branch in solve_with_singular(dep_eqs, solve_vars=dep_vars_in_basis):
+                    solutions += [dep_branch['mapping']]
+                    dep_branches.append(dep_branch)
+                branch_data['dep_branches'] = dep_branches
+            else:
+                # Take multiplicity of zero roots into account
+                # for equations like x^3 = 0, count as 3 solutions
+                reduction = 0
+                for eq in dep_eqs:
+                    if isinstance(eq, sym.Pow):
+                        base = eq.args[0]
+                        exponent = eq.args[1]
+                        if exponent.is_integer and exponent > 1:
+                            reduction += exponent - 1
+                if len(solutions) != branch_data['num_solutions'] - reduction:
+                    raise ValueError(f"Expected {branch_data['num_solutions']} sols for branch {branch_data['id']}, got {len(solutions)}")
         else:
             solutions = [{}]  # No equations means all dep_vars are free
 
         # Combine with parameter solutions
         branch_data['mappings'] = []
+        branch_data["free_vars"] = []
+        branch_data["free_params"] = []
         for sol_dict, param_sol_dict in itertools.product(solutions, param_solutions):
             branch_data['mappings'].append({**sol_dict, **param_sol_dict})
-        
-        # Mark unbounded variables as "Free Parameter"
-        branch_data["free_vars"] = [v for v in dep_vars if v not in sol_dict]
+            branch_data["free_vars"].append([v for v in dep_vars if v not in branch_data['mappings'][-1]])
+            branch_data["free_params"].append([v for v in param_vars if v not in branch_data['mappings'][-1]])
         
         parsed_results.append(branch_data)
     
@@ -169,7 +218,7 @@ def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol
     
     return parsed_results
 
-def solve_with_singular(equations, solve_vars=None):
+def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dict[str, Any]]:
     """
     Solves a system of SymPy equations using minAssGTZ -> indepSet -> grobcov.
     
@@ -188,6 +237,8 @@ def solve_with_singular(equations, solve_vars=None):
             other symbols are treated as parameters from the start.
             If None, the algorithm auto-discovers which variables are independent
             vs dependent for each component.
+        dummy_subs (bool, optional): Whether to perform dummy substitutions to avoid
+            Singular parsing issues with certain symbols. Default is True.
 
     Returns:
         list[dict]: A list of branches. Each branch is a dict with:
@@ -200,6 +251,10 @@ def solve_with_singular(equations, solve_vars=None):
             - 'basis': The Groebner basis for this segment
             - 'mappings': Dict mapping variables to their solutions or "Free Parameter"
     """
+    # Convert equations to SymPy expressions if needed
+    if isinstance(equations[0], sym.Equality):
+        equations = [eq.lhs - eq.rhs for eq in equations]
+
     # Quick inconsistency check: if any equation is a non-zero constant, system is inconsistent
     eq_simplified = []
     for eq in equations:
@@ -227,16 +282,153 @@ def solve_with_singular(equations, solve_vars=None):
     else:
         fixed_params = []
         potential_vars = sorted(list(all_symbols), key=str)
+
+    # Optional: Dummy substitutions to avoid Singular parsing issues
+    dummy_map = {}
+    inv_dummy_map = {}
+    if dummy_subs:
+        ord_val = 97  # ASCII 'a'
+        for s in fixed_params + potential_vars:
+            # skip e
+            if chr(ord_val) == 'e':
+                ord_val += 1
+            if ord_val > 122:  # ASCII 'z'
+                raise ValueError("Too many variables for dummy substitution (max 25)")
+            dummy_map[str(s)] = chr(ord_val)
+            inv_dummy_map[chr(ord_val)] = str(s)
+            ord_val += 1
+    else:
+        for s in fixed_params + potential_vars:
+            dummy_map[str(s)] = str(s)
+            inv_dummy_map[str(s)] = str(s)
     
     # Build input strings for the Singular proc (no spaces)
-    str_fixed_params = ",".join(str(p) for p in fixed_params)
-    str_potential_vars = ",".join(str(v) for v in potential_vars)
+    str_fixed_params = ",".join(dummy_map[str(p)] for p in fixed_params)
+    str_potential_vars = ",".join(dummy_map[str(v)] for v in potential_vars)
     str_eqs = ",".join(str(eq).replace("**", "^") for eq in equations)
+    for orig, dummy in dummy_map.items():
+        str_eqs = str_eqs.replace(orig, dummy)
 
     # Run Singular
+    print("Calling Singular grobcov solver...")
+    print(f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");')
     raw_output = singular.eval(f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");')
+    print("Singular call complete.")
+    # print("output snippet:", raw_output)
 
-    return parse_singular_output(raw_output, potential_vars, fixed_params)
+    branches = parse_singular_output(raw_output, str_potential_vars, str_fixed_params, inv_dummy_map=inv_dummy_map)
+    branches_flat = flatten_branches(branches)
+    # branches_filtered = filter_redundant_branches(branches_flat)
+    branches_filtered = branches_flat
+    return branches_filtered
+
+
+def filter_redundant_branches(branches, verbose=False):
+    """
+    Filters branches assuming they have been flattened (1 mapping per branch).
+    """
+    
+    def is_subset(branch_spec, branch_gen):
+        # 1. SETUP MAP
+        if 'mapping' not in branch_spec: return False
+        spec_map = branch_spec['mapping'].copy()
+        
+        # Augment with basis
+        for eq in branch_spec.get('basis', []):
+            if isinstance(eq, sym.Symbol): spec_map[eq] = 0
+                
+        # 2. BASIS CHECK
+        for eq in branch_gen.get('basis', []):
+            if eq.subs(spec_map).simplify() != 0: return False 
+
+        # 3. HOLE CHECK
+        for constr in branch_gen.get('nonnull', []):
+            if constr == 1: continue
+            if constr.subs(spec_map).simplify() == 0: return False
+
+        # 4. MAPPING CHECK
+        if branch_gen.get('mapping'):
+            gen_map = branch_gen['mapping']
+            for lhs, rhs in gen_map.items():
+                if (lhs - rhs).subs(spec_map).simplify() != 0:
+                    return False 
+        return True
+
+    to_remove_ids = set()
+    for i, b_spec in enumerate(branches):
+        if b_spec['id'] in to_remove_ids: continue
+        for j, b_gen in enumerate(branches):
+            if i == j: continue
+            if b_gen['id'] in to_remove_ids: continue
+
+            if is_subset(b_spec, b_gen):
+                if verbose: print(f"Removing {b_spec['id']} (Subset of {b_gen['id']})")
+                to_remove_ids.add(b_spec['id'])
+                break
+    
+    to_keep = [b for b in branches if b['id'] not in to_remove_ids]
+    # sort by ID
+    to_keep.sort(key=lambda b: float(b['id']))
+    return to_keep
+
+def extract_mappings(branches: List[Dict[str, Any]], real_only: bool = False) -> List[Dict[str, Any]]:
+    """
+    Extracts the variable mappings from each branch into a simplified format.
+    
+    Args:
+        branches (list): List of branch dicts as returned by solve_with_singular.
+    
+    Returns:
+        list: List of dicts mapping variable names to their solutions or "Free Parameter".
+    """
+    # Flatten branches if needed
+    if any('mappings' in br for br in branches):
+        branches = flatten_branches(branches)
+    simplified_mappings = []
+    for br in branches:
+        mapping = br['mapping']
+        if real_only:
+            # Check if mapping has an explicit imaginary part
+            if all(not sym.sympify(val).has(sym.I) for val in mapping.values()):
+                simplified_mappings.append(mapping)
+        else:
+            simplified_mappings.append(mapping)
+    return simplified_mappings
+
+
+def flatten_branches(branches):
+    """
+    Expands branches with multiple mappings into separate, distinct branches.
+    Retains the original ID but adds a suffix (e.g., 10 -> 10.0, 10.1).
+    """
+    flat_list = []
+    
+    for b in branches:
+        # If no mappings, it's just a basis constraint (keep as is)
+        if not b.get('mappings'):
+            flat_list.append(b)
+            continue
+            
+        # Explode mappings
+        for i, mapping in enumerate(b['mappings']):
+            # Create a shallow copy of the branch info
+            new_b = b.copy()
+            
+            # OVERWRITE 'mappings' with just THIS single mapping
+            new_b['mapping'] = mapping
+            if "free_vars" in b:
+                new_b["free_vars"] = b["free_vars"][i]
+            if "free_params" in b:
+                new_b["free_params"] = b["free_params"][i]
+            del new_b['mappings']
+            
+            #  Update ID to track lineage
+            # (Using string IDs temporarily for clarity)
+            new_b['id'] = f"{b['id']}.{i}" 
+            
+            flat_list.append(new_b)
+            
+    return flat_list
 
 
 # =========================================
@@ -266,3 +458,4 @@ if __name__ == "__main__":
     print(f"Found {len(branches)} Branches:")
     for br in branches:
         print(br)
+

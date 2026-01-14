@@ -15,6 +15,8 @@ import sympy as sym
 import functools, itertools
 from sympy.core.mul import Mul
 
+from sircuitenum.singular_interface import solve_with_singular, extract_mappings
+
 
 # Cache of solved equations
 CACHE_VARS = sym.symbols(",".join([f'x{i}' for i in range(100)]), real=True)
@@ -282,6 +284,16 @@ class EquationSet:
         """
         return list(self.eqs)
         # return list(self._eqs_simplified)
+
+    def as_expr_list(self) -> list[sym.Expr]:
+        """Convert to list of SymPy expressions (set equal to 0).
+        
+        Returns
+        -------
+        list[sym.Expr]
+            List of expressions in this set.
+        """
+        return [eq.lhs - eq.rhs for eq in self.as_eq_list()]
     
     def as_grobner_list(self) -> list[sym.Eq]:
         """Convert to list of SymPy equations in Groebner basis order.
@@ -293,7 +305,7 @@ class EquationSet:
         """
         if len(self.eqs) == 0:
             return []
-        grob_eqs = sym.groebner([eq.lhs - eq.rhs for eq in self.as_eq_list()], *self._solve_vars)
+        grob_eqs = sym.groebner([eq.lhs - eq.rhs for eq in self.as_eq_list()], *self._solve_vars, order='grevlex')
         return [sym.Eq(poly, 0) for poly in grob_eqs]
 
     def as_frozenset(self) -> frozenset:
@@ -641,7 +653,8 @@ def sol_indep_of_vars(expr: Union[sym.Eq, sym.Expr], solve_vars, nonzero=[]):
 
     return sols
 
-def cached_solve(all_eq: Union[EquationSet, list], solve_vars: list[sym.Symbol] = []):
+def cached_solve(all_eq: Union[EquationSet, list], solve_vars: list[sym.Symbol] = [],
+                 return_all_branches: bool = False):
     """Wrapper for _cached_solve to handle unhashable types."""
     # Convert equations to a hashable representation
     solve_vars_key = tuple(sorted(solve_vars, key=lambda x: str(x)))
@@ -649,10 +662,10 @@ def cached_solve(all_eq: Union[EquationSet, list], solve_vars: list[sym.Symbol] 
         eq_key = all_eq
     else:
         eq_key = EquationSet.from_any(all_eq, solve_vars=solve_vars_key)
-    return _cached_solve(eq_key)
+    return _cached_solve(eq_key, return_all_branches=return_all_branches)
 
 @functools.cache
-def _cached_solve(all_eq: EquationSet):
+def _cached_solve(all_eq: EquationSet, return_all_branches: bool = False):
     """Solve equations with caching for performance.
     
     Parameters
@@ -676,9 +689,10 @@ def _cached_solve(all_eq: EquationSet):
     if not any(v in eq.free_symbols for eq in eq_set_obj.as_eq_list() for v in solve_vars):
         return []
 
-    # Recursive base case -- empty or single variable 1:1 mapping
+    # Empty or conflicting equations
     if len(eq_set_obj) == 0 or eq_set_obj._constant_conflict:
         return []
+    # Single variable 1:1 mapping
     elif eq_set_obj.as_dict() is not None and len(eq_set_obj) == 1:
         var, val = list(eq_set_obj.as_dict().items())[0]
         if var.is_symbol and var.is_number or var.is_symbol:
@@ -686,115 +700,44 @@ def _cached_solve(all_eq: EquationSet):
     
     # Put equations together and grab numerators
     eq_set_numer, all_denom = eq_set_obj.as_numer_denom()
-    if _is_system_linear(eq_set_numer.as_eq_list(), solve_vars):
-        general_sols = unique_solutions(_sols_set_to_dict(sym.linsolve(eq_set_numer.as_eq_list(), solve_vars), solve_vars))
-    try:
-        general_sols = unique_solutions(_sols_set_to_dict(sym.nonlinsolve(eq_set_numer.as_eq_list(), solve_vars), solve_vars))
-    except Exception as e:
-        try:
-            general_sols = sym.solve(eq_set_numer.as_eq_list(), solve_vars, dict=True)
-        except NotImplementedError:
-            general_sols = []
-    # Expand solutions by exploring singular branches
-    sols = []
-    for s in _expand_singular_branches(eq_set_numer, general_sols, solve_vars, nonzero=all_denom):
-        if all(d.subs(s) != 0 for d in all_denom):
-            sols.append(s)
 
-    # Make sure none of the original denominators are zero
-    sols = [s for s in sols if all(sym.simplify(d.subs(s)) != 0 for d in all_denom)]
-    sols = unique_solutions(sols)
-    sols = [{var: sym.simplify(val) for var, val in sol.items()} for sol in sols]
-
-    return sols
-
-def _is_system_linear(equations, variables):
-    """Checks if all equations in a system are linear in all specified variables."""
-    for eq in equations:
-        # Rewrite the equation to the form expr = 0 for consistency
-        expr = sym.expand(eq.lhs - eq.rhs) if eq.rhs != 0 else sym.expand(eq)
-        for term in expr.args:
-            var_in_term = [x for x in variables if x in term.free_symbols]
-            if not var_in_term:
-                continue
-            elif len(var_in_term) > 1:
-                return False
-            elif not sym.Poly(term, var_in_term[0]).is_linear:
-                return False
-    return True
+    # Solve equations
+    branches = solve_with_singular(eq_set_numer.as_expr_list(), solve_vars)
+    sols = extract_mappings(branches, real_only=False)
 
 
-def _expand_singular_branches(eq_set, initial_solutions, solve_vars, nonzero=[]):
-    """
-    Expand solutions by exploring branches where denominators are zero.
+    # Filter out solutions with zero denominators
+    valid_sols = []
+    valid_branches = []
+    for sol, branch in zip(sols, branches):
+        if all(sym.simplify(denom.subs(sol)) != 0 for denom in all_denom):
+            valid_sols.append(sol)
+            valid_branches.append(branch)
 
-    NOTE: By default it does not filter out solutions that make eq_set equations invalid.
-    This is left to the caller to input appropriate nonzero conditions.
+    if return_all_branches:
+        return valid_sols, branches
+    return valid_sols
+    # return valid_sols
 
+
+def _eq_as_numer_denom(eq: Union[sym.Eq, sym.Expr]):
+    """Extract numerator and denominator from equation or expression.
+    
     Parameters
     ----------
-    eq_set : EquationSet
-        The original set of equations. 
-    initial_solutions : list[dict]
-        Initial solutions to expand upon. Assumed to be unique already.
-    solve_vars : list[sym.Symbol]
-        Variables to solve for. Assumes to be sorted already.
-    """
-
-    # Check for trivial case
-    if eq_set == EquationSet.from_any(initial_solutions):
-        return initial_solutions
-    
-    # Master list of all unique solutions found
-    all_solutions = []
-    
-    # Queue for breadth first constraint traversal: stores (solution_dict, constraint_history_list)
-    # We assume initial solutions have NO constraints (empty EquationSet)
-    queue = [(sol, EquationSet.empty()) for sol in initial_solutions]
-    
-    # Loop Detection: Tracks sets of constraints we have already solved
-    visited_constraints = set()
-    visited_constraints.add(EquationSet.empty()) # Base case (no constraints) checked
-
-    # Add the initial batch first
-    for s in initial_solutions:
-        all_solutions.append(s)
-
-    # Expand each solution in the queue
-    while queue:
-        current_sol, current_constraints = queue.pop(0)
+    eq : sym.Eq or sym.Expr
+        Equation or expression to decompose.
         
-        # Extract all denominators from the current solution's values
-        denominators = set()
-        for val in current_sol.values():
-            _, d = _eq_as_numer_denom(val)
-            if any(v in d.free_symbols for v in solve_vars) and d not in nonzero:
-                denominators.add(d)
-
-        # Create New Branches
-        for denom in denominators:
-            # Create the new constraint: Denominator == 0
-            new_constraint = sym.Eq(denom, 0)
-            
-            # Form the new state (Previous Constraints + New Constraint)
-            next_constraints = current_constraints | EquationSet.from_any([new_constraint])
-
-            # STOP: We have already solved this exact scenario or we have a contradiction
-            if next_constraints in visited_constraints or next_constraints._constant_conflict:
-                continue 
-            
-            visited_constraints.add(next_constraints)
-            
-            # Solve original equation + all accumulated constraints
-            branch_system = eq_set | next_constraints
-            new_sols = unique_solutions(_sols_set_to_dict(sym.nonlinsolve(branch_system.as_eq_list(), solve_vars), solve_vars))
-            for s in new_sols:
-                all_solutions.append(s)
-                # Add to queue to check against further denominators
-                queue.append((s, next_constraints))
-                   
-
-    return all_solutions
+    Returns
+    -------
+    tuple[sym.Expr, sym.Expr]
+        Numerator and denominator after combining fractions.
+    """
+    if isinstance(eq, sym.Eq):
+        eq = (eq.lhs - eq.rhs) 
+    eq_new = sym.expand(eq).together(deep=True)
+    numer, denom = eq_new.as_numer_denom()
+    return numer, denom
 
 
 def _sols_set_to_dict(sols_set, solve_vars):
@@ -849,26 +792,6 @@ def _sols_set_to_dict(sols_set, solve_vars):
         if not invalid:
             sols.append(sol_dict)
     return sols
-
-
-def _eq_as_numer_denom(eq: Union[sym.Eq, sym.Expr]):
-    """Extract numerator and denominator from equation or expression.
-    
-    Parameters
-    ----------
-    eq : sym.Eq or sym.Expr
-        Equation or expression to decompose.
-        
-    Returns
-    -------
-    tuple[sym.Expr, sym.Expr]
-        Numerator and denominator after combining fractions.
-    """
-    if isinstance(eq, sym.Eq):
-        eq = (eq.lhs - eq.rhs) 
-    eq_new = sym.expand(eq).together(deep=True)
-    numer, denom = eq_new.as_numer_denom()
-    return numer, denom
 
 
 def unique_solutions(sols: Union[list[dict], list[EquationSet]], return_idx: bool = False) -> list[dict]:
