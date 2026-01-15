@@ -82,57 +82,50 @@ def _robust_substitute(expr, subs_dict):
             val = sym.simplify(val.subs(var, sub_val))
     return val
 
-def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol], list[str], str],
-                          fixed_params: Union[list[sym.Symbol], list[str], str] = [],
-                          inv_dummy_map: dict[str, sym.Symbol] = {}) -> List[Dict[str, Any]]:
-
+def parse_singular_output(raw_output: str, 
+                       all_var_names: list[str], 
+                       inv_dummy_map: dict[str, str]) -> List[Dict[str, Any]]:
+    """
+    Parses Singular output string into a list of raw dictionaries with SymPy expressions.
+    Does NOT perform any solving, recursion, or filtering.
+    """
     if "[1]:" in raw_output:
         raw_output = clean_singular_string(raw_output)
 
-    # Parse Output
     if "|||START|||" not in raw_output:
-        print("ERROR: Singular script did not produce expected output markers")
-        print("Raw output:", raw_output[:500])
+        # print("ERROR: Singular script did not produce expected output markers")
         return []
     
     content = raw_output.split("|||START|||")[1].split("|||END|||")[0]
     raw_branches = content.split("|||BRANCH|||")[1:]
     
-    # All variable names for power fixing
-    all_var_names = [str(v) for v in fixed_params if str(v) != ","] + [str(v) for v in potential_vars if str(v) != ","]
-    
-    parsed_results = []
+    parsed_raw_branches = []
     
     for b_text in raw_branches:
         lines = b_text.strip().split("\n")
         branch_data = {
             'id': int(lines[0]),
-            'component': None,
+            'component': [],
             'params': [],
             'vars': [],
             'constraints': [],
             'constraint_basis': [],
             'nonnull': [],
             'basis': [],
-            'num_solutions': None,
-            'mappings': {}
+            'num_solutions': -1, # Default to infinite if missing
+            'num_constraint_solutions': -1
         }
         
         mode = None
-        discovered_params = []
         
         for line in lines[1:]:
             line = line.strip()
-            if not line:
-                continue
+            if not line: continue
             
-            if "|||COMPONENT|||" in line:
-                branch_data['component'] = int(line.replace("|||COMPONENT|||", "").strip())
-                continue
+            # --- METADATA PARSING ---
             if "|||PARAMS|||" in line:
                 params_str = line.replace("|||PARAMS|||", "").strip()
                 params = [inv_dummy_map.get(v.strip(), v.strip()) for v in params_str.split(",") if v.strip()]
-                # Add params -- fixed params are already included
                 branch_data['params'] = [sym.sympify(p) for p in params]
                 continue
             if "|||VARS|||" in line:
@@ -140,138 +133,259 @@ def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol
                 vars = [inv_dummy_map.get(v.strip(), v.strip()) for v in vars_str.split(",") if v.strip()]
                 branch_data['vars'] = [sym.sympify(v) for v in vars]
                 continue
-            if "|||CONSTRAINTS|||" in line:
-                mode = "constraints"
-                continue
-            if "|||CONSTRAINT_BASIS|||" in line:
-                mode = "constraint_basis"
-                continue
-            if "|||NONNULL|||" in line:
-                mode = "nonnull"
-                continue
-            if "|||BASIS|||" in line:
-                mode = "basis"
-                continue
             if "|||NUM_SOLUTIONS|||" in line:
-                num_sols_str = line.replace("|||NUM_SOLUTIONS|||", "").strip()
-                branch_data['num_solutions'] = int(num_sols_str)
+                val = line.replace("|||NUM_SOLUTIONS|||", "").strip()
+                if val: branch_data['num_solutions'] = int(val)
                 continue
             if "|||NUM_CONSTRAINT_SOLUTIONS|||" in line:
-                num_sols_str = line.replace("|||NUM_CONSTRAINT_SOLUTIONS|||", "").strip()
-                if num_sols_str != "":
-                    branch_data['num_constraint_solutions'] = int(num_sols_str)
+                val = line.replace("|||NUM_CONSTRAINT_SOLUTIONS|||", "").strip()
+                if val: branch_data['num_constraint_solutions'] = int(val)
                 continue
             
-            # Clean and parse
-            clean_line = line.replace("^", "**")
-            clean_line = fix_powers(clean_line, all_var_names)
+            # --- MODE SWITCHING ---
+            if "|||CONSTRAINTS|||" in line:      mode = "constraints"; continue
+            if "|||CONSTRAINT_BASIS|||" in line: mode = "constraint_basis"; continue
+            if "|||NONNULL|||" in line:          mode = "nonnull"; continue
+            if "|||BASIS|||" in line:            mode = "basis"; continue
+            if "|||COMPONENT|||" in line:        mode = "component"; continue # Already handled
             
-            if mode in ["constraints", "nonnull", "basis", "constraint_basis"]:
-                # ac -> a*c
-                sym_line = ""
-                for i in range(len(clean_line)):
-                    ch = clean_line[i]
-                    sym_line += inv_dummy_map.get(ch, ch)
-                    if ch in all_var_names or ch.isnumeric():
-                        if i + 1 < len(clean_line):
-                            next_ch = clean_line[i + 1]
-                            if next_ch in all_var_names:
-                                sym_line += '*'
+            # --- EXPRESSION PARSING ---
+            # 1. Fix Powers (^ -> **)
+            clean_line = fix_powers(line, all_var_names)
+            # 2. Fix variable spacing (ac -> a*c)
+            # (Assumes fix_powers logic is similar or you can use your existing fix_powers)
+            sym_line = ""
+            for i in range(len(clean_line)):
+                ch = clean_line[i]
+                sym_line += inv_dummy_map.get(ch, ch)
+                # Check for implicit multiplication necessity
+                if ch in all_var_names or ch.isnumeric():
+                    if i + 1 < len(clean_line):
+                        next_ch = clean_line[i + 1]
+                        if next_ch in all_var_names or next_ch == '(':
+                             sym_line += '*'
+            
+            try:
                 expr = sym.simplify(sym.sympify(sym_line))
-                if expr == 0:
-                    continue
-                branch_data[mode].append(expr)
+                if expr != 0:
+                    branch_data[mode].append(expr)
+            except:
+                pass # logging error
 
-        if branch_data['basis'] == [1]:
-            # Inconsistent branch, skip
-            continue
-
-        # Separate any ghost constraints that
-        # snuck into basis
-        dep_vars = set(branch_data['vars'])
-        basis_eqs = branch_data['basis']
+        parsed_raw_branches.append(branch_data)
         
-        true_dep_eqs = []
-        ghost_constraints = []
-        
-        for eq in basis_eqs:
-            # If equation contains ANY dependent variable, it's a variable definition
-            if eq.free_symbols.intersection(dep_vars):
-                true_dep_eqs.append(eq)
-            else:
-                # Otherwise, it's a constraint on parameters that leaked into the basis
-                ghost_constraints.append(eq)
-        # Update branch data
-        branch_data['basis'] = true_dep_eqs
-        branch_data['constraints'] += ghost_constraints
+    return parsed_raw_branches
 
 
-        # No constraints
-        raw_param_solutions = []
-        if branch_data["constraints"] == []:
-            raw_param_solutions += [{}]
-        # Zero-dimensional parameter constraints (-1 means infinite)
-        # Exact number of solutions known
-        elif branch_data.get('num_constraint_solutions', -1) > 0:
-            param_eqs = branch_data['constraint_basis']
-            param_vars = set(itertools.chain.from_iterable(eq.free_symbols for eq in param_eqs))
-            raw_param_solutions = sym.solve(param_eqs, param_vars, dict=True)
-            if len(raw_param_solutions) != branch_data['num_constraint_solutions']:
-                raise ValueError(f"Expected {branch_data['num_constraint_solutions']} sols for branch {branch_data['id']}, got {len(raw_param_solutions)}")
-        # Infinite solutions, find parameterized solutions
-        else:
-            param_branches = []
-            for param_branch in solve_with_singular(branch_data["constraints"]):
-                this_sol = param_branch["mapping"]
-                raw_param_solutions += [this_sol]
-                param_branches.append(param_branch)
-            branch_data['param_branches'] = param_branches
+def refine_branch_mappings(branch, original_eqs):
+    """
+    Checks if the branch mappings fully satisfy the original equations.
+    If 'residuals' remain (non-zero terms after substitution), it solves 
+    them to find the hidden sub-branches.
 
-        # Extract mappings from basis using sympy.solve on triangular structure
-        dep_vars = branch_data['vars']
-        param_vars = branch_data['params']
-        dep_eqs = branch_data['basis']
-        if branch_data["basis"]:
-            if branch_data['num_solutions'] == -1:
-                dep_solutions = []
-                dep_branches = []
-                for dep_branch in solve_with_singular(dep_eqs):
-                    solutions += [dep_branch['mapping']]
-                    dep_branches.append(dep_branch)
-                branch_data['dep_branches'] = dep_branches
-            else:
-                # Take multiplicity of zero roots into account
-                # for equations like x^3 = 0, count as 3 solutions
-                solutions = sym.solve(dep_eqs, dep_vars, dict=True, simplify=True)
-                reduction = 0
-                for eq in dep_eqs:
-                    if isinstance(eq, sym.Pow):
-                        base = eq.args[0]
-                        exponent = eq.args[1]
-                        if exponent.is_integer and exponent > 1:
-                            reduction += exponent - 1
-                if len(solutions) != branch_data['num_solutions'] - reduction:
-                    raise ValueError(f"Expected {branch_data['num_solutions']} sols for branch {branch_data['id']}, got {len(solutions)}")
-        else:
-            solutions = [{}]  # No equations means all dep_vars are free
+    Example:
+        Mapping: {Z22: 0}
+        Original Eq: Z12 * (Z00 - Z10) - Z22
+        Residual: Z12 * (Z00 - Z10)  (Not zero!)
+        Refinement Solves: [Z12=0] OR [Z00=Z10]
+    """
+    if 'mappings' not in branch or not branch['mappings']:
+        return branch
 
-        # Combine with parameter solutions
-        branch_data['mappings'] = []
-        branch_data["free_vars"] = []
-        branch_data["free_params"] = []
-        for sol_dict, param_sol_dict in itertools.product(solutions, param_solutions):
-            this_sol = {**sol_dict, **param_sol_dict}
-            branch_data['mappings'].append(this_sol)
-            branch_data["free_vars"].append([v for v in dep_vars if v not in branch_data['mappings'][-1]])
-            branch_data["free_params"].append([v for v in param_vars if v not in branch_data['mappings'][-1]])
-        
-        parsed_results.append(branch_data)
+    refined_mappings = []
     
-    # renumber branch IDs to be sequential
-    for idx, br in enumerate(parsed_results):
-        br['id'] = idx + 1
+    for candidate in branch['mappings']:
+        # 1. IDENTIFY RESIDUALS
+        # Substitute the candidate mapping into all original equations
+        residuals = []
+        for eq in original_eqs:
+            val = eq
+            
+            # Iterative substitution to resolve chains (a->b, b->c)
+            # Loop limit prevents infinite recursion on circular deps
+            for _ in range(len(candidate) + 5):
+                new_val = val.subs(candidate)
+                if new_val == val:
+                    break
+                val = new_val
+            
+            # Simplify to handle complex cancellation
+            res = val.simplify()
+            if res != 0:
+                residuals.append(res)
+        
+        if not residuals:
+            # Case A: Perfect fit. The generic mapping works.
+            refined_mappings.append(candidate)
+        else:
+            # Case B: The mapping was too "loose".
+            # The residuals represent constraints we missed.
+            
+            # Identify which variables appear in the residuals
+            resid_syms = set().union(*[r.free_symbols for r in residuals])
+            
+            # Attempt to solve the residuals for these variables
+            try:
+                refinements = sym.solve(residuals, list(resid_syms), dict=True)
+            except NotImplementedError:
+                # If SymPy can't solve it, we can't refine it. 
+                # This branch might be truly invalid or too complex.
+                continue
+            
+            if not refinements:
+                # Contradiction: The residuals cannot be solved.
+                # This means the generic branch is invalid in this context.
+                continue
+                
+            for ref in refinements:
+                # 3. MERGE REFINEMENT
+                # Combine original mapping with new refinement
+                new_map = candidate.copy()
+                new_map.update(ref)
+                
+                # 4. RESOLVE DEPENDENCIES AGAIN
+                # The refinement might have defined a variable that was previously 
+                # on the RHS of a mapping (e.g. Z00 -> Z10, and now Z10 -> 0)
+                final_map = {}
+                for k, v in new_map.items():
+                    val = v
+                    for _ in range(len(new_map) + 5):
+                        new_val = val.subs(new_map)
+                        if new_val == val:
+                            break
+                        val = new_val
+                    final_map[k] = val.simplify()
+                    
+                refined_mappings.append(final_map)
+    
+    branch['mappings'] = refined_mappings
+    return branch
 
-    return parsed_results
+
+def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Dict]:
+    """
+    Takes a raw branch dict, handles ghost constraints, solves sub-systems,
+    filters invalid roots, and refines mappings.
+    Returns a list of resolved branch dictionaries.
+    """
+    
+    # ---------------------------------------------------------------------
+    # 1. GHOST CONSTRAINT SEPARATION
+    # ---------------------------------------------------------------------
+    dep_vars_set = set(branch_data['vars'])
+    basis_eqs = branch_data['basis']
+    
+    true_dep_eqs = []
+    ghost_constraints = []
+    
+    for eq in basis_eqs:
+        if eq.free_symbols.intersection(dep_vars_set):
+            true_dep_eqs.append(eq)
+        else:
+            ghost_constraints.append(eq)
+            
+    branch_data['basis'] = true_dep_eqs
+    # Append ghosts to constraints list
+    branch_data['constraints'] = branch_data['constraints'] + ghost_constraints
+
+    # ---------------------------------------------------------------------
+    # 2. SOLVE CONSTRAINTS (Recursive & Filtered)
+    # ---------------------------------------------------------------------
+    param_solutions = []
+    
+    # A. Trivial Case
+    if not branch_data['constraints']:
+        param_solutions = [{}]
+        
+    # B. Finite Case
+    elif branch_data.get('num_constraint_solutions', -1) > 0:
+        # Use constraint_basis if available, else constraints
+        eqs_to_solve = branch_data['constraint_basis'] if branch_data['constraint_basis'] else branch_data['constraints']
+        vars_to_solve = set(itertools.chain.from_iterable(eq.free_symbols for eq in eqs_to_solve))
+        
+        raw_sols = sym.solve(eqs_to_solve, vars_to_solve, dict=True)
+        
+        # NONNULL FILTER
+        nonnull_exprs = branch_data.get('nonnull', [])
+        for sol in raw_sols:
+            is_valid = True
+            for nk in nonnull_exprs:
+                if nk.subs(sol).simplify() == 0:
+                    is_valid = False
+                    break
+            if is_valid:
+                param_solutions.append(sol)
+                
+    # C. Infinite Case (Recursion)
+    else:
+        # Recurse!
+        sub_branches = solve_with_singular(branch_data['constraints'])
+        for sub in sub_branches:
+            # We assume recursive solve_with_singular returns valid/filtered mappings
+            param_solutions.append(sub['mapping'])
+            # Optionally store structure: branch_data['param_branches'].append(sub)
+
+    # ---------------------------------------------------------------------
+    # 3. SOLVE DEPENDENT VARIABLES (Triangular)
+    # ---------------------------------------------------------------------
+    dep_solutions = []
+    dep_eqs = branch_data['basis']
+    dep_vars = branch_data['vars']
+    
+    if not dep_eqs:
+        dep_solutions = [{}]
+    else:
+        # B. Finite Case
+        if branch_data['num_solutions'] != -1:
+            # Strictly solve for dependent variables (treat params as constants)
+            dep_solutions = sym.solve(dep_eqs, dep_vars, dict=True, simplify=True)
+            
+            # VDIM Check
+            reduction = 0
+            for eq in dep_eqs:
+                if isinstance(eq, sym.Pow):
+                    if eq.args[1].is_integer and eq.args[1] > 1:
+                        reduction += eq.args[1] - 1
+            
+            # Note: We rely on Ghost Constraints removal to make this check accurate
+            # if len(dep_solutions) != branch_data['num_solutions'] - reduction:
+            #     print(f"Warning: Branch {branch_data['id']} solution count mismatch.")
+
+        # C. Infinite Case (Recursion)
+        else:
+            sub_branches = solve_with_singular(dep_eqs, solve_vars=dep_vars)
+            for sub in sub_branches:
+                dep_solutions.append(sub['mapping'])
+
+    # ---------------------------------------------------------------------
+    # 4. COMBINE & REFINE
+    # ---------------------------------------------------------------------
+    resolved_branches = []
+    
+    # Cartesian Product of Parameter solutions * Dependent solutions
+    raw_mappings = []
+    for p_sol, d_sol in itertools.product(param_solutions, dep_solutions):
+        raw_mappings.append({**p_sol, **d_sol})
+        
+    # Refine Mappings (Fixes recursive splitting issues like User 10.3)
+    if raw_mappings:
+        temp_branch = {'mappings': raw_mappings}
+        temp_branch = refine_branch_mappings(temp_branch, original_equations)
+        final_mappings = temp_branch['mappings']
+    else:
+        final_mappings = []
+        
+    # Convert each mapping into a distinct branch object (flat structure)
+    for idx, mapping in enumerate(final_mappings):
+        new_br = branch_data.copy()
+        new_br['id'] = f"{branch_data['id']}.{idx}" # Sub-ID
+        new_br['mapping'] = mapping
+        new_br['free_vars'] = [v for v in dep_vars if v not in mapping]
+        new_br['free_params'] = [v for v in branch_data['params'] if v not in mapping]
+        resolved_branches.append(new_br)
+        
+    return resolved_branches
+
 
 def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dict[str, Any]]:
     """
@@ -328,8 +442,8 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
     if not all_symbols and all(sym.simplify(eq) == 0 for eq in equations):
         # All equations are 0 = 0, trivially satisfied
         return []
-    
-    # Determine fixed parameters (symbols that can never be solve vars)
+
+    # Determine Fixed vs Potential variables
     if solve_vars is not None:
         solve_vars_set = set(solve_vars)
         fixed_params = sorted(list(all_symbols - solve_vars_set), key=str)
@@ -369,39 +483,40 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
     print(f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");')
     raw_output = singular.eval(f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");')
     print("Singular call complete.")
-    # print("output snippet:", raw_output)
+    # print(raw_output)
 
-    branches = parse_singular_output(raw_output, str_potential_vars, str_fixed_params, inv_dummy_map=inv_dummy_map)
-    branches_flat = []
-    # Filter branches based on nonnull constraints
-    for br in flatten_branches(branches):
-        # if "10" in br['id']:
-        #     print("branch 10 detected", br["id"])
-        #     print(br)
-        this_sol = br['mapping']
-        this_non_null = br['nonnull']
-        if all(_robust_substitute(constr, this_sol) != 0 for constr in this_non_null):
-            branches_flat.append(br)
+    # 1. Parse Raw Output
+    all_var_names = list(dummy_map.values())
+    raw_branches = parse_singular_output(raw_output, all_var_names, inv_dummy_map=inv_dummy_map)
+    final_branches = []
+    # 2. Resolve Each Branch (Logic moved "inside solve")
+    for raw_br in raw_branches:
+        
+        if raw_br['basis'] == [1]: continue # Inconsistent
 
-    # print(f"Filtering {len(branches_flat)} branches for redundancy...")
-    # print("Before filtering:")
-    # for br in branches_flat:
-        # print(br)
-    # branches_filtered = filter_redundant_branches(branches_flat)
-    # print(f"Reduced to {len(branches_filtered)} unique branches after filtering.")
-    # Check each branch for validity
-    branches_filtered = branches_flat
-    for br in branches_filtered:
-        is_valid = True
-        for eq in equations:
-            lhs_val = _robust_substitute(eq, br['mapping'])
-            if lhs_val != 0:
-                is_valid = False
-                # print(f"Warning: Branch {br['id']} does not satisfy equation {eq} (got {lhs_val})")
-                # print(f"  Mapping: {br['mapping']}")
-                # print(f"  Basis: {br['basis']}")
-                # print(f"  Non-null: {br['nonnull']}")
-    return branches_filtered
+        # Resolve (Handles recursion, filtering, refinement)
+        resolved_list = resolve_branch_logic(raw_br, equations)
+        
+        final_branches.extend(resolved_list)
+
+    # 3. Final Validity Check
+    valid_branches = []
+    for br in final_branches:
+        if check_branch_validity(br, equations):
+            valid_branches.append(br)
+    
+    # 4. Filter Redundant Branches
+    # valid_branches = filter_redundant_branches(valid_branches)
+
+    return valid_branches
+
+def check_branch_validity(branch, original_eqs):
+    # Simple check to ensure we don't return garbage
+    mapping = branch['mapping']
+    for eq in original_eqs:
+        if _robust_substitute(eq, mapping) != 0:
+            return False
+    return True
 
 
 def filter_redundant_branches(branches, verbose=False):

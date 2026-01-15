@@ -14,7 +14,7 @@ from sympy import symbols, sympify
 
 
 from sircuitenum.singular_interface import solve_with_singular, parse_singular_output, filter_redundant_branches
-from sircuitenum.singular_interface import extract_mappings, flatten_branches
+from sircuitenum.singular_interface import extract_mappings, flatten_branches, _robust_substitute
 
 
 import json
@@ -157,29 +157,102 @@ def compare_results(original_eqs, user_branches, math_branches, verbose=True):
     2. COVERAGE: Every Math branch is contained within a User branch.
     """
     
-    # --- Helper: Check if Child fits in Parent ---
     def is_subset(child, parent, strict_constraints=True):
+        """
+        Checks if 'child' is a mathematical subset of 'parent'.
+        Returns True if Parent contains Child.
+        """
+        # 1. BUILD & SANITIZE CHILD DEFINITION
         child_map = child['mapping'].copy() if child['mapping'] else {}
-        for eq in child.get('basis', []):
-            if isinstance(eq, sym.Symbol): child_map[eq] = 0
-                
-        # Check Parent Equations
-        for eq in parent.get('basis', []):
-            if eq.subs(child_map).simplify() != 0: return False
+        raw_basis = child.get('basis', [])
+        
+        # Sanitize Child Basis (Clear denominators)
+        child_basis = []
+        for b in raw_basis:
+            num, den = b.as_numer_denom()
+            child_basis.append(num)
 
-        # Check Parent Mappings
+        # 2. DEFINE PARENT EQUATIONS
+        parent_eqs = parent.get('basis', []).copy()
         if parent['mapping']:
             for lhs, rhs in parent['mapping'].items():
-                val_lhs = lhs.subs(child_map)
-                val_rhs = rhs.subs(child_map)
-                if (val_lhs - val_rhs).simplify() != 0: return False
+                parent_eqs.append(lhs - rhs)
 
-        # Check Constraints
+        # 3. VERIFY PARENT EQUATIONS
+        for eq in parent_eqs:
+            # A. Deep Substitute Child's Mapping
+            val = eq
+            for _ in range(len(child_map) + 2):
+                new_val = val.subs(child_map)
+                if new_val == val: break
+                val = new_val
+            
+            val = val.simplify()
+            
+            if val == 0:
+                continue
+
+            # B. Prepare for Ideal Membership Check
+            numer, denom = val.as_numer_denom()
+            
+            # --- NEW: GENERATOR DISCOVERY ---
+            # 1. Start with atomic symbols (Z10, Z20...)
+            syms_in_expr = numer.free_symbols.union(denom.free_symbols)
+            syms_in_basis = set().union(*[b.free_symbols for b in child_basis])
+            base_gens = syms_in_expr.union(syms_in_basis)
+
+            # 2. Scan for Non-Polynomial Terms (Radicals / Fractional Powers)
+            #    We must treat sqrt(x) as a unique generator 'G'
+            radicals = set()
+            
+            # Helper to scan a single expression for radicals
+            def collect_radicals(expr):
+                # atoms(Pow) catches x**0.5, x**-2, etc.
+                for term in expr.atoms(sym.Pow):
+                    # If exponent is not an integer (e.g. 0.5, 1/2), it's a radical
+                    if not term.exp.is_integer:
+                        radicals.add(term)
+            
+            collect_radicals(numer)
+            collect_radicals(denom)
+            for b in child_basis:
+                collect_radicals(b)
+                
+            # 3. Combine All Generators
+            all_gens = sorted(list(base_gens.union(radicals)), key=str)
+            
+            # --------------------------------
+
+            # If constants remain (no variables), simple zero check
+            if not all_gens:
+                if val != 0: return False
+                continue
+
+            # C. Denominator Safety Check
+            if denom != 1:
+                # reduced returns (quotients_list, remainder)
+                qs_d, r_d = sym.reduced(denom, child_basis, *all_gens)
+                
+                if r_d == 0:
+                    # The Child forces the denominator to zero (Singularity)
+                    return False
+
+            # D. Numerator Ideal Check
+            qs, r = sym.reduced(numer, child_basis, *all_gens)
+            
+            if r != 0:
+                return False
+
+        # 4. CHECK NONNULL CONSTRAINTS
         if strict_constraints:
             for constr in parent.get('nonnull', []):
                 if constr == 1 or constr == True: continue
-                if constr.subs(child_map).simplify() == 0:
+                
+                val = constr.subs(child_map).simplify()
+                
+                if val == 0:
                     return False
+                
         return True
 
     # --- Helper: Check if Branch satisfies Original Eqs ---
@@ -407,7 +480,6 @@ class TestSingularSolver():
         # Expectation: 
         # Branch 1: Generic (x = b/a)
         # Branch 2: Singular (a=0, b=0, x=Free)
-        print(branches)
         assert len(branches) == 2
         # "Should find at least 2 branches (Generic + Singular)"
         
@@ -541,7 +613,7 @@ class TestSingularSolver():
         """
         Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02')
         sys_vars =  Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02
-        math_branches = load_mathematica_benchmark("test01.json", system_vars=sys_vars)
+        math_branches = parse_mathematica_reduce_json("test01.json", sys_vars=sys_vars)
         
         eq_set = [Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21,
                     Z00*Z22*(Z12 - Z22) + 2*Z12**2*Z20 - 2*Z12*Z20*Z22 + 2*Z20*Z22**2,
@@ -557,7 +629,7 @@ class TestSingularSolver():
         
         """
         Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02')
-        sys_vars =  Z10, Z11, Z12, Z22, Z21, Z00, Z20
+        sys_vars =  Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02
         math_branches = parse_mathematica_reduce_json("test02.json", sys_vars=sys_vars)
         
         eq_set = [Z00*Z12 - Z10*Z12 - Z20*Z22,
@@ -565,9 +637,6 @@ class TestSingularSolver():
                     Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21]
         branches = solve_with_singular(eq_set)
         success = compare_results(eq_set, branches, math_branches, verbose=True)
-        # for b in branches:
-            # print(b)
-            # print(",")
 
         assert success, "Solver results do not match Mathematica benchmark."
 
@@ -782,13 +851,13 @@ if __name__ == "__main__":
     # test_solver.test_parse()
     # test_solver.test_parse_no_star()
     test_solver = TestSingularSolver()
-    test_solver.test_01_parametric_singularity()
-    test_solver.test_02_reducible_geometry()
-    test_solver.test_03_inconsistent_system()
-    test_solver.test_04_mixed_dimension()
-    test_solver.test_05_cyclic_3()
-    test_solver.test_06_algebraic_number()
-    # test_solver.test_07_vs_mathematica_1()
+    # test_solver.test_01_parametric_singularity()
+    # test_solver.test_02_reducible_geometry()
+    # test_solver.test_03_inconsistent_system()
+    # test_solver.test_04_mixed_dimension()
+    # test_solver.test_05_cyclic_3()
+    # test_solver.test_06_algebraic_number()
+    test_solver.test_07_vs_mathematica_1()
     test_solver.test_08_vs_mathematica_2()
     # test_filter = TestRedundantBranchFilter()
     # test_filter.test_simple_subset_removal()
