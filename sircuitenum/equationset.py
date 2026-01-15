@@ -703,7 +703,7 @@ def _cached_solve(all_eq: EquationSet, return_all_branches: bool = False):
 
     # Solve equations
     branches = solve_with_singular(eq_set_numer.as_expr_list(), solve_vars)
-    sols = extract_mappings(branches, real_only=False)
+    sols = extract_mappings(branches, real_only=True)
 
 
     # Filter out solutions with zero denominators

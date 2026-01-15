@@ -49,11 +49,45 @@ def fix_powers(text, var_names):
             new_text += this_char
             i += 1
     return new_text
-    
+
+
+def clean_singular_string(raw_output):
+    """
+    Removes Singular list markers ([1]:) and comments (//)
+    so the output looks exactly like the old string format.
+    """
+    lines = raw_output.splitlines()
+    clean_lines = []
+    # Regex to match "[123]: " at the start of a line
+    marker_re = re.compile(r'^\s*\[\d+\]:\s*')
+    for line in lines:
+        # 1. Drop warning/comment lines
+        if line.strip().startswith("//"):
+            continue
+        # 2. Remove the "[N]:" marker, keeping the rest of the line
+        # e.g. "[1]:   |||START|||"  -->  "|||START|||"
+        # e.g. "[9]:   (a)"          -->  "(a)"
+        cleaned = marker_re.sub('', line)
+        # 3. Keep non-empty lines
+        if cleaned.strip():
+            clean_lines.append(cleaned)
+    # Join back into the single block of text your parser expects
+    return "\n".join(clean_lines)
+
+
+def _robust_substitute(expr, subs_dict):
+    val = sym.simplify(expr)
+    while any(val.has(var) for var in subs_dict.keys()):
+        for var, sub_val in subs_dict.items():
+            val = sym.simplify(val.subs(var, sub_val))
+    return val
 
 def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol], list[str], str],
                           fixed_params: Union[list[sym.Symbol], list[str], str] = [],
                           inv_dummy_map: dict[str, sym.Symbol] = {}) -> List[Dict[str, Any]]:
+
+    if "[1]:" in raw_output:
+        raw_output = clean_singular_string(raw_output)
 
     # Parse Output
     if "|||START|||" not in raw_output:
@@ -152,23 +186,44 @@ def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol
             # Inconsistent branch, skip
             continue
 
+        # Separate any ghost constraints that
+        # snuck into basis
+        dep_vars = set(branch_data['vars'])
+        basis_eqs = branch_data['basis']
+        
+        true_dep_eqs = []
+        ghost_constraints = []
+        
+        for eq in basis_eqs:
+            # If equation contains ANY dependent variable, it's a variable definition
+            if eq.free_symbols.intersection(dep_vars):
+                true_dep_eqs.append(eq)
+            else:
+                # Otherwise, it's a constraint on parameters that leaked into the basis
+                ghost_constraints.append(eq)
+        # Update branch data
+        branch_data['basis'] = true_dep_eqs
+        branch_data['constraints'] += ghost_constraints
+
+
         # No constraints
+        raw_param_solutions = []
         if branch_data["constraints"] == []:
-            param_solutions = [{}]
+            raw_param_solutions += [{}]
         # Zero-dimensional parameter constraints (-1 means infinite)
         # Exact number of solutions known
         elif branch_data.get('num_constraint_solutions', -1) > 0:
             param_eqs = branch_data['constraint_basis']
             param_vars = set(itertools.chain.from_iterable(eq.free_symbols for eq in param_eqs))
-            param_solutions = sym.solve(param_eqs, param_vars, dict=True)
-            if len(param_solutions) != branch_data['num_constraint_solutions']:
-                raise ValueError(f"Expected {branch_data['num_constraint_solutions']} sols for branch {branch_data['id']}, got {len(param_solutions)}")
+            raw_param_solutions = sym.solve(param_eqs, param_vars, dict=True)
+            if len(raw_param_solutions) != branch_data['num_constraint_solutions']:
+                raise ValueError(f"Expected {branch_data['num_constraint_solutions']} sols for branch {branch_data['id']}, got {len(raw_param_solutions)}")
         # Infinite solutions, find parameterized solutions
         else:
-            param_solutions = []
             param_branches = []
             for param_branch in solve_with_singular(branch_data["constraints"]):
-                param_solutions += [param_branch['mapping']]
+                this_sol = param_branch["mapping"]
+                raw_param_solutions += [this_sol]
                 param_branches.append(param_branch)
             branch_data['param_branches'] = param_branches
 
@@ -177,18 +232,17 @@ def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol
         param_vars = branch_data['params']
         dep_eqs = branch_data['basis']
         if branch_data["basis"]:
-            dep_vars_in_basis = [v for v in dep_vars if any(eq.has(v) for eq in dep_eqs)]
-            solutions = sym.solve(dep_eqs, dep_vars_in_basis, dict=True, simplify=True)
             if branch_data['num_solutions'] == -1:
                 dep_solutions = []
                 dep_branches = []
-                for dep_branch in solve_with_singular(dep_eqs, solve_vars=dep_vars_in_basis):
+                for dep_branch in solve_with_singular(dep_eqs):
                     solutions += [dep_branch['mapping']]
                     dep_branches.append(dep_branch)
                 branch_data['dep_branches'] = dep_branches
             else:
                 # Take multiplicity of zero roots into account
                 # for equations like x^3 = 0, count as 3 solutions
+                solutions = sym.solve(dep_eqs, dep_vars, dict=True, simplify=True)
                 reduction = 0
                 for eq in dep_eqs:
                     if isinstance(eq, sym.Pow):
@@ -206,7 +260,8 @@ def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol
         branch_data["free_vars"] = []
         branch_data["free_params"] = []
         for sol_dict, param_sol_dict in itertools.product(solutions, param_solutions):
-            branch_data['mappings'].append({**sol_dict, **param_sol_dict})
+            this_sol = {**sol_dict, **param_sol_dict}
+            branch_data['mappings'].append(this_sol)
             branch_data["free_vars"].append([v for v in dep_vars if v not in branch_data['mappings'][-1]])
             branch_data["free_params"].append([v for v in param_vars if v not in branch_data['mappings'][-1]])
         
@@ -215,7 +270,7 @@ def parse_singular_output(raw_output: str, potential_vars: Union[list[sym.Symbol
     # renumber branch IDs to be sequential
     for idx, br in enumerate(parsed_results):
         br['id'] = idx + 1
-    
+
     return parsed_results
 
 def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dict[str, Any]]:
@@ -305,7 +360,7 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
     # Build input strings for the Singular proc (no spaces)
     str_fixed_params = ",".join(dummy_map[str(p)] for p in fixed_params)
     str_potential_vars = ",".join(dummy_map[str(v)] for v in potential_vars)
-    str_eqs = ",".join(str(eq).replace("**", "^") for eq in equations)
+    str_eqs = ",".join(str(sym.nsimplify(eq)).replace("**", "^") for eq in equations)
     for orig, dummy in dummy_map.items():
         str_eqs = str_eqs.replace(orig, dummy)
 
@@ -317,8 +372,35 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
     # print("output snippet:", raw_output)
 
     branches = parse_singular_output(raw_output, str_potential_vars, str_fixed_params, inv_dummy_map=inv_dummy_map)
-    branches_flat = flatten_branches(branches)
-    branches_filtered = filter_redundant_branches(branches_flat)
+    branches_flat = []
+    # Filter branches based on nonnull constraints
+    for br in flatten_branches(branches):
+        # if "10" in br['id']:
+        #     print("branch 10 detected", br["id"])
+        #     print(br)
+        this_sol = br['mapping']
+        this_non_null = br['nonnull']
+        if all(_robust_substitute(constr, this_sol) != 0 for constr in this_non_null):
+            branches_flat.append(br)
+
+    # print(f"Filtering {len(branches_flat)} branches for redundancy...")
+    # print("Before filtering:")
+    # for br in branches_flat:
+        # print(br)
+    # branches_filtered = filter_redundant_branches(branches_flat)
+    # print(f"Reduced to {len(branches_filtered)} unique branches after filtering.")
+    # Check each branch for validity
+    branches_filtered = branches_flat
+    for br in branches_filtered:
+        is_valid = True
+        for eq in equations:
+            lhs_val = _robust_substitute(eq, br['mapping'])
+            if lhs_val != 0:
+                is_valid = False
+                # print(f"Warning: Branch {br['id']} does not satisfy equation {eq} (got {lhs_val})")
+                # print(f"  Mapping: {br['mapping']}")
+                # print(f"  Basis: {br['basis']}")
+                # print(f"  Non-null: {br['nonnull']}")
     return branches_filtered
 
 
@@ -403,9 +485,12 @@ def flatten_branches(branches):
     flat_list = []
     
     for b in branches:
-        # If no mappings, it's just a basis constraint (keep as is)
-        if not b.get('mappings'):
-            flat_list.append(b)
+        # If no mappings, may be just a basis constraint (keep as is)
+        if not b.get('mappings') and not b.get('basis'):
+            new_b = b.copy()
+            new_b['mapping'] = {}
+            del new_b['mappings']
+            flat_list.append(new_b)
             continue
             
         # Explode mappings
@@ -419,6 +504,8 @@ def flatten_branches(branches):
                 new_b["free_vars"] = b["free_vars"][i]
             if "free_params" in b:
                 new_b["free_params"] = b["free_params"][i]
+            # if "dep_branches" in b:
+            #     new_b["dep_branches"] = b["dep_branches"][i]
             del new_b['mappings']
             
             #  Update ID to track lineage

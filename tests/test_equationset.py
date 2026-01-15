@@ -229,83 +229,56 @@ def test_cached_solve():
               sym.Eq(Z10*Z22*(Z12 - Z22) + Z12**2*Z20 - Z12*Z20*Z22 + 2*Z20*Z22**2, 0),
               sym.Eq(Z11*(2*Z12 - Z22) - Z12*Z21 + 2*Z21*Z22, 0)]
     
-    # TODO: debug (Z12, Z21, Z00, Z20) case
-    # shouldn't generate the 0,0 solution
-    # combo = (Z12, Z21, Z00, Z20)
-    # sols = eqs.cached_solve(eq_set, combo)
-    # res = []
-    # for s in sols:
-    #     res += [sym.simplify(eq.lhs.subs(s)) for eq in eq_set]
-    # breakpoint()
-
+    # Should have 10 real solutions
     sols, branches = eqs.cached_solve(eq_set, return_all_branches=True)
-    breakpoint()
-
-    # Test all combinations of 4 variables to make sure caching works correctly for subsets of variables
-    v_in_eq = [v for v in solve_vars if any(v in eq.free_symbols for eq in eq_set)]
-    import itertools
-    new_sols = []
-    new_sols2 = []
-    for combos in itertools.combinations(v_in_eq, 4):
-        print("Testing combos:", combos)
-        sol_subset1 = eqs.cached_solve(eq_set, combos)
-        sol_subset2 = eqs.unique_solutions(eqs._sols_set_to_dict(sym.simplify(sym.nonlinsolve(eq_set, combos)), combos))
-        # assert len(sol_subset1) >= len(sol_subset2)
-        print("  Cached sols:", len(sol_subset1), "Sympy sols:", len(sol_subset2))
-        print("  Cached sols:", sol_subset1)
-        print("  Sympy sols:", sol_subset2)
-        new_sols += sol_subset1
-        # new_sols2 += sol_subset2
-
-    new_sols = eqs.unique_solutions(new_sols)
-    breakpoint()
+    assert len(sols) == 10
 
     # Test from variable transformation equations
-    # eq_set = [sym.Eq(Z00, Z10 - Z11*Z20/Z21), sym.Eq(Z00, Z10), sym.Eq(Z11, Z21), sym.Eq(Z20, 0)]
-    # eq_set2 = [eq.subs({Z20:0}) for eq in eq_set[:-1]]  # remove last eq since we substitute it in
-    # sol_sympy = eqs._sols_set_to_dict(sym.nonlinsolve(eq_set, solve_vars), solve_vars)
-    # sol_cached = eqs.cached_solve(eq_set, solve_vars)
-    # assert len(sol_cached) == len(sol_sympy)
-    # assert len(sol_cached) == 1
-    # assert eqs.EquationSet.from_any(sol_cached[0]) == eqs.EquationSet.from_any(sol_sympy[0])
+    eq_set = [sym.Eq(Z00, Z10 - Z11*Z20/Z21), sym.Eq(Z00, Z10), sym.Eq(Z11, Z21), sym.Eq(Z20, 0)]
+    eq_set2 = [eq.subs({Z20:0}) for eq in eq_set[:-1]]  # remove last eq since we substitute it in
+    sol_sympy = eqs._sols_set_to_dict(sym.nonlinsolve(eq_set, solve_vars), solve_vars)
+    sol_cached = eqs.cached_solve(eq_set, solve_vars)
+    assert len(sol_cached) == len(sol_sympy)
+    assert len(sol_cached) == 1
+    assert eqs.EquationSet.from_any(sol_cached[0]) == eqs.EquationSet.from_any(sol_sympy[0])
 
 
     # basic functionality test
-    # Z10, Z01, Z11, Z12, Z22, Z21 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21')
-    # eq_set = eqs.EquationSet.from_any((sym.Eq(Z12, 0), sym.Eq(Z22, 0)))
-    # sols = eqs.cached_solve(eq_set, solve_vars)
-    # assert sols == [{Z12: 0, Z22: 0}]
+    Z10, Z01, Z11, Z12, Z22, Z21 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21')
+    eq_set = eqs.EquationSet.from_any((sym.Eq(Z12, 0), sym.Eq(Z22, 0)))
+    sols = eqs.cached_solve(eq_set, solve_vars)
+    assert sols == [{Z12: 0, Z22: 0}]
 
-    # eq_set = [sym.Eq(Z00*Z12 - Z10*Z12 - Z20*Z22, 0), 
-    #             sym.Eq(Z11*Z12 + Z21*Z22, 0), 
-    #             sym.Eq(Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21, 0)]
-    # eq_set = [eq.lhs for eq in eq_set]
-    # sols = eqs.cached_solve(eq_set)
-    # assert len(sols) == 12
+    eq_set = [sym.Eq(Z00*Z12 - Z10*Z12 - Z20*Z22, 0), 
+                sym.Eq(Z11*Z12 + Z21*Z22, 0), 
+                sym.Eq(Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21, 0)]
+    eq_set = [eq.lhs for eq in eq_set]
+    sols = eqs.cached_solve(eq_set)
+    assert len(sols) == 9
 
 
 
     # speed and accuracy test
-    # eps = 1e-06
-    # for _ in range(10):
-    #     x, y, z = sym.symbols("x,y,z")
-    #     eq1 = x + 2*y + 3*z - 6*np.random.random()
-    #     eq2 = 2*x + 3*y + z - 5*np.random.random()
-    #     eq3 = x - y + z - 2*np.random.random()
-    #     eqs_list = [eq1, eq2, eq3]
-    #     vars_list = [x, y, z]
-    #     sol_good = sym.solve(eqs_list, vars_list, dict=True, simplify=True)[0]
-    #     t0 = time.time()
-    #     sol1 = eqs.cached_solve(eqs_list, vars_list)[0]
-    #     t1 = time.time()
-    #     sol2 = eqs.cached_solve(eqs_list, vars_list)[0]
-    #     t2 = time.time()
-    #     assert t1 - t0 > t2 - t1
-    #     for v in vars_list:
-    #         assert abs(sol1[v] - sol_good[v]) < eps
-    #         assert abs(sol2[v] - sol_good[v]) < eps
+    eps = 1e-06
+    for _ in range(10):
+        x, y, z = sym.symbols("x,y,z")
+        eq1 = x + 2*y + 3*z - 6*np.random.random()
+        eq2 = 2*x + 3*y + z - 5*np.random.random()
+        eq3 = x - y + z - 2*np.random.random()
+        eqs_list = [eq1, eq2, eq3]
+        vars_list = [x, y, z]
+        sol_good = sym.solve(eqs_list, vars_list, dict=True, simplify=True)[0]
+        t0 = time.time()
+        sol1 = eqs.cached_solve(eqs_list, vars_list)[0]
+        t1 = time.time()
+        sol2 = eqs.cached_solve(eqs_list, vars_list)[0]
+        t2 = time.time()
+        assert t1 - t0 > t2 - t1
+        for v in vars_list:
+            assert abs(sol1[v] - sol_good[v]) < eps
+            assert abs(sol2[v] - sol_good[v]) < eps
     
-    # identify different branches
+    # # identify different branches
     a,b,c = sym.symbols("a b c")
     eq = sym.Eq(0, - a*b - a*c - b)
     sols = eqs.cached_solve([eq], [a, b, c])

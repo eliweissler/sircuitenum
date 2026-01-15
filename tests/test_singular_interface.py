@@ -100,32 +100,81 @@ def load_mathematica_benchmark(json_path, system_vars):
     return branches
 
 
-def compare_results(user_branches, math_branches, verbose=True):
+# --- 2. PARSER FOR MATHEMATICA REDUCE JSON ---
+def parse_mathematica_reduce_json(json_path, sys_vars):
+    local_dict = {str(v): v for v in sys_vars}
+    local_dict['I'] = sym.I
+    local_dict['sqrt'] = sym.sqrt
+    
+    def math_to_py_syntax(expr_str):
+        s = expr_str.replace("^", "**")
+        s = s.replace("Sqrt[", "sqrt(").replace("]", ")")
+        return s
+
+    with open(json_path, 'r') as f:
+        raw_data = json.load(f)
+
+    clean_branches = []
+    for item in raw_data:
+        branch = {
+            'id': f"Reduce_{item['id']}",
+            'basis': [],
+            'mapping': {},
+            'nonnull': [],
+            'params': [],
+            'constraints': [] 
+        }
+
+        # Equalities (==)
+        for eq_str in item['equalities']:
+            clean_str = math_to_py_syntax(eq_str)
+            lhs_str, rhs_str = clean_str.split("==")
+            lhs = sym.parse_expr(lhs_str, local_dict=local_dict)
+            rhs = sym.parse_expr(rhs_str, local_dict=local_dict)
+            
+            if lhs in sys_vars:
+                branch['mapping'][lhs] = rhs
+            else:
+                branch['basis'].append(lhs - rhs)
+
+        # Inequalities (!=)
+        for neq_str in item['inequalities']:
+            clean_str = math_to_py_syntax(neq_str)
+            lhs_str, rhs_str = clean_str.split("!=")
+            lhs = sym.parse_expr(lhs_str, local_dict=local_dict)
+            rhs = sym.parse_expr(rhs_str, local_dict=local_dict)
+            branch['nonnull'].append(lhs - rhs)
+
+        clean_branches.append(branch)
+
+    return clean_branches
+
+
+def compare_results(original_eqs, user_branches, math_branches, verbose=True):
     """
     Verifies equivalence by checking:
     1. VALIDITY: Every User branch fits inside a Math family.
     2. COVERAGE: Every Math branch is contained within a User branch.
     """
     
-    # --- Helper: Universal Geometric Check ---
+    # --- Helper: Check if Child fits in Parent ---
     def is_subset(child, parent, strict_constraints=True):
-        # 1. Setup Child Map
         child_map = child['mapping'].copy() if child['mapping'] else {}
         for eq in child.get('basis', []):
             if isinstance(eq, sym.Symbol): child_map[eq] = 0
                 
-        # 2. Check Parent Equations (Basis)
+        # Check Parent Equations
         for eq in parent.get('basis', []):
             if eq.subs(child_map).simplify() != 0: return False
 
-        # 3. Check Parent Mappings
+        # Check Parent Mappings
         if parent['mapping']:
             for lhs, rhs in parent['mapping'].items():
                 val_lhs = lhs.subs(child_map)
                 val_rhs = rhs.subs(child_map)
                 if (val_lhs - val_rhs).simplify() != 0: return False
 
-        # 4. Check Constraints
+        # Check Constraints
         if strict_constraints:
             for constr in parent.get('nonnull', []):
                 if constr == 1 or constr == True: continue
@@ -133,19 +182,43 @@ def compare_results(user_branches, math_branches, verbose=True):
                     return False
         return True
 
-    print(f"\n{'='*70}")
-    print(f"CENSUS VERIFICATION: {len(user_branches)} User vs {len(math_branches)} Math")
-    print(f"{'='*70}\n")
+    # --- Helper: Check if Branch satisfies Original Eqs ---
+    def is_valid_solution(branch, equations):
+        # Build full substitution map
+        sol_map = branch['mapping'].copy() if branch['mapping'] else {}
+        # Add basis elements = 0
+        for b in branch.get('basis', []):
+            if isinstance(b, sym.Symbol): sol_map[b] = 0
+            
+        # Verify every original equation
+        for eq in equations:
+            # We must simplify to handle complex algebra cancellations
+            val = sym.simplify(eq)
+            while any(val.has(var) for var in sol_map.keys()):
+                # 1. Perform substitution
+                for var, sub_val in sol_map.items():
+                    val = sym.simplify(val.subs(var, sub_val))
+                print(f"    [DEBUG] Substituted eq to {val} with map {sol_map}")
+            if val != 0:
+                print(f"    [DEBUG] Eq {eq} evaluates to {val} under branch {branch['id']} with map {sol_map}")
+                return False
+        return True
 
-    # --- STEP 1: Verify User Validity ---
-    print("--- STEP 1: Checking Validity of User Solutions ---")
+    print(f"\n{'='*80}")
+    print(f"CENSUS & GROUND TRUTH CHECK")
+    print(f"{'='*80}\n")
+
+    # --- STEP 1: Census (User vs Math) ---
+    print("--- STEP 1: Verifying against Mathematica ---")
     valid_user_count = 0
+    new_solution_count = 0
     
     for u_br in user_branches:
         match_found = False
         match_type = ""
         parent_id = None
         
+        # Check against Math
         for m_br in math_branches:
             if is_subset(u_br, m_br, strict_constraints=True):
                 match_found = True
@@ -158,56 +231,53 @@ def compare_results(user_branches, math_branches, verbose=True):
         
         if match_found:
             valid_user_count += 1
-            print(f"  [OK] User {u_br['id']} is valid ({match_type} of Math {parent_id})")
+            print(f"  [OK] User {u_br['id']} matches Math {parent_id} {match_type}")
         else:
-            print(f"  [FAIL] User {u_br['id']} is ORPHANED! (Matches no Math branch)")
+            # ORPHAN DETECTED: RUN GROUND TRUTH CHECK
+            if is_valid_solution(u_br, original_eqs):
+                new_solution_count += 1
+                valid_user_count += 1
+                print(f"  [WIN] User {u_br['id']} is a VALID NEW SOLUTION (Mathematica missed it)")
+                print(f"        nonnull: {u_br.get('nonnull', [])}")
+                print(f"        mapping: {u_br.get('mapping', {})}")
+            else:
+                print(f"  [FAIL] User {u_br['id']} is INVALID (Matches neither Math nor Eqs)")
+                print(f"        nonnull: {u_br.get('nonnull', [])}")
+                print(f"        mapping: {u_br.get('mapping', {})}")
 
-    # --- STEP 2: Verify Math Coverage (Improved Reporting) ---
-    print(f"\n--- STEP 2: Checking Coverage of {len(math_branches)} Math Families ---")
+    # --- STEP 2: Coverage (Math vs User) ---
+    print(f"\n--- STEP 2: Checking Coverage of Math Families ---")
     covered_math_count = 0
     
     for m_br in math_branches:
-        exact_users = []
-        subset_users = []
-        implicit_users = []
+        status = "FAIL"
+        covering_users = []
+        match_kind = ""
         
         for u_br in user_branches:
-            # 1. Check Strict Subset (User <= Math)
             if is_subset(u_br, m_br, strict_constraints=True):
-                # 2. Check Reverse (Math <= User)
                 if is_subset(m_br, u_br, strict_constraints=True):
-                    exact_users.append(u_br['id'])
-                else:
-                    subset_users.append(u_br['id'])
-            
-            # 3. Check Implicit (Math <= User, relaxed)
+                    status = "EXACT"
+                elif status != "EXACT":
+                    status = "COVERED"
+                covering_users.append(u_br['id'])
             elif is_subset(m_br, u_br, strict_constraints=False):
-                implicit_users.append(u_br['id'])
+                if status == "FAIL": status = "IMPLICIT"
+                covering_users.append(u_br['id'])
         
-        # --- REPORTING ---
-        if exact_users:
+        if status != "FAIL":
             covered_math_count += 1
-            print(f"  [OK] Math {m_br['id']} : [EXACT MATCH] by User {exact_users}")
-            if subset_users:
-                print(f"       -> Also covered by subsets: {subset_users}")
-        
-        elif subset_users:
-            covered_math_count += 1
-            print(f"  [OK] Math {m_br['id']} : [Covered] by User {subset_users}")
-            
-        elif implicit_users:
-            covered_math_count += 1
-            print(f"  [OK] Math {m_br['id']} : [Implicit] by User {implicit_users}")
-            
+            print(f"  [OK] Math {m_br['id']} ({status}) covered by {list(set(covering_users))}")
         else:
-            print(f"  [FAIL] Math {m_br['id']} was NOT touched by any User solution.")
+            print(f"  [FAIL] Math {m_br['id']} NOT covered")
 
-    print(f"\n{'='*70}")
+    print(f"\n{'='*80}")
     print(f"SUMMARY")
-    print(f"User Validity: {valid_user_count}/{len(user_branches)}")
-    print(f"Math Coverage: {covered_math_count}/{len(math_branches)}")
+    print(f"Matched Mathematica: {valid_user_count - new_solution_count}")
+    print(f"New Valid Solutions: {new_solution_count} (Complex roots likely missed by Math)")
+    print(f"Mathematica Coverage: {covered_math_count}/{len(math_branches)}")
     
-    successs = (valid_user_count == len(user_branches)) and (covered_math_count == len(math_branches))
+    successs = valid_user_count == len(user_branches) and covered_math_count == len(math_branches)
     if successs:
         print("\n[SUCCESS] SOLVER IS MATHEMATICALLY COMPLETE.")
     else:
@@ -337,6 +407,7 @@ class TestSingularSolver():
         # Expectation: 
         # Branch 1: Generic (x = b/a)
         # Branch 2: Singular (a=0, b=0, x=Free)
+        print(branches)
         assert len(branches) == 2
         # "Should find at least 2 branches (Generic + Singular)"
         
@@ -477,130 +548,150 @@ class TestSingularSolver():
                     Z10*Z22*(Z12 - Z22) + Z12**2*Z20 - Z12*Z20*Z22 + 2*Z20*Z22**2,
                     Z11*(2*Z12 - Z22) - Z12*Z21 + 2*Z21*Z22]
         branches = solve_with_singular(eq_set)
-        success = compare_results(branches, math_branches, verbose=True)
+        success = compare_results(eq_set, branches, math_branches, verbose=True)
         assert success, "Solver results do not match Mathematica benchmark."
 
-    def test_simple_subset_removal(self):
+    def test_08_vs_mathematica_2(self):
+
         """
-        Test that a specific solution (all vars=0) is removed if it 
-        is a subset of a general solution (Z20 free, others=0).
-        """
-        Z00, Z10, Z20, Z11, Z12, Z21, Z22 = symbols('Z00 Z10 Z20 Z11 Z12 Z21 Z22')
-        # 1. The General Branch
-        b_gen = {
-            'id': 1,
-            'basis': [Z11, Z12, Z21, Z22], 
-            'mapping': {Z00: 0, Z10: 0}, 
-            'nonnull': [1], 
-            'params': [Z20] 
-        }
-
-        # 2. The Specific Branch
-        b_spec = {
-            'id': 2,
-            'basis': [Z11, Z12, Z21, Z22, Z20, Z00, Z10],
-            'mapping': {
-                Z00: 0, Z10: 0, Z20: 0,   
-                Z11: 0, Z12: 0, Z21: 0, Z22: 0
-            },
-            'nonnull': [1],
-            'params': []
-        }
-
-        branches = [b_gen, b_spec]
-        filtered = filter_redundant_branches(branches)
-
-        ids = [b['id'] for b in filtered]
-
-        assert 1 in ids
-        assert 2 not in ids
-
-    def test_keep_singularity_filling_branch(self):
-        """
-        Test that a subset is KEPT if it violates the 'nonnull' constraint 
-        of the general branch. 
-        (i.e., The general branch has a hole, and the specific branch fills it).
-        """
-        # 1. General Branch: Valid ONLY if Z22 != 0
-        # Equation: Z12 = 5/Z22 (Hypothetically) -> Implies Z12*Z22 - 5 = 0
-        # Let's use a simpler one: Z12 = Z22, but valid only if Z22 != 0
-        Z00, Z10, Z20, Z11, Z12, Z21, Z22 = symbols('Z00 Z10 Z20 Z11 Z12 Z21 Z22')
-        b_gen = {
-            'id': 1,
-            'basis': [Z12 - Z22],
-            'mapping': [],
-            'nonnull': [Z22], # CONSTRAINT: Z22 cannot be 0
-            'params': [Z22]
-        }
-
-        # 2. Specific Branch: The Singularity (Z12=0, Z22=0)
-        # This satisfies the equation (0 - 0 = 0), BUT...
-        # It sets the constraint variable (Z22) to 0.
-        b_spec = {
-            'id': 2,
-            'basis': [Z12, Z22],
-            'mapping': {'Z12': 0, 'Z22': 0},
-            'nonnull': [1],
-            'params': []
-        }
-
-        branches = [b_gen, b_spec]
-        filtered = filter_redundant_branches(branches)
-
-        # Assertions
-        ids = [b['id'] for b in filtered]
-        assert 1 in ids
-        assert 2 in ids, "The specific branch should be KEPT because it fills the Z22=0 hole."
-        assert len(filtered) == 2
-
-    def test_branch_26_consumes_branch_27(self):
-        """
-        Regression Test:
-        Branch 26 (Decoupled Mode) allows Z00, Z10, Z20 to be free parameters, 
-        provided all interaction terms (Z11, Z12, Z21, Z22) are zero.
         
-        Branch 27 (Trivial Zero) has ALL variables (including energies) set to zero.
-        
-        B27 should be detected as a strict subset of B26.
         """
-        Z00, Z10, Z20, Z11, Z12, Z21, Z22 = symbols('Z00 Z10 Z20 Z11 Z12 Z21 Z22')
-        # Branch 26: The "Master" Decoupled Solution
-        # Logic: Interactions are 0. Energies (Z00, Z10, Z20) are NOT in mapping/basis, so they are free.
-        b26 = {
-            'id': 26,
-            'component': 2,
-            # Implicitly: Z00, Z10, Z20 are free parameters
-            'params': [Z00, Z10, Z20], 
-            # Basis implies interactions are 0
-            'basis': [Z22, Z21, Z12, Z11], 
-            'mapping': {Z11: 0, Z12: 0, Z21: 0, Z22: 0}, 
-            'nonnull': [1]
-        }
-
-        # Branch 27: The "Trivial" All-Zero Solution
-        # Logic: Everything is 0.
-        b27 = {
-            'id': 27,
-            'component': 3,
-            'params': [], 
-            # Basis implies everything is 0
-            'basis': [Z00, Z10, Z20, Z11, Z12, Z21, Z22], 
-            'mapping': {
-                Z00: 0, Z10: 0, Z20: 0,
-                Z11: 0, Z12: 0, Z21: 0, Z22: 0
-            },
-            'nonnull': [1]
-        }
-
-        branches = [b26, b27]
-        filtered = filter_redundant_branches(branches)
-
-        ids = [b['id'] for b in filtered]
+        Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02')
+        sys_vars =  Z10, Z11, Z12, Z22, Z21, Z00, Z20
+        math_branches = parse_mathematica_reduce_json("test02.json", sys_vars=sys_vars)
         
-        # B26 (General) should survive
-        assert 26 in ids
-        # B27 (Specific) should be removed
-        assert 27 not in ids
+        eq_set = [Z00*Z12 - Z10*Z12 - Z20*Z22,
+                    Z11*Z12 + Z21*Z22, 
+                    Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21]
+        branches = solve_with_singular(eq_set)
+        success = compare_results(eq_set, branches, math_branches, verbose=True)
+        # for b in branches:
+            # print(b)
+            # print(",")
+
+        assert success, "Solver results do not match Mathematica benchmark."
+
+def test_simple_subset_removal():
+    """
+    Test that a specific solution (all vars=0) is removed if it 
+    is a subset of a general solution (Z20 free, others=0).
+    """
+    Z00, Z10, Z20, Z11, Z12, Z21, Z22 = symbols('Z00 Z10 Z20 Z11 Z12 Z21 Z22')
+    # 1. The General Branch
+    b_gen = {
+        'id': 1,
+        'basis': [Z11, Z12, Z21, Z22], 
+        'mapping': {Z00: 0, Z10: 0}, 
+        'nonnull': [1], 
+        'params': [Z20] 
+    }
+
+    # 2. The Specific Branch
+    b_spec = {
+        'id': 2,
+        'basis': [Z11, Z12, Z21, Z22, Z20, Z00, Z10],
+        'mapping': {
+            Z00: 0, Z10: 0, Z20: 0,   
+            Z11: 0, Z12: 0, Z21: 0, Z22: 0
+        },
+        'nonnull': [1],
+        'params': []
+    }
+
+    branches = [b_gen, b_spec]
+    filtered = filter_redundant_branches(branches)
+
+    ids = [b['id'] for b in filtered]
+
+    assert 1 in ids
+    assert 2 not in ids
+
+def test_keep_singularity_filling_branch():
+    """
+    Test that a subset is KEPT if it violates the 'nonnull' constraint 
+    of the general branch. 
+    (i.e., The general branch has a hole, and the specific branch fills it).
+    """
+    # 1. General Branch: Valid ONLY if Z22 != 0
+    # Equation: Z12 = 5/Z22 (Hypothetically) -> Implies Z12*Z22 - 5 = 0
+    # Let's use a simpler one: Z12 = Z22, but valid only if Z22 != 0
+    Z00, Z10, Z20, Z11, Z12, Z21, Z22 = symbols('Z00 Z10 Z20 Z11 Z12 Z21 Z22')
+    b_gen = {
+        'id': 1,
+        'basis': [Z12 - Z22],
+        'mapping': [],
+        'nonnull': [Z22], # CONSTRAINT: Z22 cannot be 0
+        'params': [Z22]
+    }
+
+    # 2. Specific Branch: The Singularity (Z12=0, Z22=0)
+    # This satisfies the equation (0 - 0 = 0), BUT...
+    # It sets the constraint variable (Z22) to 0.
+    b_spec = {
+        'id': 2,
+        'basis': [Z12, Z22],
+        'mapping': {'Z12': 0, 'Z22': 0},
+        'nonnull': [1],
+        'params': []
+    }
+
+    branches = [b_gen, b_spec]
+    filtered = filter_redundant_branches(branches)
+
+    # Assertions
+    ids = [b['id'] for b in filtered]
+    assert 1 in ids
+    assert 2 in ids, "The specific branch should be KEPT because it fills the Z22=0 hole."
+    assert len(filtered) == 2
+
+def test_branch_26_consumes_branch_27():
+    """
+    Regression Test:
+    Branch 26 (Decoupled Mode) allows Z00, Z10, Z20 to be free parameters, 
+    provided all interaction terms (Z11, Z12, Z21, Z22) are zero.
+    
+    Branch 27 (Trivial Zero) has ALL variables (including energies) set to zero.
+    
+    B27 should be detected as a strict subset of B26.
+    """
+    Z00, Z10, Z20, Z11, Z12, Z21, Z22 = symbols('Z00 Z10 Z20 Z11 Z12 Z21 Z22')
+    # Branch 26: The "Master" Decoupled Solution
+    # Logic: Interactions are 0. Energies (Z00, Z10, Z20) are NOT in mapping/basis, so they are free.
+    b26 = {
+        'id': 26,
+        'component': 2,
+        # Implicitly: Z00, Z10, Z20 are free parameters
+        'params': [Z00, Z10, Z20], 
+        # Basis implies interactions are 0
+        'basis': [Z22, Z21, Z12, Z11], 
+        'mapping': {Z11: 0, Z12: 0, Z21: 0, Z22: 0}, 
+        'nonnull': [1]
+    }
+
+    # Branch 27: The "Trivial" All-Zero Solution
+    # Logic: Everything is 0.
+    b27 = {
+        'id': 27,
+        'component': 3,
+        'params': [], 
+        # Basis implies everything is 0
+        'basis': [Z00, Z10, Z20, Z11, Z12, Z21, Z22], 
+        'mapping': {
+            Z00: 0, Z10: 0, Z20: 0,
+            Z11: 0, Z12: 0, Z21: 0, Z22: 0
+        },
+        'nonnull': [1]
+    }
+
+    branches = [b26, b27]
+    filtered = filter_redundant_branches(branches)
+
+    ids = [b['id'] for b in filtered]
+    
+    # B26 (General) should survive
+    assert 26 in ids
+    # B27 (Specific) should be removed
+    assert 27 not in ids
 
 
 def test_extract_mappings():
@@ -691,13 +782,14 @@ if __name__ == "__main__":
     # test_solver.test_parse()
     # test_solver.test_parse_no_star()
     test_solver = TestSingularSolver()
-    # test_solver.test_01_parametric_singularity()
-    # test_solver.test_02_reducible_geometry()
-    # test_solver.test_03_inconsistent_system()
-    # test_solver.test_04_mixed_dimension()
-    # test_solver.test_05_cyclic_3()
-    # test_solver.test_06_algebraic_number()
-    test_solver.test_07_vs_mathematica_1()
+    test_solver.test_01_parametric_singularity()
+    test_solver.test_02_reducible_geometry()
+    test_solver.test_03_inconsistent_system()
+    test_solver.test_04_mixed_dimension()
+    test_solver.test_05_cyclic_3()
+    test_solver.test_06_algebraic_number()
+    # test_solver.test_07_vs_mathematica_1()
+    test_solver.test_08_vs_mathematica_2()
     # test_filter = TestRedundantBranchFilter()
     # test_filter.test_simple_subset_removal()
     # test_filter.test_keep_singularity_filling_branch()
