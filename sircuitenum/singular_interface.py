@@ -13,7 +13,7 @@ __all__ = [
 ]
 
 import re
-import itertools
+import itertools, functools
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 
@@ -436,7 +436,7 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
     # Collect all symbols from equations
     all_symbols = set()
     for eq in equations:
-        all_symbols.update(eq.free_symbols)
+        all_symbols.update(str(s) for s in eq.free_symbols)
     
     # Handle edge case: no variables in the system
     if not all_symbols and all(sym.simplify(eq) == 0 for eq in equations):
@@ -445,12 +445,12 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
 
     # Determine Fixed vs Potential variables
     if solve_vars is not None:
-        solve_vars_set = set(solve_vars)
-        fixed_params = sorted(list(all_symbols - solve_vars_set), key=str)
-        potential_vars = sorted(list(solve_vars_set & all_symbols), key=str)
+        solve_vars_set = set(str(s) for s in solve_vars)
+        fixed_params = sorted(all_symbols - solve_vars_set)
+        potential_vars = sorted(set(solve_vars_set & all_symbols))
     else:
         fixed_params = []
-        potential_vars = sorted(list(all_symbols), key=str)
+        potential_vars = sorted(set(str(s) for s in all_symbols))
 
     # Optional: Dummy substitutions to avoid Singular parsing issues
     dummy_map = {}
@@ -481,10 +481,9 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
     # Run Singular
     print("Calling Singular grobcov solver...")
     print(f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");')
-    raw_output = singular.eval(f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");')
-    print("Singular call complete.")
-    # print(raw_output)
-
+    singular_call = f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");'
+    raw_output = _cached_from_singular_call(singular_call)
+    
     # 1. Parse Raw Output
     all_var_names = list(dummy_map.values())
     raw_branches = parse_singular_output(raw_output, all_var_names, inv_dummy_map=inv_dummy_map)
@@ -506,9 +505,13 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
             valid_branches.append(br)
     
     # 4. Filter Redundant Branches
-    # valid_branches = filter_redundant_branches(valid_branches)
+    valid_branches = filter_redundant_branches(valid_branches)
 
     return valid_branches
+
+@functools.cache
+def _cached_from_singular_call(singular_call: str):
+    return singular.eval(singular_call)
 
 def check_branch_validity(branch, original_eqs):
     # Simple check to ensure we don't return garbage
@@ -567,6 +570,10 @@ def filter_redundant_branches(branches, verbose=False):
     to_keep.sort(key=lambda b: float(b['id']))
     return to_keep
 
+def _symbols2real(expr):
+        d = {var: sym.Symbol(var.name, real=True) for var in expr.free_symbols}
+        return expr.subs(d)
+
 def extract_mappings(branches: List[Dict[str, Any]], real_only: bool = False) -> List[Dict[str, Any]]:
     """
     Extracts the variable mappings from each branch into a simplified format.
@@ -577,6 +584,7 @@ def extract_mappings(branches: List[Dict[str, Any]], real_only: bool = False) ->
     Returns:
         list: List of dicts mapping variable names to their solutions or "Free Parameter".
     """
+
     # Flatten branches if needed
     if any('mappings' in br for br in branches):
         branches = flatten_branches(branches)
@@ -586,7 +594,11 @@ def extract_mappings(branches: List[Dict[str, Any]], real_only: bool = False) ->
         if real_only:
             # Check if mapping has an explicit imaginary part
             if all(not sym.sympify(val).has(sym.I) for val in mapping.values()):
-                simplified_mappings.append(mapping)
+                # Convert to all real variables
+                real_mapping = {}
+                for var, val in mapping.items():
+                    real_mapping[_symbols2real(var)] = _symbols2real(val)
+                simplified_mappings.append(real_mapping)
         else:
             simplified_mappings.append(mapping)
     return simplified_mappings

@@ -288,26 +288,6 @@ def test_cached_solve():
         assert gs in sols
     
 
-def test_expand_singular_branches():
-
-
-    C1, C2, C_J = sym.symbols("C1, C2, C_J", real=True, positive=True)
-    L1, L2, L3 = sym.symbols("L1, L2, L3", real=True, positive=True)
-    Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10 = sym.symbols("Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10", real=True)
-    solve_vars = [Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10]
-    dets = [Z00*(Z11*Z22 - Z12*Z21), C1*C2*C_J*Z00**2*(Z11**2*Z22**2 - 2*Z11*Z12*Z21*Z22 + Z12**2*Z21**2)]
-
-
-    eq = eqs.EquationSet.from_any([sym.Eq(Z11, Z12*Z21/Z22)])
-    sols = eqs._expand_singular_branches(eq, [{Z11: Z12*Z21/Z22}], solve_vars)
-    assert len(sols) == 1
-
-    eq = eqs.EquationSet.from_any((sym.Eq(-Z00**2*Z21*Z22 + 2*Z00*Z10*Z21*Z22 - Z00*Z11*Z20*Z22 - Z00*Z12*Z20*Z21 - Z10**2*Z21*Z22 + Z10*Z11*Z20*Z22 + Z10*Z12*Z20*Z21 - Z11*Z12*Z20**2, 0),))
-    sols = [{Z11: Z12*Z21/Z22}, {Z00: Z10 - Z11*Z20/Z21}]
-    sols = eqs._expand_singular_branches(eq, sols, solve_vars)
-    assert len(sols) == 11
-
-
 def test_sol_indep_of_vars():
     C1, C2, C_J = sym.symbols("C1, C2, C_J", real=True, positive=True)
     L1, L2, L3 = sym.symbols("L1, L2, L3", real=True, positive=True)

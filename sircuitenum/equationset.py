@@ -26,6 +26,8 @@ UNSOLVABLE_CACHE = set()  # sets of equations with no solutions
 
  
 @dataclass(frozen=True, slots=True)
+# TODO: Implement variable canonicalization for _canonical_key
+# TODO: FINGERPRINT THEN GRLEX GROEBNER
 class EquationSet:
     """Immutable container for symbolic equation sets with deduplication.
     
@@ -640,7 +642,7 @@ def sol_indep_of_vars(expr: Union[sym.Eq, sym.Expr], solve_vars, nonzero=[]):
     # sols = unique_solutions(fully_compatible_set(partial_sols, solve_vars, nonzero=[]))
     sols = cached_solve(coeffs, solve_vars)
     # breakpoint()
-    print("Found sols:", sols)
+    # print("Found sols:", sols)
 
     # Make sure none of the nonzero conditions are violated
     sols = [s for s in sols if all(sym.simplify(d.subs(s)) != 0 for d in nonzero)]
@@ -702,9 +704,14 @@ def _cached_solve(all_eq: EquationSet, return_all_branches: bool = False):
     eq_set_numer, all_denom = eq_set_obj.as_numer_denom()
 
     # Solve equations
-    branches = solve_with_singular(eq_set_numer.as_expr_list(), solve_vars)
+    try:
+        branches = solve_with_singular(eq_set_numer.as_expr_list(), solve_vars)
+    except Exception as e:
+        print("Error in solve_with_singular:", e)
+        breakpoint()    
+    
+    # Convert to list of dicts
     sols = extract_mappings(branches, real_only=True)
-
 
     # Filter out solutions with zero denominators
     valid_sols = []

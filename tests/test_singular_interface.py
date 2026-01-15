@@ -391,7 +391,6 @@ class TestSingularParser():
         1
         |||NUM_SOLUTIONS|||0
         |||BRANCH|||3
-        |||COMPONENT|||1
         |||PARAMS|||a,b
         |||VARS|||x,y
         |||CONSTRAINTS|||
@@ -407,11 +406,12 @@ class TestSingularParser():
         |||NUM_SOLUTIONS|||-1
         |||END|||
         """
-        branches = parse_singular_output(raw_output, potential_vars=['x', 'y'], fixed_params=['a', 'b'])
-        assert len(branches) == 2 # One branch has zero solutions
+        branches = parse_singular_output(raw_output, all_var_names=["x","y", "a", "b"],
+                                         inv_dummy_map={'x':'x', 'y':'y', 'a':'a', 'b':'b'})
+        assert len(branches) == 3 # One branch has zero solutions
         assert branches[0]['vars'] == [sym.Symbol('x'), sym.Symbol('y')]
         assert branches[0]['num_solutions'] == 1
-        assert branches[1]['constraints'] == [sym.Symbol('b'), sym.Symbol('a')]
+        assert branches[2]['constraints'] == [sym.Symbol('b'), sym.Symbol('a')]
 
 
     def test_parse_no_star(self):
@@ -441,7 +441,6 @@ class TestSingularParser():
         1
         |||NUM_SOLUTIONS|||0
         |||BRANCH|||3
-        |||COMPONENT|||1
         |||PARAMS|||a,c
         |||VARS|||b
         |||CONSTRAINTS|||
@@ -456,8 +455,9 @@ class TestSingularParser():
         |||BASIS|||
         |||NUM_SOLUTIONS|||-1
         |||END|||"""
-        branches = parse_singular_output(raw_output, potential_vars=['b'], fixed_params=['a', 'c'])
-        assert len(branches) == 2 # One branch has zero solutions
+        branches = parse_singular_output(raw_output,all_var_names=['a','b','c'],
+                                         inv_dummy_map={'a':'a', 'b':'b', 'c':'c'})
+        assert len(branches) == 3 # One branch has zero solutions
         assert sym.simplify(branches[0]['basis'][0] - ((symbols('a') + 1)*symbols('b') + symbols('a')*symbols('c'))) == 0
 
 class TestSingularSolver():
@@ -640,6 +640,16 @@ class TestSingularSolver():
 
         assert success, "Solver results do not match Mathematica benchmark."
 
+    def test_09_duplicate_eqs(self):
+        
+        Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02')
+        eqs=(Z00 - Z10, Z00 - Z10)
+        solve_vars=[Z00, Z10, Z11]
+        branches = solve_with_singular(eqs, solve_vars)
+        assert len(branches) == 1
+        branches = solve_with_singular(eqs)
+        assert len(branches) == 1
+
 def test_simple_subset_removal():
     """
     Test that a specific solution (all vars=0) is removed if it 
@@ -771,14 +781,14 @@ def test_extract_mappings():
     b1 = {
         'id': 1,
         'mappings': [
-            {'x': 1, 'y': 2},          # Real
-            {'x': sym.I, 'y': 2}       # Complex
+            {sym.Symbol('x'): sym.sympify(1), sym.Symbol('y'): sym.sympify(2)},          # Real
+            {sym.Symbol('x'): sym.I, sym.Symbol('y'): sym.sympify(2)}       # Complex
         ]
     }
     b2 = {
         'id': 2,
         'mappings': [
-            {'x': 5, 'y': 5}           # Real
+            {sym.Symbol('x'): sym.sympify(5), sym.Symbol('y'): sym.sympify(5)}           # Real
         ]
     }
     
@@ -787,16 +797,16 @@ def test_extract_mappings():
     # Case A: Extract All
     all_maps = extract_mappings(branches, real_only=False)
     assert len(all_maps) == 3
-    assert {'x': 1, 'y': 2} in all_maps
-    assert {'x': sym.I, 'y': 2} in all_maps
+    assert {sym.Symbol('x'): 1, sym.Symbol('y'): 2} in all_maps
+    assert {sym.Symbol('x'): sym.I, sym.Symbol('y'): 2} in all_maps
 
     # Case B: Real Only
     real_maps = extract_mappings(branches, real_only=True)
     assert len(real_maps) == 2
-    assert {'x': 1, 'y': 2} in real_maps
-    assert {'x': 5, 'y': 5} in real_maps
+    assert {sym.Symbol('x', real=True): 1, sym.Symbol('y', real=True): 2} in real_maps
+    assert {sym.Symbol('x', real=True): 5, sym.Symbol('y', real=True): 5} in real_maps
     # Ensure the complex one is gone
-    assert {'x': sym.I, 'y': 2} not in real_maps
+    assert {sym.Symbol('x'): sym.I, sym.Symbol('y'): 2} not in real_maps
 
 
 def test_flatten_branches():
@@ -847,9 +857,9 @@ def test_flatten_branches():
 
 if __name__ == "__main__":
     # Run tests
-    # test_solver = TestSingularParser()
-    # test_solver.test_parse()
-    # test_solver.test_parse_no_star()
+    test_solver = TestSingularParser()
+    test_solver.test_parse()
+    test_solver.test_parse_no_star()
     test_solver = TestSingularSolver()
     # test_solver.test_01_parametric_singularity()
     # test_solver.test_02_reducible_geometry()
@@ -857,11 +867,12 @@ if __name__ == "__main__":
     # test_solver.test_04_mixed_dimension()
     # test_solver.test_05_cyclic_3()
     # test_solver.test_06_algebraic_number()
-    test_solver.test_07_vs_mathematica_1()
-    test_solver.test_08_vs_mathematica_2()
+    # test_solver.test_07_vs_mathematica_1()
+    # test_solver.test_08_vs_mathematica_2()
+    # test_solver.test_09_duplicate_eqs()
     # test_filter = TestRedundantBranchFilter()
     # test_filter.test_simple_subset_removal()
     # test_filter.test_keep_singularity_filling_branch()
     # test_filter.test_branch_26_consumes_branch_27()
-    # test_extract_mappings()
+    test_extract_mappings()
     # test_flatten_branches()

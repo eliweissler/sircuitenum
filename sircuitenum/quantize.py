@@ -1232,15 +1232,15 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
         cTrans = None
     lTrans2 = (Z.transpose()*lTrans*Z)
 
-    print("Z_2 = ", sym.latex(Z))
-    print("Z_1 = ", sym.latex(Z0))
-    if not cMat is None:
-        print("C_1 = ", sym.latex(sym.simplify(cTrans)))
-    print("L_1 = ", sym.latex(sym.simplify(lTrans)))
+    # print("Z_2 = ", sym.latex(Z))
+    # print("Z_1 = ", sym.latex(Z0))
+    # if not cMat is None:
+    #     print("C_1 = ", sym.latex(sym.simplify(cTrans)))
+    # print("L_1 = ", sym.latex(sym.simplify(lTrans)))
     c_symbols = [var for var in cTransInv2.free_symbols if "C" in str(var).upper()]
-    print("C_2 = ",sym.latex(sym.expand(cTransInv2).applyfunc(lambda expr: sym.collect(expr, c_symbols))))
+    # print("C_2 = ",sym.latex(sym.expand(cTransInv2).applyfunc(lambda expr: sym.collect(expr, c_symbols))))
     l_symbols = [1/var for var in lTrans2.free_symbols if "L" in str(var).upper()]
-    print("L_2 = ", sym.latex(sym.expand(lTrans2).applyfunc(lambda expr: sym.collect(expr, l_symbols))))
+    # print("L_2 = ", sym.latex(sym.expand(lTrans2).applyfunc(lambda expr: sym.collect(expr, l_symbols))))
 
 
 
@@ -1903,15 +1903,15 @@ if __name__ == "__main__":
     # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     # circuit = [("L1", "C1"), ("L2", "C2"), ("L3",), ("J",)]
 
-    # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
-    # circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
+    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
     # circuit = utils.add_elem_number(circuit)
 
     from sircuitenum.visualize import draw_circuit_diagram
 
-    edges = [(0, 1), (1, 2), (2, 0)]
-    circuit = [("L", "C"), ("J", "C"), ("L",)]
-    circuit = utils.add_elem_number(circuit)
+    # edges = [(0, 1), (1, 2), (2, 0)]
+    # circuit = [("L", "C"), ("J", "C"), ("L",)]
+    # circuit = utils.add_elem_number(circuit)
     # draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="spring")
 
 
@@ -1942,7 +1942,7 @@ if __name__ == "__main__":
     print("Mean:", np.mean(times), "+/-", np.std(times))
 
 
-    # breakpoint()
+    breakpoint()
 
     # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
     # for n in range(4, 5):
