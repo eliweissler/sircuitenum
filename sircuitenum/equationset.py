@@ -71,7 +71,7 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
         
     # Mark ones that are individually compatible
     n_terms = len(terms)
-    is_solvable = [is_compatible(terms[i] + nz_term) for i in range(n_terms)]
+    is_solvable = [is_compatible(terms[i] + nz_term) if terms[i] else False for i in range(n_terms)]
     if sum(is_solvable) == 0:
         return [], []
 
@@ -86,17 +86,15 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
         if not is_compatible(combined_terms + nz_term):
             incompatible_pairs.add((i1, i2))
     
-    # Maximum independent set of conflict graph
-    # To find theoretically largest compatible subset
+
     G = nx.Graph()
     G.add_nodes_from(range(n_terms))
     G.add_edges_from(incompatible_pairs)
-    max_compat = nx.approximation.maximum_independent_set(G)
 
     # Top down search for largest compatible set
     all_sols = []
     sol_keys = []
-    for nz in range(len(max_compat), 0, -1):
+    for nz in range(n_terms, 0, -1):
         sol_found = False
         for keys in itertools.combinations(range(n_terms), nz):
             # Check if all individual terms are solvable

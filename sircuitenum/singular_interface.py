@@ -178,51 +178,6 @@ def parse_singular_output(raw_output: str,
     return parsed_raw_branches
 
 
-def refine_mapping(mapping, original_eqs, free_params, dep_vars):
-    """
-    Refines mappings while enforcing variable hierarchy to prevent cycles.
-    
-    Hierarchy (High to Low):
-      1. Free Parameters (and constants)
-      2. Dependent Variables
-    """
-
-    refined_mappings = []
-    
-    # 1. IDENTIFY RESIDUALS 
-    residuals = []
-    for eq in original_eqs:
-        res = sym.simplify(_robust_substitute(eq, mapping))
-        if res != 0:
-            residuals.append(res)
-    if not residuals:
-        return [mapping]  # Nothing to refine
-    
-
-    # 2. SOLVE RESIDUALS
-    try:
-        refinements = sym.solve(residuals, dep_vars + free_params, dict=True)
-    except NotImplementedError:
-        return [mapping]  # Cannot refine further
-
-    if not refinements:
-        return [mapping]  # No valid refinements
-    
-    # 3. MERGE REFINEMENTS
-    for ref in refinements:
-        merged_map = {}
-        for var, val in mapping.items():
-            if var in ref:
-                # Dependent variable being refined
-                merged_map[var] = ref[var]
-            else:
-                # Free parameter or constant
-                merged_map[var] = val.subs(ref)
-        refined_mappings.append(merged_map)
-    
-    return refined_mappings
-
-
 def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Dict]:
     """
     Takes a raw branch dict, handles ghost constraints, solves sub-systems,
@@ -317,17 +272,8 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
     for p_sol, d_sol in itertools.product(param_solutions, dep_solutions):
         raw_mappings.append({**p_sol, **d_sol})
         
-    # Refine Mappings
-    if raw_mappings:
-        final_mappings = []
-        for raw_map in raw_mappings:
-            refined = refine_mapping(raw_map, original_equations, branch_data['params'], branch_data['vars'])
-            final_mappings.extend(refined)
-    else:
-        final_mappings = []
-        
     # Convert each mapping into a distinct branch object (flat structure)
-    for idx, mapping in enumerate(final_mappings):
+    for idx, mapping in enumerate(raw_mappings):
         new_br = branch_data.copy()
         new_br['id'] = f"{branch_data['id']}.{idx}" # Sub-ID
         new_br['mapping'] = mapping
@@ -399,7 +345,7 @@ def is_compatible(equations):
     return _cached_compatible(cmd)
 
 
-# @functools.cache
+@functools.cache
 def _cached_compatible(cmd: str):
     # print(cmd.split(";")[1])
     cleaned = clean_singular_string(singular.eval(cmd))
@@ -511,7 +457,7 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
 
 # @functools.cache
 def _cached_from_singular_call(singular_call: str):
-    print("Executing Singular command:", singular_call)
+    # print("Executing Singular command:", singular_call)
     return singular.eval(singular_call)
 
 def check_branch_validity(branch, original_eqs):

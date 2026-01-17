@@ -429,7 +429,7 @@ def test_unique_products():
 
     prods = eqs._unique_products(expr, [Z00, Z11, Z12, Z21, Z20, Z02, Z22, Z10])
     assert len(prods) == 1
-    assert prods[C1*C2] == sym.simplify(expr/(C1*C2))
+    assert sym.simplify(prods[C1*C2]) == sym.simplify(expr/(C1*C2))
 
     x, y = sym.symbols("x,y", real=True)
     a, b = sym.symbols("a,b", real=True)
