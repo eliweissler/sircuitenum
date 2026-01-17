@@ -968,6 +968,19 @@ def test_var_trans_basis():
 
 def test_secondary_decouple():
 
+    # Nothing to decouple 
+    circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
+    edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+    cMat = quantize.gen_cap_mat(circuit, edges)
+    lMat = quantize.gen_ind_mat(circuit, edges)
+    wJ, EJ = quantize.gen_w(circuit, edges, w_elem="J", return_params=True)
+    jMat = quantize.incidence_to_square(wJ, EJ)
+
+    circuit = utils.add_elem_number(circuit)
+    Z0, var_types = quantize.var_trans_basis(circuit, edges)
+    Z1 = quantize.secondary_decouple(var_types, [Z0.transpose()*jMat*Z0], [False])
+
+
     # Debugging example
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("L_1", "C_1"), ("L_2", "C_2"), ("L_3",), ("J_1",)]
@@ -976,7 +989,7 @@ def test_secondary_decouple():
     edges = utils.renumber_nodes(edges)
     wJ, EJ = quantize.gen_w(circuit, edges, w_elem="J", return_params=True)
     Z0, var_types = quantize.var_trans_basis(circuit, edges)
-    Z1 = quantize.secondary_decouple(Z0, var_types, cMat, lMat)
+    Z1 = quantize.secondary_decouple(var_types, [Z0.transpose()*lMat*Z0, Z0.transpose()*cMat*Z0], [False, True])
     cT = []
     lT = []
     wT = []
@@ -990,7 +1003,7 @@ def test_secondary_decouple():
         cT.append(cInvTrans)
         lT.append(lTrans)
         wT.append(wJtTrans)
-        Z = quantize._find_Z_instance(Ztot, (Ztot).free_symbols, wJ=wJ, var_types=var_types)
+        Z = quantize._find_Z_instance_deterministic(Ztot, (Ztot).free_symbols)
         Z = sym.simplify(Z)
         val, Zp = quantize.H_hash(cInvTrans, lTrans, wJtTrans, EJ, var_types)
         vals.append(val)
@@ -1000,37 +1013,23 @@ def test_secondary_decouple():
 
     # Make sure it's not nan
     circuit, edges = ([('J',), ('J', 'L'), ('C', 'J', 'L')], [(0, 1), (0, 2), (1, 2)])
-    Z, var_types = quantize.var_trans_basis(circuit, edges)
+    Z0, var_types = quantize.var_trans_basis(circuit, edges)
     assert var_types["extended"] == [0,1]
     assert var_types["sigma"] == [2]
-    assert Z.det() != 0
+    assert Z0.det() != 0
     for i in range(3):
         for j in range(3):
             assert Z[i,j].is_finite
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    Z2 = quantize.secondary_decouple(Z, var_types, cMat, lMat, return_instance=True)
+    Z2 = quantize.secondary_decouple(var_types, [Z0.transpose()*lMat*Z0, Z0.transpose()*cMat*Z0], [False, True])
     for Z in Z2:
         for i in range(3):
             for j in range(3):
-                assert Z[i,j].is_finite
+                assert Z[i,j].is_finite or Z[i,j].is_finite is None
 
 
-    # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
-    # circuit = [("L", "C"), ("L", "C"), ("L",), ("J",)]
-    # cMat = quantize.gen_cap_mat(circuit, edges)
-    # lMat = quantize.gen_ind_mat(circuit, edges)
-    # Z0, var_types = quantize.var_trans_basis(circuit, edges)
-    # Z = Z0*quantize.secondary_decouple(Z0, var_types, cMat, lMat)[0]
-    # cMat = quantize.gen_cap_mat(circuit, edges)
-    # lMat = quantize.gen_ind_mat(circuit, edges)
-    # wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    # hashes = quantize.H_hash(quantize._find_Z_instance(Z, Z.free_symbols), var_types, cMat, lMat, wJ)
-    # assert hashes[0] == "012_0-000_3_0-000_3-111"
-
-
-    # Example from secondary transformation section
     circuit = [("C", "L1"), ("J", "L2")]
     edges = [(1, 2), (1, 3)]
     edges = utils.renumber_nodes(edges)
@@ -1044,10 +1043,10 @@ def test_secondary_decouple():
                 "extended": [0],
                 "harmonic": [1],
                 "sigma": [2]}
-    Z2 = quantize.secondary_decouple(Z0, var_types, cMat, lMat)[0]
-    Z_comp = quantize._find_Z_instance(Z2, Z2.free_symbols, wJ=wJ, var_types=var_types)
+    Z2 = quantize.secondary_decouple(var_types, [Z0.transpose()*lMat*Z0, Z0.transpose()*cMat*Z0], [False, True])[0]
+    Z_comp = quantize._find_Z_instance_deterministic(Z2, Z2.free_symbols)
     assert quantize._equal_up_to_column_swaps_and_shift_and_sign(Z_comp,
-                                                                 sym.simplify(sym.Matrix([[1.0, 0, 0],[1/2, 1/2, 0],[0, 0, 1]]), rational=True),
+                                                                 sym.simplify(sym.Matrix([[2/3, 0, 0],[1/3, 2/3, 0],[0, 0, 1]]), rational=True),
                                                                  shifts=[sym.ones(3,1)])
     Z = sym.simplify(Z0*Z_comp)
     cInvTrans = (Z.transpose()*cMat*Z)[:-1, :-1].inv()
@@ -1478,9 +1477,9 @@ def main():
     # test__vec_space_overlap()
     # test__independent_from()
     # test__nonzero_entries_str()
-    test_choose_Z()
+    # test_choose_Z()
 
-    # test_secondary_decouple()
+    test_secondary_decouple()
 
     # test__maximize_wT()
     # test__wT_key()

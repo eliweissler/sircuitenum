@@ -6,6 +6,8 @@ import sympy as sym
 from sircuitenum import equationset as eqs
 
 
+
+
 def test_equationset_from_any_and_equality():
     """Test EquationSet.from_any() canonicalization and equality."""
     a, b, c, d, e = sym.symbols("a b c d e")

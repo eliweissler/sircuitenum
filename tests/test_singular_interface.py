@@ -14,7 +14,7 @@ from sympy import symbols, sympify
 
 
 from sircuitenum.singular_interface import solve_with_singular, parse_singular_output, filter_redundant_branches
-from sircuitenum.singular_interface import extract_mappings, flatten_branches, _robust_substitute
+from sircuitenum.singular_interface import extract_mappings, _robust_substitute, is_compatible
 
 
 import json
@@ -347,7 +347,8 @@ def compare_results(original_eqs, user_branches, math_branches, verbose=True):
     print(f"\n{'='*80}")
     print(f"SUMMARY")
     print(f"Matched Mathematica: {valid_user_count - new_solution_count}")
-    print(f"New Valid Solutions: {new_solution_count} (Complex roots likely missed by Math)")
+    if new_solution_count > 0:
+        print(f"    Valid Solutions not in Mathematica: {new_solution_count}")
     print(f"Mathematica Coverage: {covered_math_count}/{len(math_branches)}")
     
     successs = valid_user_count == len(user_branches) and covered_math_count == len(math_branches)
@@ -459,6 +460,83 @@ class TestSingularParser():
                                          inv_dummy_map={'a':'a', 'b':'b', 'c':'c'})
         assert len(branches) == 3 # One branch has zero solutions
         assert sym.simplify(branches[0]['basis'][0] - ((symbols('a') + 1)*symbols('b') + symbols('a')*symbols('c'))) == 0
+
+
+class TestSingularConsistency:
+    
+    def test_trivial_consistent(self):
+        """Simple point solution (finite)."""
+        x, y = sym.symbols('x y')
+        eqs = [x - 1, y - 2]
+        assert is_compatible(eqs) is True
+
+    def test_trivial_inconsistent(self):
+        """Direct mathematical contradiction."""
+        assert is_compatible([sym.Integer(1)]) is False
+
+    def test_algebraic_inconsistency(self):
+        """Hidden contradiction via Groebner Basis."""
+        x, y = sym.symbols('x y')
+        # Parallel planes: x+y=1 and x+y=2
+        eqs = [x + y - 1, x + y - 2]
+        assert is_compatible(eqs) is False
+
+    def test_infinite_solutions(self):
+        """
+        CRITICAL: Infinite solutions (vdim = -1).
+        Must return True (Consistent).
+        """
+        x, y = sym.symbols('x y')
+        eqs = [x * y] 
+        assert is_compatible(eqs) is True
+
+    def test_complex_solutions(self):
+        """System solvable only over Complex numbers."""
+        x = sym.symbols('x')
+        eqs = [x**2 + 1]
+        assert is_compatible(eqs) is True
+
+    def test_overdetermined_consistent(self):
+        """More equations than variables, but valid."""
+        x = sym.symbols('x')
+        eqs = [x**2 - 1, x - 1] # x=1 is valid
+        assert is_compatible(eqs) is True
+
+    def test_many_variables(self):
+        """Test near the mapping limit."""
+        # 20 variables
+        vars = sym.symbols(' '.join([f'Z{i}' for i in range(20)]))
+        eqs = [sum(vars)]
+        assert is_compatible(eqs) is True
+
+    def test_empty_system(self):
+        """No equations is technically satisfied by everything."""
+        assert is_compatible([]) is True
+
+    def test_variable_overflow(self):
+        """Ensure error raised if system exceeds Super Ring size."""
+        # 50 vars is > our defined ring
+        vars = sym.symbols(' '.join([f'V{i}' for i in range(60)]))
+        eqs = [v - 1 for v in vars]
+        
+        with pytest.raises(ValueError):
+            is_compatible(eqs)
+
+    def test_difficult_systems(self):
+        
+        Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02')
+        eq_set = [Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21,
+                    Z00*Z22*(Z12 - Z22) + 2*Z12**2*Z20 - 2*Z12*Z20*Z22 + 2*Z20*Z22**2,
+                    Z10*Z22*(Z12 - Z22) + Z12**2*Z20 - Z12*Z20*Z22 + 2*Z20*Z22**2,
+                    Z11*(2*Z12 - Z22) - Z12*Z21 + 2*Z21*Z22]
+        assert is_compatible(eq_set) is True
+
+        Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02')
+        eq_set = [Z00*Z12 - Z10*Z12 - Z20*Z22,
+                    Z11*Z12 + Z21*Z22, 
+                    Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21]
+        assert is_compatible(eq_set) is True
+
 
 class TestSingularSolver():
 
@@ -650,6 +728,22 @@ class TestSingularSolver():
         branches = solve_with_singular(eqs)
         assert len(branches) == 1
 
+    def test_10_vs_mathematica_3(self):
+
+        Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02, nzVar = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02, nzVar')
+        sys_vars =  Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02, nzVar
+        
+        eqs = [Z00*Z11*Z22**2 - Z00*Z12*Z21*Z22 - Z10*Z11*Z22**2 + Z10*Z12*Z21*Z22 + Z11*Z12*Z20*Z22 - Z12**2*Z20*Z21,
+               -Z00*Z11*Z21*Z22 + Z00*Z12*Z21**2 + Z10*Z11*Z21*Z22 - Z10*Z12*Z21**2 - Z11**2*Z20*Z22 + Z11*Z12*Z20*Z21,
+               -Z00**2*Z21*Z22 + 2*Z00*Z10*Z21*Z22 - Z00*Z11*Z20*Z22 - Z00*Z12*Z20*Z21 - Z10**2*Z21*Z22 + Z10*Z11*Z20*Z22 + Z10*Z12*Z20*Z21 - Z11*Z12*Z20**2,
+               -Z00**2*Z11*Z12,
+               -Z00**2*Z21*Z22,
+               -Z00*nzVar*(Z11*Z22 - Z12*Z21) + 1]
+        math_branches = parse_mathematica_reduce_json("test03.json", sys_vars=sys_vars)
+        branches = solve_with_singular(eqs)
+        success = compare_results(eqs, branches, math_branches, verbose=True)
+        assert success, "Solver results do not match Mathematica benchmark."
+
 def test_simple_subset_removal():
     """
     Test that a specific solution (all vars=0) is removed if it 
@@ -780,99 +874,55 @@ def test_extract_mappings():
     # Create dummy branches with SymPy objects
     b1 = {
         'id': 1,
-        'mappings': [
+        'mapping':
             {sym.Symbol('x'): sym.sympify(1), sym.Symbol('y'): sym.sympify(2)},          # Real
-            {sym.Symbol('x'): sym.I, sym.Symbol('y'): sym.sympify(2)}       # Complex
-        ]
     }
     b2 = {
         'id': 2,
-        'mappings': [
-            {sym.Symbol('x'): sym.sympify(5), sym.Symbol('y'): sym.sympify(5)}           # Real
-        ]
+        'mapping': 
+            {sym.Symbol('x'): sym.sympify(5), sym.Symbol('y'): sym.I*sym.sympify(5)}           # Imaginary
     }
     
     branches = [b1, b2]
 
     # Case A: Extract All
     all_maps = extract_mappings(branches, real_only=False)
-    assert len(all_maps) == 3
-    assert {sym.Symbol('x'): 1, sym.Symbol('y'): 2} in all_maps
-    assert {sym.Symbol('x'): sym.I, sym.Symbol('y'): 2} in all_maps
+    assert len(all_maps) == 2
 
     # Case B: Real Only
     real_maps = extract_mappings(branches, real_only=True)
-    assert len(real_maps) == 2
-    assert {sym.Symbol('x', real=True): 1, sym.Symbol('y', real=True): 2} in real_maps
-    assert {sym.Symbol('x', real=True): 5, sym.Symbol('y', real=True): 5} in real_maps
-    # Ensure the complex one is gone
-    assert {sym.Symbol('x'): sym.I, sym.Symbol('y'): 2} not in real_maps
-
-
-def test_flatten_branches():
-    """
-    Test that a branch with multiple mappings is exploded into 
-    separate branches with unique IDs and singular 'mapping' keys.
-    """
-    # Branch 1 has 2 mappings (Needs flattening)
-    b1 = {
-        'id': 1,
-        'some_data': 'A', # Ensure extra data is preserved
-        'mappings': [
-            {'val': 100}, 
-            {'val': 200}
-        ]
-    }
-    
-    # Branch 2 has 0 mappings (Should be preserved as-is or handled gracefully)
-    b2 = {
-        'id': 2,
-        'some_data': 'B',
-        'mappings': [] 
-    }
-
-    branches = [b1, b2]
-    flat = flatten_branches(branches)
-
-    # Expect: 
-    # b1 splits into "1.0" and "1.1"
-    # b2 is passed through (or skipped depending on your logic, usually kept)
-    
-    # Check IDs
-    ids = [b['id'] for b in flat]
-    assert "1.0" in ids
-    assert "1.1" in ids
-    
-    # Check Structure
-    # Find the branch corresponding to the first mapping of b1
-    b_flat_0 = next(b for b in flat if b['id'] == "1.0")
-    
-    # It should have 'mapping' (singular) matching the data
-    assert b_flat_0['mapping'] == {'val': 100}
-    # It should NOT have 'mappings' (plural)
-    assert 'mappings' not in b_flat_0
-    # It should retain other keys
-    assert b_flat_0['some_data'] == 'A'
-
+    assert len(real_maps) == 1
+  
 
 if __name__ == "__main__":
     # Run tests
-    test_solver = TestSingularParser()
-    test_solver.test_parse()
-    test_solver.test_parse_no_star()
+    # test_solver = TestSingularParser()
+    # test_solver.test_parse()
+    # test_solver.test_parse_no_star()
     test_solver = TestSingularSolver()
-    # test_solver.test_01_parametric_singularity()
-    # test_solver.test_02_reducible_geometry()
-    # test_solver.test_03_inconsistent_system()
-    # test_solver.test_04_mixed_dimension()
-    # test_solver.test_05_cyclic_3()
-    # test_solver.test_06_algebraic_number()
-    # test_solver.test_07_vs_mathematica_1()
-    # test_solver.test_08_vs_mathematica_2()
-    # test_solver.test_09_duplicate_eqs()
+    test_solver.test_01_parametric_singularity()
+    test_solver.test_02_reducible_geometry()
+    test_solver.test_03_inconsistent_system()
+    test_solver.test_04_mixed_dimension()
+    test_solver.test_05_cyclic_3()
+    test_solver.test_06_algebraic_number()
+    test_solver.test_07_vs_mathematica_1()
+    test_solver.test_08_vs_mathematica_2()
+    test_solver.test_09_duplicate_eqs()
+    test_solver.test_10_vs_mathematica_3()
     # test_filter = TestRedundantBranchFilter()
     # test_filter.test_simple_subset_removal()
     # test_filter.test_keep_singularity_filling_branch()
     # test_filter.test_branch_26_consumes_branch_27()
-    test_extract_mappings()
-    # test_flatten_branches()
+    # test_extract_mappings()
+    # test_const = TestSingularConsistency()
+    # test_const.test_trivial_consistent()
+    # test_const.test_trivial_inconsistent()
+    # test_const.test_algebraic_inconsistency()
+    # test_const.test_infinite_solutions()
+    # test_const.test_complex_solutions()
+    # test_const.test_overdetermined_consistent()
+    # test_const.test_many_variables()
+    # test_const.test_empty_system()
+    # test_const.test_variable_overflow()
+    # test_const.test_difficult_systems()

@@ -19,8 +19,7 @@ from sympy import collect, expand_mul, Mul, Dummy
 from sympy.core.add import Add
 
 from sircuitenum import utils
-from sircuitenum.equationset import EquationSet, cached_solve, fully_compatible_set, maximally_compatible_set, sol_indep_of_vars, extract_denom, unique_solutions
-
+from sircuitenum.equationset import maximally_compatible_sol, extract_denom, eq_indep_of_vars
 
 
 PERIODIC_CHARGE = "n"
@@ -581,6 +580,7 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
         return _find_Z_instance_deterministic(Z, var_list, max_tries=10, nonzero=nonzero)
         # return _find_Z_instance_random(Z, var_list, max_tries=10, nonzero=nonzero)
 
+    return _find_Z_instance_deterministic(Z, var_list, max_tries=10, nonzero=nonzero)
     # Variables to substitute concrete values in for
     det = sym.simplify(Z.det())
 
@@ -1137,15 +1137,40 @@ def var_trans_basis_incidence_mat(wC: sym.Matrix, wL: sym.Matrix, wJ: sym.Matrix
 
     return Z, var_types
 
+def _generate_block_transformation(var_types: dict[str, list[int]], trans_blocks: list[list[int]], prefix="Z",
+                                   return_full=True):
+    
+    # Record mode types
+    comp = var_types.get("compact", [])
+    n_comp = len(comp)
+    ext = var_types.get("extended", [])
+    n_ext = len(ext)
+    harm = var_types.get("harmonic", [])
+    n_harm = len(harm)
+    n_d = n_comp + n_ext + n_harm
+    n_nd = len(var_types.get("free", []) + var_types.get("frozen", []) + var_types.get("sigma", []))
+    mode_vec = [comp, ext, harm]
 
-def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
-                       cMat: sym.Matrix, lMat: sym.Matrix,
-                       return_instance: bool = False,
-                       prefix="Z", Z_in: sym.Matrix = None,
-                       param_symbols=["C", "L", "J"],
-                       ordering_matters:bool = False,
-                       wJ: sym.Matrix = sym.Matrix([]),
-                       do_ce=True, do_e=True, do_eh=True, do_hh=True) -> sym.Matrix:
+    # Create symbolic variables for transformation
+    var_list = []
+    Z_blocks = []
+    Z = sym.eye(n_d+n_nd)
+    var_list = []
+    for block_i, block_j in itertools.product(range(3), range(3)):
+        if trans_blocks[block_i][block_j]:
+            for i in mode_vec[block_i]:
+                for j in mode_vec[block_j]:
+                    Z[i, j] = sym.Symbol(f"{prefix}{i}{j}")
+                    var_list.append(Z[i,j])
+
+    if return_full:
+        return Z, var_list
+    else:
+        return Z[:n_d, :n_d], var_list
+    
+
+
+def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], invert: list[bool], **kwargs):
     """
     Performs a secondary decoupling transformation of
     the form
@@ -1158,144 +1183,114 @@ def secondary_decouple(Z0: sym.Matrix, var_types: dict[str, list[int]],
     In case of a tie in number, prefers fewer inductive terms,
     in line with H_hash.
 
+    The form of the transformation can be adjusted via the trans_blocks kwarg.
+
     Args:
-        Z0 (sym.Matrix): Initial transformation that separates circuit into different
-                         types of modes.
         var_types (dict[str, list[int]]): Dictionary mapping mode type to a list
                                           of indices that are that mode.
-        cMat (sym.Matrix): Capacitance matrix
-        lMat (sym.Matrix): Susceptance matrix
+        mats (list[sym.Matrix]): List of matrices to decouple
+        invert (list[bool]): List of whether to invert each matrix in mats
         return_instance: bool
             If there are free parameters in the final transformation,
-            substitute in a valid set of 1's and 0's to complete it,
-            which maximizes the number of 0's.
+            substitute in actual values to get a concrete instance.
+            Defaults to False.
+    kwargs:
+        Z_in (sym.Matrix): Possible initial secondary transformation
+        trans_blocks (list[list[int]]): Blocks of the transformation
+                                        rows/columns correspond to
+                                        [compact, extended, harmonic]
+                                        non-dynamical modes are not transformed
+        prefix (str): Prefix for symbolic variables in the transformation.
+        param_symbols (list[str]): List of strings to identify
+                                   system parameters in the matrices.
+                                   Defaults to ["C", "L", "J"].
+        tiebreaker_fn (callable): Function that takes a set of keys
+                                   and returns a sortable item
+                                   when choosing transformations.
 
     Returns:
         sym.Matrix: Secondary transformation
     """
+    ### process kwargs
+    # Blocks of the transformation
+    # rows/columns correspond to [compact, extended, harmonic]
+    # non-dynamical modes are not transformed
+    trans_blocks = kwargs.get("trans_blocks", [[0, 1, 0],
+                                               [0, 1, 0],
+                                               [0, 1, 1]])
+    Z_in = kwargs.get("Z_in", None)
+    prefix = kwargs.get("prefix", "Z")
+    param_symbols = kwargs.get("param_symbols", ["C", "L", "J"])
+    tiebreaker_fn = kwargs.get("tiebreaker_fn", lambda keys, n_terms: "".join(["0" if i in keys else "1" for i in range(n_terms)]))
 
     # Record mode types
-    eye = sym.eye(Z0.shape[0])
     comp = var_types.get("compact", [])
     n_comp = len(comp)
     ext = var_types.get("extended", [])
     n_ext = len(ext)
     harm = var_types.get("harmonic", [])
     n_harm = len(harm)
-    sigma = var_types.get("sigma", [])
-    n_sigma = len(sigma)
     n_d = n_comp + n_harm + n_ext
-    
-    # Possible to not include cMat to consider junction
-    # decoupling
-    if not cMat is None:
-        cTrans = sym.simplify(Z0.transpose()*cMat*Z0)
-    lTrans = sym.simplify(Z0.transpose()*lMat*Z0)
+    mode_vec = [comp, ext, harm]
 
 
-    # Possible Transformation
+    # Generate Possible Transformation
     if Z_in is None:
-        Z = sym.eye(Z0.shape[0])
-        var_list = []
-        for i in range(Z.shape[0]):
-            for j in range(Z.shape[1]):
-                if ((i in comp and j in ext and do_ce) or 
-                    (i in ext and j in ext and do_e) or 
-                    (i in harm and j in ext and do_eh) or
-                    (i in harm and j in harm and do_hh)):
-                    Z[i,j] = sym.Symbol(f"{prefix}{i}{j}", real=True)
-                    var_list.append(Z[i,j])
+        Z, var_list = _generate_block_transformation(var_types, trans_blocks, prefix=prefix)
     else:
         Z = Z_in
         var_list = [x for x in Z.free_symbols if prefix in str(x)]
-        
+    det_Z = sym.simplify(Z.det())
     # Sort variable list for consistent substitution
     var_list.sort(key=lambda s: s.name)
 
-    # Transformed Capacitance and Susceptance Matrices
-    n_vars = len(var_list)
-    if not cMat is None:
-        cTrans2 = Z.transpose()*cTrans*Z
-        cTrans2_trunc = cTrans2[:n_comp+n_ext+n_harm,:n_comp+n_ext+n_harm]
-        cTrans2_det = _det_fast(cTrans2_trunc)
-        cTrans2_det_simp = utils.run_with_timeout(sym.simplify, (cTrans2_det,), timeout=5)
-        if not cTrans2_det_simp is None:
-            cTrans2_det = cTrans2_det_simp
-        if cTrans2_trunc.shape[0] > 1:
-            cTransInv2 = sym.inv_quick(cTrans2_trunc)
+    # Transform matrices and invert as needed
+    to_decouple = []
+    for mat, inv in zip(mats, invert):
+        transformed = Z[:n_d, :n_d].transpose()*mat[:n_d, :n_d]*Z[:n_d, :n_d]
+        if inv:
+            if mat.shape[0] > 1:
+                to_decouple.append(sym.inv_quick(transformed))
+            else:
+                to_decouple.append(transformed.inv())
         else:
-            cTransInv2 = cTrans2_trunc.inv()
-    else:
-        cTransInv2 = sym.eye(Z.shape[0])
-        cTrans2 = sym.eye(Z.shape[0])
-        cTrans2_det = sym.sympify(1)
-        cTrans = None
-    lTrans2 = (Z.transpose()*lTrans*Z)
-
-    # print("Z_2 = ", sym.latex(Z))
-    # print("Z_1 = ", sym.latex(Z0))
-    # if not cMat is None:
-    #     print("C_1 = ", sym.latex(sym.simplify(cTrans)))
-    # print("L_1 = ", sym.latex(sym.simplify(lTrans)))
-    c_symbols = [var for var in cTransInv2.free_symbols if "C" in str(var).upper()]
-    # print("C_2 = ",sym.latex(sym.expand(cTransInv2).applyfunc(lambda expr: sym.collect(expr, c_symbols))))
-    l_symbols = [1/var for var in lTrans2.free_symbols if "L" in str(var).upper()]
-    # print("L_2 = ", sym.latex(sym.expand(lTrans2).applyfunc(lambda expr: sym.collect(expr, l_symbols))))
-
-
-
-    # Determine which entries are possible to decouple
-    # without depending on system parameters
-    params =  [x for x in cTransInv2.free_symbols if any(s in str(x).upper() for s in param_symbols)]
-    params += [x for x in lTrans2.free_symbols if any(s in str(x).upper() for s in param_symbols)]
-    coupling_c = []
-    coupling_l = []
-    dets = [sym.simplify(Z.det()), cTrans2_det]
-    # Symmetric coupling -> only consider upper triangle
-    pairs = [(i, j) for (i, j) in itertools.product(comp + ext + harm, ext + harm) if i < j]
-    for (i, j) in pairs:
-        c_vars = [v for v in var_list if v in cTransInv2[i, j].free_symbols]
-        sol_c = sol_indep_of_vars(cTransInv2[i, j], c_vars, nonzero=dets)
-        if sol_c:
-            coupling_c.append(sol_c)
-        # L will be 0 if this is a real capacitance matrix
-        l_vars = [v for v in var_list if v in lTrans2[i, j].free_symbols]
-        sol_l = sol_indep_of_vars(lTrans2[i, j], l_vars, nonzero=dets)
-        if sol_l:
-            coupling_l.append(sol_l)
-    n_couple_c = len(coupling_c)
-    n_couple_l = len(coupling_l)
-    tiebreaker_fn = lambda keys: f"{n_couple_c + n_couple_l - len(keys)}_"+ \
-                                 "".join(["0" if i in keys else "1" for i in range(n_couple_l)]) + "_" + \
-                                 "".join(["0" if i in keys else "1" for i in range(n_couple_l, n_couple_l + n_couple_c)])
-    # If no couplings to decouple, return the general transformation
-    if len(coupling_c) + len(coupling_l) == 0:
-        return [Z]
-    best_keys, best_subs = maximally_compatible_set(coupling_l + coupling_c, solve_vars=var_list, nonzero=dets)
-
-    # Remove duplicate solutions and ones that are supersets of others
-    # Sort by tiebreaker function
-    best_nz_str = [tiebreaker_fn(k) for k in best_keys]
-    nz_str_order = np.argsort(best_nz_str)
-    best_subs = [best_subs[i] for i in nz_str_order]
-    best_subs, best_idx = unique_solutions(best_subs, return_idx=True)
-    best_Z = [Z.subs(s) for s in best_subs]
-    best_nz_str = [best_nz_str[nz_str_order[i]] for i in best_idx]
+            to_decouple.append(transformed)
     
+    # Symmetric coupling -> only consider upper triangle
+    pairs = [(i, j) for (i, j) in itertools.product(range(n_d), repeat=2) if i < j]
+    coupling = []
+    denoms = []
+    for trMat in to_decouple:
+        for (i, j) in pairs:
+            vars_in_eq = [v for v in var_list if v in trMat[i, j].free_symbols]
+            if vars_in_eq:
+                eqs, denom = eq_indep_of_vars(trMat[i, j], vars_in_eq)
+                if eqs:
+                    coupling.append(eqs)
+                denoms.append(denom)
+    n_couple = len(coupling)
+
+    # Nothing to decouple
+    if n_couple == 0:
+       return [Z]
+    
+    # Flatten the list of possible substitutions
+    all_keys, all_subs = maximally_compatible_sol(coupling,nonzero=denoms+[det_Z], nonzero_constraints=[det_Z])
+    all_keys = list(itertools.chain.from_iterable([[all_keys[i]]*len(all_subs[i]) for i in range(len(all_keys))]))
+    all_subs = list(itertools.chain.from_iterable(all_subs))
+
     # Remove transformations that are column permutations or sign-flips of each other
     perms = _var_col_perms(var_types, dyn_only=True)
-    perms = [p + tuple(range(n_d, Z0.shape[0])) for p in perms]
-    _, idx_kept = _remove_permutation_equivalent_transformations(best_Z, perms)
-    final_nz_str = [best_nz_str[i] for i in idx_kept]
-    final_Z = [best_Z[i] for i in idx_kept]
-
-    # Process transformation before returning
-    if return_instance:
-        final_Z = [_find_Z_instance(Z, var_list, wJ=wJ, var_types=var_types) for Z in final_Z]
-    if ordering_matters:
-        return final_Z[np.argmin(final_nz_str)]
-    else:
-        return [final_Z[i] for i in np.argsort(final_nz_str)]
+    perms = [p + tuple(range(n_d, Z.shape[0])) for p in perms]
+    unique_Z = []
+    unique_keys = []
+    unique_subs = []
+    # With the unique transformations, sort by tiebreaker function
+    key_order = np.argsort([tiebreaker_fn(keys, n_couple) for keys in all_keys])
+    all_Z = [Z.subs(all_subs[i]) for i in key_order]
+    _, idx_kept = _remove_permutation_equivalent_transformations(all_Z, perms)
+    unique_Z = [all_Z[j] for j in idx_kept]
+    return unique_Z
 
 
 def choose_Z(circuit: list, edges: list, ground_node: list = [],
@@ -1356,19 +1351,19 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             raise ValueError("Invalid Transformation (Not Invertible)")
         # 2a: Decouple nonlinear degrees of freedom
         if elem_counts["J"] > 0:
-            Z2_a = secondary_decouple(Z, var_types, None, jMat,
-                                    return_instance=False, prefix="Z",
-                                    ordering_matters=False)
+            Z2_a = secondary_decouple(var_types,[Z.transpose()*jMat*Z], [False])
         else:
             Z2_a = [None]
         t2 = time.time()
         # 2b: Decouple linear degrees of freedom
         for Z_in in Z2_a:
-            Z2_b = secondary_decouple(Z, var_types, cMat, lMat,
-                                    return_instance=False, prefix="Z", Z_in=Z_in,
-                                    ordering_matters=False, wJ=wJ)
+            Z2_b = secondary_decouple(var_types, [Z.transpose()*cMat*Z, Z.transpose()*lMat*Z],
+                                      [True, False], Z_in=Z_in)
             for Z2_bi in Z2_b:
-                Z_tot = Z*Z2_bi
+                try:
+                    Z_tot = Z*Z2_bi
+                except:
+                    breakpoint()
                 var_list = [x for x in Z2_bi.free_symbols if "Z" in str(x)]
                 Z_hash = _find_Z_instance_deterministic(Z_tot, var_list, nonzero=extract_denom(Z_tot))
                 cTransInv = sym.simplify(Z_hash.transpose()*cMat*Z_hash)[:n_dyn, :n_dyn].inv()
@@ -1399,45 +1394,8 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         elif val == hash_final:
             Z_final.append(Z)
 
-    # print(hash_full)
-    # Put the transformation in a canonical form
-    # for the nonlinear terms
-    # best_w, best_key, (row_vec, col_vec, row_order) = _maximize_wT(Z_final[0])
-    # if len(Z_final) > 1:
-    #     # hash_full = np.array(hash_full)
-    #     # if sum(hash_full == min(hash_full)) == 1:
-    #     #     Z_final = [Z_final[np.argmin(hash_full)]]
-
-    #     ## TODO: MAXIMIZE ZERO TERMS IN wJtTrans
-    #     most_zero = -1
-    #     best_Z_final = []
-    #     for Z in Z_final:
-    #         to_zero = []
-    #         wJtTrans = sym.simplify(wJ.transpose()*Z)
-    #         n_zero = 0
-    #         var_list = [x for x in Z.free_symbols if "Z" in str(x)]
-    #         for i in range(wJtTrans.shape[0]):
-    #             for j in range(n_nl):
-    #                 if wJtTrans[i,j] != 0 and any(v in wJtTrans[i,j].free_symbols for v in var_list):
-    #                     to_zero.append(wJtTrans[i,j])
-    #                 elif wJtTrans[i,j] == 0:
-    #                     n_zero += 1
-    #         if to_zero:
-    #             best_keys, best_subs = maximally_compatible_set(to_zero, solve_vars=var_list,
-    #                                                             nonzero=[sym.simplify(Z.det())],
-    #                                                             tiebreaker_fn=_maximize_wT)
-    #             n_zero += len(best_keys)
-    #         else:
-    #             best_subs = [dict()]
-    #         if n_zero > most_zero:
-    #             most_zero = n_zero
-    #             best_Z_final = [Z.subs(s) for s in best_subs]
-    #         elif n_zero == most_zero:
-    #             best_Z_final += [Z.subs(s) for s in best_subs]
-    #     Z_final = best_Z_final
 
     # Get a specific instance of the transformation
-    col_perms = [x + tuple(range(n_dyn, Z0.shape[1])) for x in _var_col_perms(var_types, dyn_only=True)]
     if return_instance:
         # Nonzero terms -- det is already done in find_Z_instance
         # so collect all the denominators
@@ -1464,9 +1422,9 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
                 Z_final_instance = [ans]
         Z_final = Z_final_instance
     
+    col_perms = [x + tuple(range(n_dyn, Z0.shape[1])) for x in _var_col_perms(var_types, dyn_only=True)]
     _, idx = _remove_permutation_equivalent_transformations(Z_final, perms=col_perms)
     Z_final = [Z_final[i] for i in idx]
-
 
     return Z_final, var_types, lowest_hash
 
@@ -1927,7 +1885,7 @@ if __name__ == "__main__":
     # warnings.filterwarnings('error')
     times = []
     from tqdm import tqdm
-    for i in tqdm(range(1)):
+    for i in tqdm(range(5)):
         t0 = time.time()
         # Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
         Z, var_types, val = choose_Z(circuit, edges)
@@ -1940,9 +1898,6 @@ if __name__ == "__main__":
         times.append(tf-t0)
     print("Max", np.max(times), "Min:", np.min(times))
     print("Mean:", np.mean(times), "+/-", np.std(times))
-
-
-    breakpoint()
 
     # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
     # for n in range(4, 5):

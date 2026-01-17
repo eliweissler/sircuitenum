@@ -21,6 +21,7 @@ from typing import List, Dict, Any, Optional, Union
 from sage.interfaces.singular import singular
 lib_path = Path(__file__).with_name("poly_solver.sing")
 singular.eval(f'LIB "{str(lib_path)}";')
+singular.eval("ring SUPER_RING = 0, (a,b,c,d,f,g,h,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z), dp;")
 
 import sympy as sym
 
@@ -76,11 +77,11 @@ def clean_singular_string(raw_output):
 
 
 def _robust_substitute(expr, subs_dict):
-    val = sym.simplify(expr)
+    val = expr
     while any(val.has(var) for var in subs_dict.keys()):
         for var, sub_val in subs_dict.items():
-            val = sym.simplify(val.subs(var, sub_val))
-    return val
+            val = val.subs(var, sub_val)
+    return sym.simplify(val)
 
 def parse_singular_output(raw_output: str, 
                        all_var_names: list[str], 
@@ -177,89 +178,49 @@ def parse_singular_output(raw_output: str,
     return parsed_raw_branches
 
 
-def refine_branch_mappings(branch, original_eqs):
+def refine_mapping(mapping, original_eqs, free_params, dep_vars):
     """
-    Checks if the branch mappings fully satisfy the original equations.
-    If 'residuals' remain (non-zero terms after substitution), it solves 
-    them to find the hidden sub-branches.
-
-    Example:
-        Mapping: {Z22: 0}
-        Original Eq: Z12 * (Z00 - Z10) - Z22
-        Residual: Z12 * (Z00 - Z10)  (Not zero!)
-        Refinement Solves: [Z12=0] OR [Z00=Z10]
+    Refines mappings while enforcing variable hierarchy to prevent cycles.
+    
+    Hierarchy (High to Low):
+      1. Free Parameters (and constants)
+      2. Dependent Variables
     """
-    if 'mappings' not in branch or not branch['mappings']:
-        return branch
 
     refined_mappings = []
     
-    for candidate in branch['mappings']:
-        # 1. IDENTIFY RESIDUALS
-        # Substitute the candidate mapping into all original equations
-        residuals = []
-        for eq in original_eqs:
-            val = eq
-            
-            # Iterative substitution to resolve chains (a->b, b->c)
-            # Loop limit prevents infinite recursion on circular deps
-            for _ in range(len(candidate) + 5):
-                new_val = val.subs(candidate)
-                if new_val == val:
-                    break
-                val = new_val
-            
-            # Simplify to handle complex cancellation
-            res = val.simplify()
-            if res != 0:
-                residuals.append(res)
-        
-        if not residuals:
-            # Case A: Perfect fit. The generic mapping works.
-            refined_mappings.append(candidate)
-        else:
-            # Case B: The mapping was too "loose".
-            # The residuals represent constraints we missed.
-            
-            # Identify which variables appear in the residuals
-            resid_syms = set().union(*[r.free_symbols for r in residuals])
-            
-            # Attempt to solve the residuals for these variables
-            try:
-                refinements = sym.solve(residuals, list(resid_syms), dict=True)
-            except NotImplementedError:
-                # If SymPy can't solve it, we can't refine it. 
-                # This branch might be truly invalid or too complex.
-                continue
-            
-            if not refinements:
-                # Contradiction: The residuals cannot be solved.
-                # This means the generic branch is invalid in this context.
-                continue
-                
-            for ref in refinements:
-                # 3. MERGE REFINEMENT
-                # Combine original mapping with new refinement
-                new_map = candidate.copy()
-                new_map.update(ref)
-                
-                # 4. RESOLVE DEPENDENCIES AGAIN
-                # The refinement might have defined a variable that was previously 
-                # on the RHS of a mapping (e.g. Z00 -> Z10, and now Z10 -> 0)
-                final_map = {}
-                for k, v in new_map.items():
-                    val = v
-                    for _ in range(len(new_map) + 5):
-                        new_val = val.subs(new_map)
-                        if new_val == val:
-                            break
-                        val = new_val
-                    final_map[k] = val.simplify()
-                    
-                refined_mappings.append(final_map)
+    # 1. IDENTIFY RESIDUALS 
+    residuals = []
+    for eq in original_eqs:
+        res = sym.simplify(_robust_substitute(eq, mapping))
+        if res != 0:
+            residuals.append(res)
+    if not residuals:
+        return [mapping]  # Nothing to refine
     
-    branch['mappings'] = refined_mappings
-    return branch
+
+    # 2. SOLVE RESIDUALS
+    try:
+        refinements = sym.solve(residuals, dep_vars + free_params, dict=True)
+    except NotImplementedError:
+        return [mapping]  # Cannot refine further
+
+    if not refinements:
+        return [mapping]  # No valid refinements
+    
+    # 3. MERGE REFINEMENTS
+    for ref in refinements:
+        merged_map = {}
+        for var, val in mapping.items():
+            if var in ref:
+                # Dependent variable being refined
+                merged_map[var] = ref[var]
+            else:
+                # Free parameter or constant
+                merged_map[var] = val.subs(ref)
+        refined_mappings.append(merged_map)
+    
+    return refined_mappings
 
 
 def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Dict]:
@@ -299,9 +260,9 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
         
     # B. Finite Case
     elif branch_data.get('num_constraint_solutions', -1) > 0:
-        # Use constraint_basis if available, else constraints
-        eqs_to_solve = branch_data['constraint_basis'] if branch_data['constraint_basis'] else branch_data['constraints']
-        vars_to_solve = set(itertools.chain.from_iterable(eq.free_symbols for eq in eqs_to_solve))
+        # Use constraint_basis to solve for parameters
+        eqs_to_solve = branch_data['constraint_basis']
+        vars_to_solve = [v for v in branch_data['params'] if any(v in eq.free_symbols for eq in eqs_to_solve)]
         
         raw_sols = sym.solve(eqs_to_solve, vars_to_solve, dict=True)
         
@@ -318,12 +279,11 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
                 
     # C. Infinite Case (Recursion)
     else:
-        # Recurse!
+        # TODO: Expand branches so that constraints are consistent
         sub_branches = solve_with_singular(branch_data['constraints'])
         for sub in sub_branches:
             # We assume recursive solve_with_singular returns valid/filtered mappings
             param_solutions.append(sub['mapping'])
-            # Optionally store structure: branch_data['param_branches'].append(sub)
 
     # ---------------------------------------------------------------------
     # 3. SOLVE DEPENDENT VARIABLES (Triangular)
@@ -339,20 +299,10 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
         if branch_data['num_solutions'] != -1:
             # Strictly solve for dependent variables (treat params as constants)
             dep_solutions = sym.solve(dep_eqs, dep_vars, dict=True, simplify=True)
-            
-            # VDIM Check
-            reduction = 0
-            for eq in dep_eqs:
-                if isinstance(eq, sym.Pow):
-                    if eq.args[1].is_integer and eq.args[1] > 1:
-                        reduction += eq.args[1] - 1
-            
-            # Note: We rely on Ghost Constraints removal to make this check accurate
-            # if len(dep_solutions) != branch_data['num_solutions'] - reduction:
-            #     print(f"Warning: Branch {branch_data['id']} solution count mismatch.")
 
         # C. Infinite Case (Recursion)
         else:
+            # TODO: Expand branches so that constraints are consistent
             sub_branches = solve_with_singular(dep_eqs, solve_vars=dep_vars)
             for sub in sub_branches:
                 dep_solutions.append(sub['mapping'])
@@ -367,11 +317,12 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
     for p_sol, d_sol in itertools.product(param_solutions, dep_solutions):
         raw_mappings.append({**p_sol, **d_sol})
         
-    # Refine Mappings (Fixes recursive splitting issues like User 10.3)
+    # Refine Mappings
     if raw_mappings:
-        temp_branch = {'mappings': raw_mappings}
-        temp_branch = refine_branch_mappings(temp_branch, original_equations)
-        final_mappings = temp_branch['mappings']
+        final_mappings = []
+        for raw_map in raw_mappings:
+            refined = refine_mapping(raw_map, original_equations, branch_data['params'], branch_data['vars'])
+            final_mappings.extend(refined)
     else:
         final_mappings = []
         
@@ -387,7 +338,75 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
     return resolved_branches
 
 
-def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dict[str, Any]]:
+def make_dummy_map(var_list: List[sym.Symbol]):
+    # Optional: Dummy substitutions to avoid Singular parsing issues
+    dummy_map = {}
+    inv_dummy_map = {}
+    ord_val = 97  # ASCII 'a'
+    for s in var_list:
+        # skip e
+        if chr(ord_val) in ['e', 'i']:
+            ord_val += 1
+        if ord_val > 122:  # ASCII 'z'
+            raise ValueError("Too many variables for dummy substitution (max 24)")
+        dummy_map[str(s)] = chr(ord_val)
+        inv_dummy_map[chr(ord_val)] = str(s)
+        ord_val += 1
+    return dummy_map, inv_dummy_map
+
+
+def is_compatible(equations):
+
+    equations = list(equations)
+    
+    if not equations:
+        return True  # Empty system is trivially compatible
+
+    # Convert equations to SymPy expressions if needed
+    if isinstance(list(equations)[0], sym.Equality):
+        equations = [eq.lhs - eq.rhs for eq in equations]
+    
+    # Quick inconsistency check: if any equation is a non-zero constant, system is inconsistent
+    for eq in equations:
+        if eq.is_Number and eq != 0:
+            return False
+        
+    # Collect all symbols from equations
+    all_symbols = set()
+    for eq in equations:
+        all_symbols.update(str(s) for s in eq.free_symbols)
+    
+    # No variables in the system
+    if not all_symbols:
+        if all(sym.simplify(eq) == 0 for eq in equations):
+            # All equations are 0 = 0, trivially satisfied
+            return []
+    
+    # Not obviously true or false, use Singular to check
+
+    dummy_map, _ = make_dummy_map(all_symbols)
+
+    # Build input strings for the Singular proc (no spaces)
+    str_vars = ",".join(dummy_map[str(v)] for v in all_symbols)
+    str_eqs = ",".join(str(sym.nsimplify(eq)).replace("**", "^") for eq in equations)
+    for orig, dummy in dummy_map.items():
+        str_eqs = str_eqs.replace(orig, dummy)
+    
+    # 1. Enforce the ring context FIRST
+    # 2. Then define the ideal and call the proc
+    cmd = f"setring SUPER_RING; check_solvability(ideal({str_eqs}));"
+    
+    return _cached_compatible(cmd)
+
+
+# @functools.cache
+def _cached_compatible(cmd: str):
+    # print(cmd.split(";")[1])
+    cleaned = clean_singular_string(singular.eval(cmd))
+    return "1" in cleaned
+
+
+def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvability=True) -> List[Dict[str, Any]]:
     """
     Solves a system of SymPy equations using minAssGTZ -> indepSet -> grobcov.
     
@@ -406,8 +425,8 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
             other symbols are treated as parameters from the start.
             If None, the algorithm auto-discovers which variables are independent
             vs dependent for each component.
-        dummy_subs (bool, optional): Whether to perform dummy substitutions to avoid
-            Singular parsing issues with certain symbols. Default is True.
+        check_solvability (bool): If True, performs a quick compatibility check
+            before running the full Groebner Cover. Defaults to True.
 
     Returns:
         list[dict]: A list of branches. Each branch is a dict with:
@@ -420,29 +439,24 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
             - 'basis': The Groebner basis for this segment
             - 'mappings': Dict mapping variables to their solutions or "Free Parameter"
     """
+    if not isinstance(equations, list):
+        equations = list(equations)
     # Convert equations to SymPy expressions if needed
     if isinstance(equations[0], sym.Equality):
         equations = [eq.lhs - eq.rhs for eq in equations]
-
-    # Quick inconsistency check: if any equation is a non-zero constant, system is inconsistent
-    eq_simplified = []
-    for eq in equations:
-        simplified = sym.simplify(eq)
-        if simplified.is_number and simplified != 0:
-            return []  # Inconsistent system
-        eq_simplified.append(simplified)
-    equations = eq_simplified
     
-    # Collect all symbols from equations
+    
     all_symbols = set()
     for eq in equations:
         all_symbols.update(str(s) for s in eq.free_symbols)
     
-    # Handle edge case: no variables in the system
-    if not all_symbols and all(sym.simplify(eq) == 0 for eq in equations):
-        # All equations are 0 = 0, trivially satisfied
-        return []
-
+    # Quick compatibility check
+    if not equations or not all_symbols:
+        return []  # No equations or no variables means no branches
+    if check_solvability:
+        if not is_compatible(equations):
+            return []
+    
     # Determine Fixed vs Potential variables
     if solve_vars is not None:
         solve_vars_set = set(str(s) for s in solve_vars)
@@ -452,25 +466,9 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
         fixed_params = []
         potential_vars = sorted(set(str(s) for s in all_symbols))
 
-    # Optional: Dummy substitutions to avoid Singular parsing issues
-    dummy_map = {}
-    inv_dummy_map = {}
-    if dummy_subs:
-        ord_val = 97  # ASCII 'a'
-        for s in fixed_params + potential_vars:
-            # skip e
-            if chr(ord_val) == 'e':
-                ord_val += 1
-            if ord_val > 122:  # ASCII 'z'
-                raise ValueError("Too many variables for dummy substitution (max 25)")
-            dummy_map[str(s)] = chr(ord_val)
-            inv_dummy_map[chr(ord_val)] = str(s)
-            ord_val += 1
-    else:
-        for s in fixed_params + potential_vars:
-            dummy_map[str(s)] = str(s)
-            inv_dummy_map[str(s)] = str(s)
-    
+    dummy_map, inv_dummy_map = make_dummy_map(fixed_params + potential_vars)
+
+
     # Build input strings for the Singular proc (no spaces)
     str_fixed_params = ",".join(dummy_map[str(p)] for p in fixed_params)
     str_potential_vars = ",".join(dummy_map[str(v)] for v in potential_vars)
@@ -479,10 +477,12 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
         str_eqs = str_eqs.replace(orig, dummy)
 
     # Run Singular
-    print("Calling Singular grobcov solver...")
-    print(f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");')
+    # print("Calling Singular grobcov solver...")
+    # print(f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");')
     singular_call = f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");'
     raw_output = _cached_from_singular_call(singular_call)
+    # print("Singular call complete.")
+    # print(raw_output)
     
     # 1. Parse Raw Output
     all_var_names = list(dummy_map.values())
@@ -509,15 +509,16 @@ def solve_with_singular(equations, solve_vars=None, dummy_subs=True) -> List[Dic
 
     return valid_branches
 
-@functools.cache
+# @functools.cache
 def _cached_from_singular_call(singular_call: str):
+    print("Executing Singular command:", singular_call)
     return singular.eval(singular_call)
 
 def check_branch_validity(branch, original_eqs):
     # Simple check to ensure we don't return garbage
     mapping = branch['mapping']
     for eq in original_eqs:
-        if _robust_substitute(eq, mapping) != 0:
+        if sym.simplify(_robust_substitute(eq, mapping)) != 0:
             return False
     return True
 
@@ -570,9 +571,6 @@ def filter_redundant_branches(branches, verbose=False):
     to_keep.sort(key=lambda b: float(b['id']))
     return to_keep
 
-def _symbols2real(expr):
-        d = {var: sym.Symbol(var.name, real=True) for var in expr.free_symbols}
-        return expr.subs(d)
 
 def extract_mappings(branches: List[Dict[str, Any]], real_only: bool = False) -> List[Dict[str, Any]]:
     """
@@ -585,63 +583,16 @@ def extract_mappings(branches: List[Dict[str, Any]], real_only: bool = False) ->
         list: List of dicts mapping variable names to their solutions or "Free Parameter".
     """
 
-    # Flatten branches if needed
-    if any('mappings' in br for br in branches):
-        branches = flatten_branches(branches)
     simplified_mappings = []
     for br in branches:
         mapping = br['mapping']
         if real_only:
             # Check if mapping has an explicit imaginary part
             if all(not sym.sympify(val).has(sym.I) for val in mapping.values()):
-                # Convert to all real variables
-                real_mapping = {}
-                for var, val in mapping.items():
-                    real_mapping[_symbols2real(var)] = _symbols2real(val)
-                simplified_mappings.append(real_mapping)
+                simplified_mappings.append(mapping)
         else:
             simplified_mappings.append(mapping)
     return simplified_mappings
-
-
-def flatten_branches(branches):
-    """
-    Expands branches with multiple mappings into separate, distinct branches.
-    Retains the original ID but adds a suffix (e.g., 10 -> 10.0, 10.1).
-    """
-    flat_list = []
-    
-    for b in branches:
-        # If no mappings, may be just a basis constraint (keep as is)
-        if not b.get('mappings') and not b.get('basis'):
-            new_b = b.copy()
-            new_b['mapping'] = {}
-            del new_b['mappings']
-            flat_list.append(new_b)
-            continue
-            
-        # Explode mappings
-        for i, mapping in enumerate(b['mappings']):
-            # Create a shallow copy of the branch info
-            new_b = b.copy()
-            
-            # OVERWRITE 'mappings' with just THIS single mapping
-            new_b['mapping'] = mapping
-            if "free_vars" in b:
-                new_b["free_vars"] = b["free_vars"][i]
-            if "free_params" in b:
-                new_b["free_params"] = b["free_params"][i]
-            # if "dep_branches" in b:
-            #     new_b["dep_branches"] = b["dep_branches"][i]
-            del new_b['mappings']
-            
-            #  Update ID to track lineage
-            # (Using string IDs temporarily for clarity)
-            new_b['id'] = f"{b['id']}.{i}" 
-            
-            flat_list.append(new_b)
-            
-    return flat_list
 
 
 # =========================================
