@@ -180,9 +180,8 @@ def parse_singular_output(raw_output: str,
 
 def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Dict]:
     """
-    Takes a raw branch dict, handles ghost constraints, solves sub-systems,
-    filters invalid roots, and refines mappings.
-    Returns a list of resolved branch dictionaries.
+    Takes a raw branch dict, handles ghost constraints, solves sub-systems
+    (finitely or recursively), and merges the results into fully resolved branches.
     """
     
     # ---------------------------------------------------------------------
@@ -195,29 +194,36 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
     ghost_constraints = []
     
     for eq in basis_eqs:
+        # If eq involves Dependent Vars, it stays in the Basis.
         if eq.free_symbols.intersection(dep_vars_set):
             true_dep_eqs.append(eq)
+        # Otherwise, it's a constraint on the Parameters (Ghost).
         else:
             ghost_constraints.append(eq)
             
+    # Update the branch data to reflect this separation
     branch_data['basis'] = true_dep_eqs
-    # Append ghosts to constraints list
-    branch_data['constraints'] = branch_data['constraints'] + ghost_constraints
+    # Append ghosts to existing constraints list
+    active_constraints = branch_data['constraints'] + ghost_constraints
 
     # ---------------------------------------------------------------------
     # 2. SOLVE CONSTRAINTS (Recursive & Filtered)
     # ---------------------------------------------------------------------
-    param_solutions = []
+    # We will store results as "Branch Objects" to preserve metadata 
+    # (constraints, basis) from recursive calls.
+    param_branches = [] 
     
-    # A. Trivial Case
-    if not branch_data['constraints']:
-        param_solutions = [{}]
+    # A. Trivial Case (No constraints)
+    if not active_constraints:
+        # Returns one "empty" branch context
+        param_branches = [{'mapping': {}, 'constraints': [], 'basis': []}]
         
-    # B. Finite Case
+    # B. Finite Case (SymPy Solve)
     elif branch_data.get('num_constraint_solutions', -1) > 0:
-        # Use constraint_basis to solve for parameters
         eqs_to_solve = branch_data['constraint_basis']
-        vars_to_solve = [v for v in branch_data['params'] if any(v in eq.free_symbols for eq in eqs_to_solve)]
+        # Identify which parameters are actually involved
+        vars_to_solve = [v for v in branch_data['params'] 
+                         if any(v in eq.free_symbols for eq in eqs_to_solve)]
         
         raw_sols = sym.solve(eqs_to_solve, vars_to_solve, dict=True)
         
@@ -230,66 +236,101 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
                     is_valid = False
                     break
             if is_valid:
-                param_solutions.append(sol)
+                # Wrap the mapping in a standardized Branch Object
+                param_branches.append({
+                    'mapping': sol,
+                    'constraints': branch_data["constraints"],
+                    'basis': []
+                })
                 
-    # C. Infinite Case (Recursion)
+    # C. Infinite Case (Recursive Singular Call)
     else:
-        # TODO: Expand branches so that constraints are consistent
-        sub_branches = solve_with_singular(branch_data['constraints'])
-        for sub in sub_branches:
-            # We assume recursive solve_with_singular returns valid/filtered mappings
-            param_solutions.append(sub['mapping'])
+        # Recursively solve the constraint system.
+        # This returns a list of full branch dictionaries.
+        # We pass 'params' as the variables to solve for.
+        param_branches = solve_with_singular(active_constraints, solve_vars=branch_data['params'])
 
     # ---------------------------------------------------------------------
     # 3. SOLVE DEPENDENT VARIABLES (Triangular)
     # ---------------------------------------------------------------------
-    dep_solutions = []
+    dep_branches = []
     dep_eqs = branch_data['basis']
     dep_vars = branch_data['vars']
     
     if not dep_eqs:
-        dep_solutions = [{}]
+        dep_branches = [{'mapping': {}, 'constraints': [], 'basis': []}]
     else:
         # B. Finite Case
         if branch_data['num_solutions'] != -1:
-            # Strictly solve for dependent variables (treat params as constants)
-            dep_solutions = sym.solve(dep_eqs, dep_vars, dict=True, simplify=True)
+            raw_dep_sols = sym.solve(dep_eqs, dep_vars, dict=True, simplify=True)
+            for sol in raw_dep_sols:
+                dep_branches.append({
+                    'mapping': sol,
+                    'constraints': [],
+                    'basis': dep_eqs
+                })
 
-        # C. Infinite Case (Recursion)
+        # C. Infinite Case (Recursive Singular Call)
         else:
-            # TODO: Expand branches so that constraints are consistent
-            sub_branches = solve_with_singular(dep_eqs, solve_vars=dep_vars)
-            for sub in sub_branches:
-                dep_solutions.append(sub['mapping'])
+            # Recursively solve the dependent system.
+            dep_branches = solve_with_singular(dep_eqs, solve_vars=dep_vars)
 
     # ---------------------------------------------------------------------
-    # 4. COMBINE & REFINE
+    # 4. COMBINE and MERGE BRANCHES
     # ---------------------------------------------------------------------
     resolved_branches = []
     
-    # Cartesian Product of Parameter solutions * Dependent solutions
-    raw_mappings = []
-    for p_sol, d_sol in itertools.product(param_solutions, dep_solutions):
-        raw_mappings.append({**p_sol, **d_sol})
+    # Cartesian Product of Parameter Branches * Dependent Branches
+    # Now we are merging Objects, not just mappings.
+    count = 0
+    for p_br, d_br in itertools.product(param_branches, dep_branches):
         
-    # Convert each mapping into a distinct branch object (flat structure)
-    for idx, mapping in enumerate(raw_mappings):
+        # A. Merge Mappings
+        combined_mapping = {**p_br.get('mapping', {}), **d_br.get('mapping', {})}
+        
+        # B. Merge Constraints
+        # We accumulate any 'residue' constraints returned by the recursive calls
+        combined_constraints = (
+            p_br.get('constraints', []) + 
+            d_br.get('constraints', [])
+        )
+        
+        # C. Merge Basis
+        combined_basis = (
+             p_br.get('basis', []) + 
+             d_br.get('basis', [])
+        )
+
         new_br = branch_data.copy()
-        new_br['id'] = f"{branch_data['id']}.{idx}" # Sub-ID
-        new_br['mapping'] = mapping
-        new_br['free_vars'] = [v for v in dep_vars if v not in mapping]
-        new_br['free_params'] = [v for v in branch_data['params'] if v not in mapping]
+        
+        new_br['id'] = f"{branch_data['id']}.{count}"
+        count += 1
+        new_br['mapping'] = combined_mapping
+        new_br['constraints'] = combined_constraints # Preserve recursive constraints
+        new_br['basis'] = combined_basis
+        
+        # Recalculate Free Vars/Params based on what ended up in the mapping
+        new_br['free_vars'] = [v for v in dep_vars if v not in combined_mapping]
+        new_br['free_params'] = [v for v in branch_data['params'] if v not in combined_mapping]
+        
         resolved_branches.append(new_br)
         
     return resolved_branches
 
 
 def make_dummy_map(var_list: List[sym.Symbol]):
-    # Optional: Dummy substitutions to avoid Singular parsing issues
     dummy_map = {}
     inv_dummy_map = {}
+    # Identify any variables that are single lowercase letters
+    for s in var_list:
+        if re.fullmatch(r'[a-z]', str(s)):
+            dummy_map[str(s)] = str(s)
+            inv_dummy_map[str(s)] = str(s)
+    # Dummy substitutions to avoid Singular parsing issues
     ord_val = 97  # ASCII 'a'
     for s in var_list:
+        if str(s) in dummy_map:
+            continue  # Already assigned
         # skip e
         if chr(ord_val) in ['e', 'i']:
             ord_val += 1
@@ -335,9 +376,9 @@ def is_compatible(equations):
     # Build input strings for the Singular proc (no spaces)
     str_vars = ",".join(dummy_map[str(v)] for v in all_symbols)
     str_eqs = ",".join(str(sym.nsimplify(eq)).replace("**", "^") for eq in equations)
-    for orig, dummy in dummy_map.items():
-        str_eqs = str_eqs.replace(orig, dummy)
-    
+    for orig in sorted(dummy_map.keys(), key=lambda x: (-len(x), str(x))):
+        str_eqs = str_eqs.replace(orig, dummy_map[orig])
+
     # 1. Enforce the ring context FIRST
     # 2. Then define the ideal and call the proc
     cmd = f"setring SUPER_RING; check_solvability(ideal({str_eqs}));"
@@ -419,8 +460,8 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
     str_fixed_params = ",".join(dummy_map[str(p)] for p in fixed_params)
     str_potential_vars = ",".join(dummy_map[str(v)] for v in potential_vars)
     str_eqs = ",".join(str(sym.nsimplify(eq)).replace("**", "^") for eq in equations)
-    for orig, dummy in dummy_map.items():
-        str_eqs = str_eqs.replace(orig, dummy)
+    for orig in sorted(dummy_map.keys(), key=lambda x: (-len(x), str(x))):
+        str_eqs = str_eqs.replace(orig, dummy_map[orig])
 
     # Run Singular
     # print("Calling Singular grobcov solver...")
@@ -568,4 +609,3 @@ if __name__ == "__main__":
     print(f"Found {len(branches)} Branches:")
     for br in branches:
         print(br)
-
