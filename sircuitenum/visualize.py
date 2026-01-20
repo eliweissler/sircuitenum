@@ -447,7 +447,7 @@ def draw_circuit_diagram(circuit: list, edges: list,
     >>>     scale=1.5
     >>> )
     """
-    edges = utils.zero_start_edges(edges)
+    edges = utils.renumber_nodes(edges)
 
     elem_dict = {
         'C': {'default_unit': 'GHz', 'default_value': 0.2},
