@@ -18,9 +18,9 @@ pip install -e .
 ```
 
 
-Currently you must also manually install singular and z3 for the varible tranformation functionality. This will be updated to use conda for the full package later.
+Currently you must also manually install sage and z3 for the varible tranformation functionality. This will be updated to use conda for the full package later.
 ```bash
-conda install conda-forge::singular
+conda install conda-forge::sage
 ```
 ```bash
 conda install conda-forge::z3-solver
