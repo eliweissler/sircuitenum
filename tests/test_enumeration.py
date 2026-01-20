@@ -40,6 +40,7 @@ NON_SERIES_3 += [
 
 
 TEMP_FILE = "temp.db"
+TEMP_FILE2 = "temp2.db"
 
 
 def test_num_possible_circuits():
@@ -362,10 +363,10 @@ def test__gen_ham_class_row():
     assert entry["n_free"] == 0
     assert entry["n_frozen"] == 0
     assert entry["n_sigma"] == 1
-    assert entry["H_class"] == "010_0-_0_0-_0-_2"
-    assert entry["H_class_sym"] == "010_0-_0_0-_0-_2"
-    assert entry["wJT"] == "2"
-    assert entry["wJT_sym"] == "2"
+    assert entry["H_class"] == '010_0--1-5_0_0-_0-'
+    assert entry["H_class_sym"] == '010_0--1-5_0_0-_0-'
+    assert entry["wJT"] == "5"
+    assert entry["wJT_sym"] == "5"
 
 
     os.remove(TEMP_FILE)
@@ -397,46 +398,56 @@ def df_equality_check(df1: pd.DataFrame, df2: pd.DataFrame):
 def test_add_hamiltonian_classes():
     
 
-    res19 = ['200_0-0_0_0-0_0-0_5445', '101_0-0_0_0-0_0-0_54', '110_0-0_0_0-0_0-0_5445', '011_0-0_0_0-0_0-0_54', '020_0-0_0_0-0_0-0_5445', '200_0-0_1_0-0_1-1_5445', '101_0-0_1_0-0_1-1_54', '110_0-0_1_0-0_1-1_5445', '011_0-0_1_0-0_1-1_54', '020_0-0_1_0-0_1-1_5445', '200_1-1_1_0-0_1-1_544555', '110_1-1_1_0-0_1-1_5455', '110_1-1_1_0-0_1-1_544555', '011_0-0_1_1-1_0-0_54', '020_0-0_1_1-1_0-0_5445', '011_0-0_2_1-1_1-1_54', '020_0-0_2_1-1_1-1_5445', '020_1-1_1_0-0_1-1_544555', '020_1-1_2_1-1_1-1_544555']
-    # res21 =  ['200_0-0_0_0-0_0-0_5445', '101_0-0_0_0-0_0-0_54', '110_0-0_0_0-0_0-0_5445', '011_0-0_0_0-0_0-0_54', '020_0-0_0_0-0_0-0_5445', '200_0-0_1_0-0_1-1_5445', '101_0-0_1_0-0_1-1_54', '110_0-0_1_0-0_1-1_5445', '011_0-0_1_0-0_1-1_54', '020_0-0_1_0-0_1-1_5445', '200_1-1_1_0-0_1-1_544555', '110_1-1_0_0-0_0-0_5553', '110_1-1_0_0-0_0-0_465553', '020_0-0_1_1-1_0-0_5445', '110_1-1_1_0-0_1-1_5455', '020_0-0_2_1-1_1-1_5445', '020_1-1_0_0-0_0-0_645553', '110_1-1_1_0-0_1-1_544555', '020_1-1_1_0-0_1-1_465553', '020_1-1_0_0-0_0-0_465553', '020_1-1_1_0-0_1-1_544555']
-    # res20 = ['200_0-0_0_0-0_0-0_5445', '101_0-0_0_0-0_0-0_54', '110_0-0_0_0-0_0-0_5445', '011_0-0_0_0-0_0-0_54', '020_0-0_0_0-0_0-0_5445', '200_0-0_1_0-0_1-1_5445', '101_0-0_1_0-0_1-1_54', '110_0-0_1_0-0_1-1_5445', '011_0-0_1_0-0_1-1_54', '020_0-0_1_0-0_1-1_5445', '200_1-1_1_0-0_1-1_544555', '110_1-1_0_0-0_0-0_5553', '110_1-1_0_0-0_0-0_465553', '020_0-0_1_1-1_0-0_5445', '110_1-1_1_0-0_1-1_5455', '020_0-0_2_1-1_1-1_5445', '020_1-1_0_0-0_0-0_645553', '110_1-1_1_0-0_1-1_544555', '020_1-1_1_0-0_1-1_465553', '020_1-1_0_0-0_0-0_465553']
-   
-    # res20 =  ['200_0-0_0_0-0_0-0_5445', '101_0-0_0_0-0_0-0_54', '110_0-0_0_0-0_0-0_5445', '011_0-0_0_0-0_0-0_54', '020_0-0_0_0-0_0-0_5445', '200_0-0_1_0-0_1-1_5445', '101_0-0_1_0-0_1-1_54', '110_0-0_1_0-0_1-1_5445', '011_0-0_1_0-0_1-1_54', '020_0-0_1_0-0_1-1_5445', '200_1-1_1_0-0_1-1_544555', '110_1-1_0_0-0_0-0_5553', '110_1-1_0_0-0_0-0_465553', '020_0-0_1_1-1_0-0_5445', '110_1-1_1_0-0_1-1_5455', '020_0-0_2_1-1_1-1_5445', '020_1-1_0_0-0_0-0_645553', '110_1-1_1_0-0_1-1_544555', '020_1-1_1_0-0_1-1_465553', '020_1-1_0_0-0_0-0_465553']
-    res21 =  ['200_0-0_0_0-0_0-0_5445', '101_0-0_0_0-0_0-0_54', '110_0-0_0_0-0_0-0_5445', '011_0-0_0_0-0_0-0_54', '020_0-0_0_0-0_0-0_5445', '200_0-0_1_0-0_1-1_5445', '101_0-0_1_0-0_1-1_54', '110_0-0_1_0-0_1-1_5445', '011_0-0_1_0-0_1-1_54', '020_0-0_1_0-0_1-1_5445', '200_1-1_1_0-0_1-1_544555', '110_1-1_0_0-0_0-0_5553', '110_1-1_0_0-0_0-0_465553', '020_0-0_1_1-1_0-0_5445', '110_1-1_1_0-0_1-1_5455', '020_0-0_2_1-1_1-1_5445', '020_1-1_0_0-0_0-0_645553', '110_1-1_1_0-0_1-1_544555', '020_1-1_1_0-0_1-1_465553', '020_1-1_0_0-0_0-0_465553', '020_1-1_1_0-0_1-1_544555']
-    
-    # print("in 21 not in 20", [x for x in res21 if x not in res20])
-    # print("in 20 not in 21", [x for x in res20 if x not in res21])
+    res19 = ['011_0-0-1-5_0_0-0_0-0', '011_0-0-1-5_1_0-0_1-1', '011_0-0-1-5_1_1-1_0-0', '011_0-0-1-5_2_1-1_1-1', '020_0-0-2-5445_0_0-0_0-0', '020_0-0-2-5445_1_0-0_1-1', '020_0-0-2-5445_1_1-1_0-0', '020_0-0-2-5445_2_1-1_1-1', '020_1-1-4-544555_1_0-0_1-1', '020_1-1-4-544555_2_1-1_1-1', '101_0-0-1-5_0_0-0_0-0', '101_0-0-1-5_1_0-0_1-1', '110_0-0-2-5445_0_0-0_0-0', '110_0-0-2-5445_1_0-0_1-1', '110_1-1-3-5455_1_0-0_1-1', '110_1-1-4-544555_1_0-0_1-1', '200_0-0-2-5445_0_0-0_0-0', '200_0-0-2-5445_1_0-0_1-1', '200_1-1-4-544555_1_0-0_1-1']
+    res20 =  ['011_0-0-1-5_0_0-0_0-0', '011_0-0-1-5_1_0-0_1-1', '020_0-0-2-5445_0_0-0_0-0', '020_0-0-2-5445_1_0-0_1-1', '020_0-0-2-5445_1_1-1_0-0', '020_0-0-2-5445_2_1-1_1-1', '020_1-1-4-544555_1_0-0_1-1', '020_1-1-6-465553_0_0-0_0-0', '020_1-1-6-465553_1_1-1_0-0', '101_0-0-1-5_0_0-0_0-0', '101_0-0-1-5_1_0-0_1-1', '110_0-0-2-5445_0_0-0_0-0', '110_0-0-2-5445_1_0-0_1-1', '110_1-1-3-5455_1_0-0_1-1', '110_1-1-4-544555_1_0-0_1-1', '110_1-1-4-5553_0_0-0_0-0', '110_1-1-6-465553_0_0-0_0-0', '200_0-0-2-5445_0_0-0_0-0', '200_0-0-2-5445_1_0-0_1-1', '200_1-1-4-544555_1_0-0_1-1']
+
     
     # Generate all the 3 node circuits and check that
     # there's 19 H classes
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=4, quiet=False)
+    enum.generate_all_circuits(TEMP_FILE2, 2, 3, base=7, n_workers=1, quiet=False)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
-    print(df.H_class.unique().size, df.H_class_sym.unique().size)
+    df2 = utils.get_circuit_data_batch(TEMP_FILE2, 3)
+    for i, row in df2.iterrows():
+        comp = utils.find_circuit_in_db(TEMP_FILE,
+                                      row['circuit'],
+                                      row['edges']).iloc[0]
+        if comp["H_class"] != row["H_class"]:
+            print("mismatch found (H_class):")
+            print("ref:", row['circuit'], row['H_class'])
+            print("test:", comp['circuit'], comp['H_class'])
+            breakpoint()
+            assert False
+        if comp["H_class_sym"] != row["H_class_sym"]:
+            print("mismatch found (H_class_sym):")
+            print("ref:", row['circuit'], row['H_class_sym'])
+            print("test:", comp['circuit'], comp['H_class_sym'])
+            breakpoint()
+            assert False
+    classes = sorted(df.H_class.unique())
+    sym_classes = sorted(df.H_class_sym.unique())
 
-    # print(df[df.H_class_sym == "020_1-1_1_0-0_1-1_544555"])
+    assert len(classes) == 19
+    assert len(sym_classes) == 20
+    for x in res19:
+        assert x in classes
+    for x in res20:
+        assert x in sym_classes
 
-    # print("res = ", [x for x in df.H_class_sym.unique()])
+    exp_diff_sym_nonsym = ['020_1-1-6-465553_0_0-0_0-0', '020_1-1-6-465553_1_1-1_0-0', '110_1-1-4-5553_0_0-0_0-0', '110_1-1-6-465553_0_0-0_0-0']
+    for x in exp_diff_sym_nonsym:
+        assert x in sym_classes and x not in classes
+    exp_diff_nonsym_sym = ['011_0-0-1-5_1_1-1_0-0', '011_0-0-1-5_2_1-1_1-1', '020_1-1-4-544555_2_1-1_1-1']
+    for x in exp_diff_nonsym_sym:
+        assert x in classes and x not in sym_classes
 
-    assert df.H_class.unique().size == 19
-    assert all(x in df.H_class.unique() for x in res19)
-    assert df.H_class_sym.unique().size == 21
-    assert all(x in df.H_class_sym.unique() for x in res21)
     os.remove(TEMP_FILE)
 
-    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=1, quiet=False)
-    df = utils.get_unique_qubits(TEMP_FILE, 3)
-    print(df.H_class.unique().size, df.H_class_sym.unique().size)
-
-    assert df.H_class.unique().size == 19
-    assert all(x in df.H_class.unique() for x in res19)
-    assert df.H_class_sym.unique().size == 21
-    assert all(x in df.H_class_sym.unique() for x in res21)
-
-    os.remove(TEMP_FILE)
     
-    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=5, n_workers=4)
+    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=5, n_workers=1)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
     assert df.H_class.unique().size == 19
+    assert df.H_class_sym.unique().size == 17
     os.remove(TEMP_FILE)
 
 
@@ -500,8 +511,6 @@ def test_generate_all_circuits():
     df2 = utils.get_unique_qubits(TEMP_FILE, n_nodes=2)
     df3_og = utils.get_unique_qubits(TEMP_FILE, n_nodes=3)
     df3 = df3_og[df3_og['graph_index'] == 1]
-    # df4 = utils.get_unique_qubits(TEMP_FILE, n_nodes=4)
-    # df4 = df4[df4['graph_index'] == 3]
 
     assert df2.shape[0] == 1
     assert df3.shape[0] == len(NON_ISOMORPHIC_3)
@@ -510,32 +519,6 @@ def test_generate_all_circuits():
     for c in NON_ISOMORPHIC_3:
         assert red.isomorphic_circuit_in_set(c, edges, df3.circuit.values)
 
-    # A set of four 4 element circuits that should be there
-    # edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
-    # circuit = [("J",), ("J",), ("C",), ("J",)]
-    # equiv_cirs = utils.get_equiv_circuits(TEMP_FILE, circuit, edges)
-    # assert equiv_cirs.shape[0] == 4
-    # assert all(equiv_cirs['equiv_circuit'].iloc[1:] ==
-    #            equiv_cirs['unique_key'].iloc[0])
-
-    # # Test a few random circuits for 4
-    # edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
-    # circuit = [("L",), ("J",), ("C",), ("J",)]
-    # assert red.isomorphic_circuit_in_set(circuit, edges,
-    #                                      df4.circuit.values,
-    #                                      df4.edges.values)
-    # circuit = [("J",), ("J",), ("C",), ("J",)]
-    # assert red.isomorphic_circuit_in_set(circuit, edges,
-    #                                      df4.circuit.values,
-    #                                      df4.edges.values)
-    # circuit = [("J",), ("C",), ("C",), ("J",)]
-    # assert red.isomorphic_circuit_in_set(circuit, edges,
-    #                                      df4.circuit.values,
-    #                                      df4.edges.values) is False
-    # circuit = [("L",), ("C",), ("L",), ("J",)]
-    # assert red.isomorphic_circuit_in_set(circuit, edges,
-    #                                      df4.circuit.values,
-    #                                      df4.edges.values)
     os.remove(TEMP_FILE)
 
     # Compare parallel vs. not parallel generation for 3 nodes
@@ -583,25 +566,19 @@ def test_qps_enum():
 
 
 if __name__ == "__main__":
-    # test_generate_graphs_node()
-    # test_generate_all_circuits()
-    # test_find_equiv_cir_series()
+    test_num_possible_circuits()
+    test_generate_for_specific_graph()
+    test_delete_table()
+    test_find_uniuqe_ground_placements()
+    test_expand_ground_node()
+    test_has_dangling_edges()
+    test_remove_dangling_edges()
+    test_find_equiv_cir_series()
+    test_generate_graphs_node()
+    test__reduce_individual_set()
+    test_trim_graph_node()
+    test__gen_ham_class_row()
     test_add_hamiltonian_classes()
-    # test__gen_ham_class_row()
-    # test_find_equiv_cir_series()
-    # test_gen_hamiltonian()
-    # test_categorize_hamiltonian()
-    # test_group_hamiltonian()
-    # test_find_uniuqe_ground_placements()
-
-    # test_expand_ground_node()
-    # test_remove_dangling_edges()
-    # test_find_equiv_cir_series()
-    # test_generate_all_circuits()
-    # test_unique_hams_in_df()
-    # test_group_hamiltonian()
-
-    # test_qps_enum()
-
     test_generate_all_circuits()
+    test_qps_enum()
 

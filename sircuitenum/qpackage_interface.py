@@ -136,7 +136,7 @@ def subgraph(circuit, edges, elems=["J", "L"]):
     """
 
     return [edges[i] for i in range(len(edges))
-            if np.any(np.in1d(circuit[i], elems))]
+            if np.any(np.isin(circuit[i], elems))]
 
 
 def add_explicit_ground_node(circuit: list, edges: list, params: dict, ecg: float = 20,

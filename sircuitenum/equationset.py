@@ -16,7 +16,7 @@ import functools, itertools
 from sympy.core.mul import Mul
 import networkx as nx
 
-from sircuitenum.singular_interface import solve_with_singular, extract_mappings, is_compatible
+from sircuitenum.singular_interface import solve_with_singular, extract_mappings, is_compatible, _eq_as_numer_denom
 
 
 # Cache of solved equations
@@ -27,7 +27,7 @@ UNSOLVABLE_CACHE = set()  # sets of equations with no solutions
 
 
 def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr] = [],
-                             nonzero_constraints: list[sym.Expr] = [],):
+                             nonzero_constraints: list[sym.Expr] = []) -> Tuple[list, list]:
     """
     Given a list of list of systems of equations, identifies the largest set of compatible
     systems of equations that can be solved simultaneously. Returns the indices of the selected
@@ -62,16 +62,16 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
         
     # Rabinowitsch Trick to enforce nonzero conditions
     nz_term = []
+    nz_var = sym.symbols('nzVar')
     if len(nonzero_constraints) > 0:
         nz_eq = sym.sympify(1)
         for d in nonzero_constraints:
             nz_eq *= d
-        nz_var = sym.symbols('nzVar')
         nz_term = [1 - nz_var * nz_eq]
         
     # Mark ones that are individually compatible
     n_terms = len(terms)
-    is_solvable = [is_compatible(terms[i] + nz_term) if terms[i] else False for i in range(n_terms)]
+    is_solvable = [is_compatible(terms[i] + nz_term, check_fraction=False) if terms[i] else False for i in range(n_terms)]
     if sum(is_solvable) == 0:
         return [], []
 
@@ -83,7 +83,7 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
             incompatible_pairs.add((i1, i2))
             continue
         combined_terms = terms[i1] + terms[i2]
-        if not is_compatible(combined_terms + nz_term):
+        if not is_compatible(combined_terms + nz_term, check_fraction=False):
             incompatible_pairs.add((i1, i2))
     
 
@@ -108,11 +108,11 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
             
             # Check compatibility of combined terms
             combined_eqs = list(itertools.chain.from_iterable(terms[k] for k in keys)) + nz_term
-            if is_compatible(combined_eqs):
+            if is_compatible(combined_eqs, check_fraction=False):
                 # print("Solving combined eq", combined_eqs)
                 # Solve combined equations
                 sols = []
-                branches = solve_with_singular(combined_eqs)
+                branches = solve_with_singular(combined_eqs, check_fraction=False)
                 for sol in extract_mappings(branches, real_only=True):
                     # Sub out nzvar if present
                     if nz_var in sol:
@@ -133,17 +133,30 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
     return [], []
     
 
-def eq_indep_of_vars(expr: Union[sym.Eq, sym.Expr], solve_vars):
+def eq_indep_of_vars(expr: Union[sym.Eq, sym.Expr], exclude_vars: Iterable[sym.Symbol]):
+    """
+    Extract a system of equations whose solutions solve the input expression independently
+    of the specified excluded variables.
+
+    Args:
+        expr (Union[sym.Eq, sym.Expr]): Equation or expression to analyze.
+        exclude_vars: Iterable[sym.Symbol] (_type_): Variables you want solutions to be independent of.
+
+    Returns:
+        tuple[list[sym.Expr], sym.Expr]: The system of equations (as a list of expressions) whose solutions
+        solve the input expression independently of the excluded variables, and the denominator
+        of the original expression (i.e., this must be nonzero in the solutions).
+    """
     
     # Simplify to rational form
     numer, denom = _eq_as_numer_denom(expr)
 
     # No solutions if there are no solve variables
-    if not any(v in numer.free_symbols for v in solve_vars):
-        return [], []
+    if not any(v in numer.free_symbols for v in exclude_vars):
+        return [], sym.sympify(1)
 
     # Get unique symbolic products of non-excluded vars
-    var_combos = _unique_products(numer, exclude=solve_vars)
+    var_combos = _unique_products(numer, exclude=exclude_vars)
 
     # All coefficients must be able to be zero simultaneously
     coeffs = []
@@ -153,9 +166,9 @@ def eq_indep_of_vars(expr: Union[sym.Eq, sym.Expr], solve_vars):
         if val.is_number and val != 0:
             return []
         else:
-            coeffs.append(sym.simplify(var_combos.pop(1)))
+            coeffs.append(var_combos.pop(1))
     for v in var_combos:
-        coeffs.append(sym.simplify(var_combos[v]))
+        coeffs.append(var_combos[v])
 
     return coeffs, denom
     
@@ -186,10 +199,6 @@ def sol_indep_of_vars(expr: Union[sym.Eq, sym.Expr], solve_vars, nonzero=[],
     ValueError
         If solution does not satisfy the original expression.
     """
-
-   
-
-    print("Coefficients to solve: (len)", len(coeffs), "coeff:", coeffs)
     
     coeffs, denom = eq_indep_of_vars(expr, solve_vars)
     sols = extract_mappings(solve_with_singular(coeffs, solve_vars), real_only=real_only)
@@ -201,26 +210,6 @@ def sol_indep_of_vars(expr: Union[sym.Eq, sym.Expr], solve_vars, nonzero=[],
     sols = [s for s in sols if sym.simplify(denom.subs(s)) != 0]
 
     return sols
-
-
-def _eq_as_numer_denom(eq: Union[sym.Eq, sym.Expr]):
-    """Extract numerator and denominator from equation or expression.
-    
-    Parameters
-    ----------
-    eq : sym.Eq or sym.Expr
-        Equation or expression to decompose.
-        
-    Returns
-    -------
-    tuple[sym.Expr, sym.Expr]
-        Numerator and denominator after combining fractions.
-    """
-    if isinstance(eq, sym.Eq):
-        eq = (eq.lhs - eq.rhs)
-    eq_new = sym.expand(eq).together(deep=True)
-    numer, denom = eq_new.as_numer_denom()
-    return numer, denom
 
 
 def _unique_products(expr: sym.Expr, exclude: list[sym.Symbol] = []):
@@ -246,6 +235,8 @@ def _unique_products(expr: sym.Expr, exclude: list[sym.Symbol] = []):
     expr = sym.expand(expr)
     products = {}
     for term in expr.as_ordered_terms():
+        if term == 0 or term == 0.0:
+            continue
         # Extract multiplicative factors
         factors = []
         if isinstance(term, Mul):
@@ -274,7 +265,8 @@ def _unique_products(expr: sym.Expr, exclude: list[sym.Symbol] = []):
     for factors, coeffs in products.items():
         prod = functools.reduce(lambda a,b: a*b, factors, sym.sympify(1))
         coeff = functools.reduce(lambda a,b: a+b, coeffs, sym.sympify(0))
-        to_return[prod] = sym.simplify(coeff)
+        # to_return[prod] = sym.simplify(coeff)
+        to_return[prod] = coeff
     
     return to_return
 

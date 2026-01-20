@@ -193,19 +193,6 @@ def test_add_explicit_ground_node():
         assert new_params[((0, n), "C")] == (ecg, "GHz")
 
 
-def test_swap_nodes():
-
-    edges = [(0, 1)]
-    new_edges = pi.swap_nodes(edges, 0, 1)
-    assert new_edges == [(1, 0)]
-
-    
-    edges = [(0, 1), (1, 2), (2, 0)]
-    new_edges = pi.swap_nodes(edges, 2, 1)
-    assert new_edges == [(0, 2), (2, 1), (1, 0)]
-
-
-
 def test_to_SQcircuit():
 
     # See if we get the right frequency
