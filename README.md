@@ -17,6 +17,15 @@ cd sircuitenum/
 pip install -e .
 ```
 
+
+Currently you must also manually install singular and z3 for the varible tranformation functionality. This will be updated to use conda for the full package later.
+```bash
+conda install conda-forge::singular
+```
+```bash
+conda install conda-forge::z3-solver
+```
+
 Examples
 ------------
 Examples of how to use the library to enumerate and optimize circuits are included in the examples folder.
