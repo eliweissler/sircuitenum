@@ -442,7 +442,7 @@ def test_add_hamiltonian_classes():
         assert x in classes and x not in sym_classes
 
     os.remove(TEMP_FILE)
-
+    os.remove(TEMP_FILE2)
     
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=5, n_workers=1)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
@@ -566,19 +566,19 @@ def test_qps_enum():
 
 
 if __name__ == "__main__":
-    test_num_possible_circuits()
-    test_generate_for_specific_graph()
-    test_delete_table()
-    test_find_uniuqe_ground_placements()
-    test_expand_ground_node()
-    test_has_dangling_edges()
-    test_remove_dangling_edges()
-    test_find_equiv_cir_series()
-    test_generate_graphs_node()
-    test__reduce_individual_set()
-    test_trim_graph_node()
-    test__gen_ham_class_row()
-    test_add_hamiltonian_classes()
-    test_generate_all_circuits()
+    # test_num_possible_circuits()
+    # test_generate_for_specific_graph()
+    # test_delete_table()
+    # test_find_uniuqe_ground_placements()
+    # test_expand_ground_node()
+    # test_has_dangling_edges()
+    # test_remove_dangling_edges()
+    # test_find_equiv_cir_series()
+    # test_generate_graphs_node()
+    # test__reduce_individual_set()
+    # test_trim_graph_node()
+    # test__gen_ham_class_row()
+    # test_add_hamiltonian_classes()
+    # test_generate_all_circuits()
     test_qps_enum()
 

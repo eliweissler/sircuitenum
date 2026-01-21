@@ -11,13 +11,13 @@ import contextlib
 from pathlib import Path
 from typing import Union
 from multiprocessing import Pool
-from multiprocessing import get_context
-# try:
-# set_start_method("spawn")
-# except:
-    # print("Multiprocessing fork not available on your system.\
-        #    More than one worker is not supported for enumeration \
-        #    with custom elements.")
+from multiprocessing import set_start_method
+try:
+    set_start_method("fork")
+except:
+    print("Multiprocessing fork not available on your system.\
+           More than one worker is not supported for enumeration \
+           with custom elements.")
 
 import sympy as sym
 import networkx as nx
@@ -386,8 +386,7 @@ def trim_graph_node(db_file: str, n_nodes: int,
     # estimates and better parallel performance
     np.random.shuffle(args)
     if n_workers > 1:
-        spawn_ctx = get_context('spawn')
-        pool = spawn_ctx.Pool(processes=n_workers)
+        pool = Pool(processes=n_workers)
         for _ in tqdm(pool.imap_unordered(_reduce_individual_set, args),
                       total=sum(1 for _ in args)):
             pass
@@ -629,10 +628,9 @@ def generate_and_trim(n_nodes: int, db_file: str = "circuits.db",
         trim_graph_node(db_file=db_file, n_nodes=n_nodes, base=base,
                         n_workers=n_workers)
         print("Finished trimming " + str(n_nodes) + " node circuits.")
-        H_started = True
 
     # Hamiltonian is the slow part
-    if (not resume) or (H_started):
+    if (not resume) or (not H_group_started):
         print("Appending Hamiltonian Classes to " + str(n_nodes) + " node circuits.")
         add_hamiltonian_classes(db_file=db_file, n_nodes=n_nodes,
                                 n_workers=n_workers, resume=resume)
