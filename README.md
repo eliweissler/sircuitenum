@@ -10,22 +10,16 @@ Installation
 Currently `sircuitenum` can only be installed from source, although installation via the Python package manager PyPI will be added soon. The package has been tested on Python 3.11 on both Linux and Mac.
 
 ### Source
+The variable transformations require sagemath/singular, which are only installable via conda. Until the workflow is updated, you must first make a conda environment before pip installing from source. This will be updated to use conda for the full package later.
+```bash
+conda create --name sircuitenum -c conda-forge sage python=3.11
+```
 
 ```bash
 git clone https://github.com/combes-group/sircuitenum.git
 cd sircuitenum/
 pip install -e .
 ```
-
-
-Currently you must also manually install sage and z3 for the varible tranformation functionality. This will be updated to use conda for the full package later.
-```bash
-conda install conda-forge::sage
-```
-```bash
-conda install conda-forge::z3-solver
-```
-
 Examples
 ------------
 Examples of how to use the library to enumerate and optimize circuits are included in the examples folder.
@@ -37,7 +31,7 @@ Testing
 The unit tests can be run locally using `pytest`. To install testing dependencies, install sircuitenum using
 
 ```bash
-pip install pip install -e '.[full]'
+pip install -e '.[full]'
 ```
 
 Disclaimer
