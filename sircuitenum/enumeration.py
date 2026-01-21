@@ -29,6 +29,7 @@ from sircuitenum import utils
 from sircuitenum import reduction as red
 from sircuitenum import qpackage_interface as pi
 from sircuitenum import quantize
+from sircuitenum.singular_interface import initialize_singular
 
 # -------------------------------------------------------------------
 # Functions
@@ -504,8 +505,8 @@ def _gen_ham_class_row(args):
     to_update = ["n_compact", "n_extended", "n_harmonic",
                 "n_free", "n_frozen", "n_sigma",
                 "H_class", "wJT",  "H_class_sym", "wJT_sym"]
-    df.at[uid, "H_class"] = h_class + "_" + wJT_key
-    df.at[uid, "H_class_sym"] = h_class_sym + "_" + wJT_key_sym
+    df.at[uid, "H_class"] = h_class
+    df.at[uid, "H_class_sym"] = h_class_sym
     df.at[uid, "wJT"] = wJT_key
     df.at[uid, "wJT_sym"] = wJT_key_sym
     df.at[uid, "n_compact"] = len(var_types.get("compact", []))
@@ -579,8 +580,7 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
     # Go through all the circuits and update rows with info
     args = list(zip(unique_keys, [db_file]*len(unique_keys)))
     if n_workers > 1:
-        spawn_ctx = get_context('spawn')
-        pool = spawn_ctx.Pool(processes=n_workers)
+        pool = Pool(processes=n_workers, initializer=initialize_singular)
         for _ in tqdm(pool.imap_unordered(_gen_ham_class_row, args),
                           total=n_total, initial=n_total-len(unique_keys)):
             pass

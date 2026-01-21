@@ -42,6 +42,7 @@ setup(
                     'schemdraw==0.19.*',
                     'func_timeout==4.3.*',
                     'antlr4-python3-runtime==4.11',
+                    'z3-solver==4.15.*',
                     'matplotlib',
                     'tqdm',
     ],

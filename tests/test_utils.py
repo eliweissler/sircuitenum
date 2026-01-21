@@ -820,16 +820,28 @@ def write_test_df(fname: str = TEMP_FILE, overwrite: bool = False):
 
     return df
 
+def test_swap_nodes():
+
+    edges = [(0, 1)]
+    new_edges = utils.swap_nodes(edges, 0, 1)
+    assert new_edges == [(1, 0)]
+
+    
+    edges = [(0, 1), (1, 2), (2, 0)]
+    new_edges = utils.swap_nodes(edges, 2, 1)
+    assert new_edges == [(0, 2), (2, 1), (1, 0)]
+
 
 def test_run_with_timeout():
     func = sym.simplify
     x,y = sym.symbols('x y')
-    assert utils.run_with_timeout(func, (x + y)) == x + y
-    assert utils.run_with_timeout(func, (x + x)) == 2*x
-    assert utils.run_with_timeout(func, (x + x), timeout=0.00001) == x + x
+    assert utils.run_with_timeout(func, (x + y,)) == x + y
+    assert utils.run_with_timeout(func, (x + x,)) == 2*x
+    assert utils.run_with_timeout(func, (x + x,), timeout=0.00001) == x + x
 
 
 if __name__ == "__main__":
     # test_gen_param_dict()
     # test_circuit_degree()
-    test_find_circuit_in_db()
+    # test_find_circuit_in_db()
+    test_run_with_timeout()

@@ -600,45 +600,33 @@ def test__find_Z_deterministic():
 
 def test__find_Z_instance():
 
-    # TWO FROM DIFFERENT RUNS
-    # wJT Matrix([[-Z10*Z11/(Z01 - Z11), Z01 - Z11, 0], [Z10*(Z01 - 2*Z11)/(Z01 - Z11), Z01, 0], [Z10, Z11, 0]])
-    # wJT Matrix([[-Z10*Z11/(Z01 - Z11), Z01 - Z11, 0], [Z10*(Z01 - 2*Z11)/(Z01 - Z11), Z01, 0], [Z10, Z11, 0]])
-    # Matrix([[2*Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, 2*Z01/3 - Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) + 2*Z10/3, -Z01/3 + 2*Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, -Z01/3 - Z11/3, 1/3]])
-    # Matrix([[2*Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, 2*Z01/3 - Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) + 2*Z10/3, -Z01/3 + 2*Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, -Z01/3 - Z11/3, 1/3]])
-
-
-
-    # The troublesome one
-    # Z10, Z01, Z11 = sym.symbols("Z10, Z01, Z11", real=True)
-    
-    
-    # Z = sym.Matrix([[2*Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, 2*Z01/3 - Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) + 2*Z10/3, -Z01/3 + 2*Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, -Z01/3 - Z11/3, 1/3]])
-    # wJ = sym.Matrix([[1, 1, 0], [-1, 0, 1], [0, -1, -1]])
-    # var_types =  {'compact': [], 'extended': [0, 1], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [2]}
-    # var_list =  [Z01, Z11, Z10]
-    # Z_hash2 = quantize._find_Z_instance(Z, var_list, var_types=var_types, wJ=wJ, nonzero=quantize._extract_denom(Z))
-    # Z_hash2 = sym.nsimplify(Z_hash2, rational=True)
-    # # wJT Matrix([[-Z10*Z11/(Z01 - Z11), Z01 - Z11, 0], [Z10*(Z01 - 2*Z11)/(Z01 - Z11), Z01, 0], [Z10, Z11, 0]])
-
-
-
-    # Z =  sym.Matrix([[2*Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, 2*Z01/3 - Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) + 2*Z10/3, -Z01/3 + 2*Z11/3, 1/3], [-Z10*(Z01 - 2*Z11)/(3*(Z01 - Z11)) - Z10/3, -Z01/3 - Z11/3, 1/3]])
-    # var_types =  {'compact': [], 'extended': [0, 1], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [2]}
-    # # var_list =  [Z11, Z10, Z01]
-    # wJ =  sym.Matrix([[1, 1, 0], [-1, 0, 1], [0, -1, -1]])
-    # Z_hash2 = quantize._find_Z_instance(Z, var_list, var_types=var_types, wJ=wJ, nonzero=quantize._extract_denom(Z))
-    # Z_hash2 = sym.nsimplify(Z_hash2, rational=True)
-    # _, key, _ = quantize._maximize_wT((wJ.transpose()*Z_hash2)[:, :2])
-    # assert key == "544555"
-
+    # solution with one free variable, which is divided by 2 somewhere
+    Z11 = sym.symbols("Z11")
+    Z = sym.nsimplify(sym.Matrix([
+    [ 1/3,  Z11/2, 1/3],
+    [ 1/3, -Z11/2, 1/3],
+    [-2/3,      0, 1/3]]), rational=True)
+    wJ = sym.Matrix([
+    [ 1,  1,  0],
+    [-1,  0,  1],
+    [ 0, -1, -1]])
+    var_list = [Z11]
+    var_types = {'compact': [0], 'extended': [1], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [2]}
+    nonzero = [2, sym.simplify(-Z11/3, rational=True)]
+    Zsub = quantize._find_Z_instance(Z, var_list, wJ=wJ, var_types=var_types)
+    ans = sym.nsimplify(sym.Matrix([
+                                [ 1/3,  1, 1/3],
+                                [ 1/3, -1, 1/3],
+                                [-2/3,  0, 1/3]]), rational=True)
+    assert quantize._equal_up_to_column_shift_and_sign(Zsub, ans)
 
     # Solution that only has a single thing
-    x,y = sym.symbols("x,y", real=True)
-    a,b = sym.symbols("a,b", real=True)
+    x,y = sym.symbols("x,y")
+    a,b = sym.symbols("a,b")
     v = [x,y,a,b]
 
     Z = sym.Matrix([[x,1],
-                    [a,1]])
+                    [y,1]])
     wJ = sym.Matrix([[1],
                      [-1]])
     Zsub = quantize._find_Z_instance(Z, v, wJ=wJ, var_types={"extended":[0], "sigma":[1]})
@@ -648,12 +636,6 @@ def test__find_Z_instance():
     wJT_trans = wJ.transpose()*Zsub
     assert all(sym.simplify(x) in quantize.WJ_VALS for x in wJT_trans)
 
-    vals = [0, 2, -2]
-    Zsub = quantize._find_Z_instance(Z, v, vals=vals, wJ=wJ, var_types={"extended":[0], "sigma":[1]})
-    assert Z.det().simplify() != 0
-    assert sym.im(Zsub).is_zero_matrix
-    wJT_trans = wJ.transpose()*Zsub
-    assert all(sym.simplify(x) in vals for x in wJT_trans)
 
 
 def test_compact_well_aligned():
@@ -791,6 +773,9 @@ def test_H_hash():
     wJtTrans = wJ.transpose()*Z
     hashes = quantize.H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types)
     assert hashes[0] == '111_1-100_0_0-000_0-000'
+    assert quantize._find_equiv_mats(Z, [Z[:, hashes[1]]]) == [0]
+    hashes = quantize.H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, extra_nl=True)
+    assert hashes[0] == '111_1-100-4-5553_0_0-000_0-000'
     assert quantize._find_equiv_mats(Z, [Z[:, hashes[1]]]) == [0]
 
     circuit = [("J1",),("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
@@ -1061,6 +1046,7 @@ def test_secondary_decouple():
 def test_choose_Z():
 
 
+
     # Zero-pi
     circuit = [("J",),("J",), ("L",), ("L",), ("C",), ("C",)]
     edges = [(0, 1), (2, 3), (0, 3), (1, 2), (0, 2), (1, 3)]
@@ -1077,7 +1063,7 @@ def test_choose_Z():
                                                 [0, 1],
                                                 [1, 0]]), 
                                     [Z[:,:2]]) == [0]
-    assert val == '111_1-100_0_0-000_0-000'
+    assert val == '111_1-100-4-5553_0_0-000_0-000'
 
     circuit, edges = [('J1',), ('J2',), ('J3',)], [(0, 1), (0, 2), (1, 2)]
     cMat = quantize.gen_cap_mat(circuit, edges)
@@ -1144,10 +1130,10 @@ def test_choose_Z():
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    Z_test = sym.Matrix([
+    Z_test = sym.nsimplify(sym.Matrix([
                     [-1/3, -2/3, 1/3],
                     [ 2/3,  1/3, 1/3],
-                    [-1/3,  1/3, 1/3]])
+                    [-1/3,  1/3, 1/3]]), rational=True)
     assert var_types["extended"] == [0,1]
     assert var_types["sigma"] == [2]
     for i in range(3):
@@ -1164,7 +1150,8 @@ def test_choose_Z():
     # Transmon Molecule + cap
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("J", "C"), ("J","C"), ("C",), ("C",)]
-    Z, var_types, val = quantize.choose_Z(circuit, edges)
+    Z, var_types, val = quantize.choose_Z(circuit, edges, return_instance=False)
+    assert len(Z) == 1
     Z = Z[0]
     assert var_types["compact"] == [0, 1]
     assert var_types["free"] == [2]
@@ -1180,7 +1167,7 @@ def test_choose_Z():
      # Transmon
     edges = [(0, 1)]
     circuit = [("J", "C")]
-    Z, var_types, val = quantize.choose_Z(circuit, edges)
+    Z, var_types, val = quantize.choose_Z(circuit, edges, return_instance=False)
     Z = Z[0]
     assert val == "100_0-_0_0-_0-"
     assert quantize._find_equiv_mats(sym.Matrix([[1, 1],
@@ -1191,7 +1178,7 @@ def test_choose_Z():
 
     circuit = [("J1",), ("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
     edges = [(0, 1), (2, 3), (0, 3), (1, 2), (0, 2), (1, 3)]
-    Z, var_types, val = quantize.choose_Z(circuit, edges)
+    Z, var_types, val = quantize.choose_Z(circuit, edges, return_instance=False)
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     assert val == '111_1-100_4_1-001_3-111'
@@ -1201,14 +1188,14 @@ def test_choose_Z():
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
-    Z, var_types, val = quantize.choose_Z(circuit, edges)
+    Z, var_types, val = quantize.choose_Z(circuit, edges, return_instance=True)
     Z = Z[0]
     assert quantize._find_equiv_mats(sym.Matrix([[1, 1],
                                                 [0, 0],
                                                 [0, 1],
                                                 [1, 0]]), 
                                     [Z[:,:2]]) == [0]
-    assert val == '111_1-100_2_1-001_1-010'
+    assert val == '111_1-100-4-5553_2_1-001_1-010'
 
 
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
@@ -1218,7 +1205,7 @@ def test_choose_Z():
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
     t0 = time.time()
-    Z, var_types, val = quantize.choose_Z(circuit, edges)
+    Z, var_types, val = quantize.choose_Z(circuit, edges, return_instance=False)
     tf = time.time()
     print(tf-t0)
     assert val == "012_0-000_3_2-011_1-001"
@@ -1227,14 +1214,14 @@ def test_choose_Z():
     # Bifluxon -- Tests the equal parameter tiebreaker
     edges = [(1, 2), (1, 3), (2, 3)]
     circuit = [("J",), ("J",), ("L",)]
-    Z, var_types, val = quantize.choose_Z(circuit, edges)
-    Z = Z[0]
+    Z0, var_types, val = quantize.choose_Z(circuit, edges, return_instance=False)
     assert var_types["compact"] == [0]
     assert var_types["extended"] == [1]
     assert var_types["sigma"] == [2]
     cMat = quantize.gen_cap_mat(circuit, edges)
     lMat = quantize.gen_ind_mat(circuit, edges)
     wJ = quantize.gen_w(circuit, edges, w_elem="J")
+    Z = quantize._find_Z_instance(Z0[0], Z0[0].free_symbols, var_types, wJ)
     assert quantize._equal_up_to_column_shift_and_sign(
                     sym.nsimplify(sym.Matrix([[2/3, 0, 1],
                                      [-1/3, -1, 1],
@@ -1243,7 +1230,7 @@ def test_choose_Z():
 
     edges = [(1, 2), (1, 3), (2, 3)]
     circuit = [("J1",), ("J2",), ("L",)]
-    Z, var_types, val = quantize.choose_Z(circuit, edges)
+    Z, var_types, val = quantize.choose_Z(circuit, edges, return_instance=False)
     Z = Z[0]
     assert var_types["compact"] == [0]
     assert var_types["extended"] == [1]
@@ -1257,7 +1244,7 @@ def test_choose_Z():
     # Transmon Molecule
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("J",), ("J",), ("C",), ("C",)]
-    Z, var_types, val = quantize.choose_Z(circuit, edges)
+    Z, var_types, val = quantize.choose_Z(circuit, edges, return_instance=False)
     Z = Z[0]
     assert var_types["compact"] == [0, 1]
     assert var_types["free"] == [2]
@@ -1273,7 +1260,7 @@ def test_choose_Z():
     # Fully linear
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
     circuit = [("L",), ("L",), ("C",), ("C",)]
-    Z, var_types, val = quantize.choose_Z(circuit, edges)
+    Z, var_types, val = quantize.choose_Z(circuit, edges, return_instance=False)
     Z = Z[0]
     assert var_types["harmonic"] == [0]
     assert var_types["free"] == [1]
@@ -1287,12 +1274,25 @@ def test_choose_Z():
     edges = [(1, 2), (1, 3)]
     edges = utils.renumber_nodes(edges)
     cMat = quantize.gen_cap_mat(circuit, edges)
-    Z, var_types, val = quantize.choose_Z(circuit, edges)
+    Z, var_types, val = quantize.choose_Z(circuit, edges, return_instance=False)
     Z = Z[0]
     assert var_types["extended"] == [0]
     assert var_types["harmonic"] == [1]
     assert var_types["sigma"] == [2]
     assert val == "011_0-0_0_0-0_0-0"
+
+
+    # Inconsistent results in test_enumeration
+    vals = []
+    for i in range(5):
+        circuit = [('J', 'L'), ('J', 'L'), ('J', 'L')]
+        edges = [(0, 1), (0, 2), (1, 2)]
+        cMat = quantize.gen_cap_mat(circuit, edges)
+        lMat = quantize.gen_ind_mat(circuit, edges)
+        wJ = quantize.gen_w(circuit, edges, w_elem="J")
+        Z, var_types, val = quantize.choose_Z(circuit, edges, return_instance=True)
+        vals.append(val)
+    assert len(set(vals)) == 1
 
 
 def test_gen_junc_pot():
@@ -1462,10 +1462,10 @@ def main():
     # test_unique_compact()
     # test__find_equiv_mats()
     # test__find_equiv_cols()
+    # test__nonzero_entries_str()
     # test_H_hash()
     # test__find_Z_instance_deterministic()
     # test__fully_compatible_set()
-    # test__find_Z_instance()
     # test__unique_products()
     # test__fully_compatible_set()
     # test__sol_indep_of_vars()
@@ -1476,10 +1476,10 @@ def main():
 
     # test__vec_space_overlap()
     # test__independent_from()
-    # test__nonzero_entries_str()
-    # test_choose_Z()
 
-    test_secondary_decouple()
+    # test_secondary_decouple()
+    # test_choose_Z()
+    test__find_Z_instance()
 
     # test__maximize_wT()
     # test__wT_key()

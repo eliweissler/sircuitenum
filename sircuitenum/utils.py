@@ -1008,15 +1008,20 @@ def list_all_columns(db_file: str, table_name: str):
     return cols
 
 
-def _worker(func, args, kwargs, q):
-    """Runs the target function and puts result/exception in a queue."""
-    try:
-        q.put(func(*args, **kwargs))
-    except Exception as e:
-        q.put(e)
-
-
 def run_with_timeout(func, args=(), kwargs=None, timeout=1):
+    """
+    Runs the specified function with a timeout
+
+    Args:
+        func (function): function to run
+        args (tuple, optional): arguments to the function. Defaults to ().
+        kwargs (_type_, optional): kwarguments to the function. Defaults to None.
+        timeout (int, optional): timeout in minutes. Defaults to 1.
+    Raises:
+        KI: KeyboardInterrupt if interrupted by user
+    Returns:
+        None if didn't return, else the function output
+    """
     if kwargs is None:
         kwargs = {}
     try:
@@ -1025,8 +1030,6 @@ def run_with_timeout(func, args=(), kwargs=None, timeout=1):
         return None
     except KeyboardInterrupt as KI:
         raise KI
-    except:
-        return None
 
 
 def set_enum_params(char_to_combo = {'0': ('C',),

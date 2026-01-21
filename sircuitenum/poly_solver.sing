@@ -24,11 +24,6 @@ proc check_solvability(ideal Id) {
 // Returns a single string with markers suitable for parsing in Python.
 proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
 {
-    // system("sh", " echo '----------------------------------------------------------'>> /tmp/sing_debug.log");
-    // system("sh", " echo '----------------------------------------------------------'>> /tmp/sing_debug.log");
-    // system("sh", " echo 'STARTING solve_cover'>> /tmp/sing_debug.log");
-    // string out = "";
-
     list out_list;
     int out_idx = 0;
     out_idx++; out_list[out_idx] = "|||START|||";
@@ -45,42 +40,27 @@ proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
     {
         ring_cmd = "ring r_base = 0, (" + pot_vars + "), dp;";
     }
-    // system("sh", " echo 'ring cmd " + ring_cmd + "'>> /tmp/sing_debug.log");
-
     
     execute(ring_cmd);
 
-    // system("sh", " echo 'nvars_total " + string(nvars_total) + "'>> /tmp/sing_debug.log");
-    // system("sh", " echo 'n_fixed " + string(n_fixed) + "'>> /tmp/sing_debug.log");
-    // system("sh", " echo 'n_pot " + string(n_pot) + "'>> /tmp/sing_debug.log");
 
     // Define ideal from CSV (assumes eqs_csv uses '^' for powers)
     execute("ideal i_base = " + eqs_csv + ";");
-    // system("sh", " echo 'generated ideal " + string(i) + "'>> /tmp/sing_debug.log");
-    // system("sh", " echo 'generated ideal degree " + string(deg(i)) + "'>> /tmp/sing_debug.log");
-    // system("sh", " echo 'fixed params " + fixed_params + "'>> /tmp/sing_debug.log");
-    // system("sh", " echo 'pot vars " + pot_vars + "'>> /tmp/sing_debug.log");
 
 
     // Step 1: Factor the ideal
     // For each factorization component, run minAssGTZ to get prime components
     list fac_basis = facstd(i_base);
-    // system("sh", " echo 'factored ideal into " + string(size(fac_basis)) + " components'>> /tmp/sing_debug.log");
     int idx_p, idx_k, idx_j, idx_m, idx_q;
     int branch_id = 0;
     for (idx_q=1; idx_q <= size(fac_basis); idx_q++)
     {
-        // system("sh", " echo '-----------------------------------'>> /tmp/sing_debug.log");
-        // system("sh", " echo 'factor basis " + string(q) + " : " + string(fac_basis[q]) + "'>> /tmp/sing_debug.log");
-        list prime_comps = minAssGTZ(fac_basis[idx_q]);
+         list prime_comps = minAssGTZ(fac_basis[idx_q]);
         // Step 2: For each prime component, find maximal independent sets and run grobcov
         for (idx_p=1; idx_p<=size(prime_comps); idx_p++)
         {
             ideal comp = prime_comps[idx_p];
             comp = std(comp);
-            // system("sh", " echo '---------------------------'>> /tmp/sing_debug.log");
-            // system("sh", " echo 'prime component number " + string(p) + "'>> /tmp/sing_debug.log");
-            // system("sh", " echo 'prime component " + string(comp) + "'>> /tmp/sing_debug.log");
             // Find maximal independent set that respects fixed parameters
             intvec indep;
             int max_score = -1;
@@ -116,8 +96,6 @@ proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
                     }
                 }
             }
-
-            // system("sh", " echo 'indep set " + string(indep) + "'>> /tmp/sing_debug.log");
             // Build parameter and variable lists
             // Independent vars become additional parameters for grobcov
             // Dependent vars are what we solve for
@@ -136,8 +114,6 @@ proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
                     var_str = var_str + string(var(idx_m));
                 }
             }
-            // system("sh", " echo 'param_str " + param_str + "'>> /tmp/sing_debug.log");
-            // system("sh", " echo 'var_str " + var_str + "'>> /tmp/sing_debug.log");
         if (param_str == "")
         {
             // No independent parameters discovered; single branch with comp basis
@@ -191,12 +167,9 @@ proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
             def Cov = grobcov(comp_gc, "ext", 1, "rep", 1);
             for (idx_k=1; idx_k<=size(Cov); idx_k++)
             {
-                // system("sh", " echo '--------------'>> /tmp/sing_debug.log");
                 branch_id = branch_id + 1;
                 def seg = Cov[idx_k];
                 ideal basis = seg[2];
-                // system("sh", " echo 'grobcov branch " + string(k) + "'>> /tmp/sing_debug.log");
-                // system("sh", " echo 'basis:  " + string(basis) + "'>> /tmp/sing_debug.log");
                 // Test whether we have a solution here
                 if (basis[1] != 1)
                 { 
@@ -205,10 +178,6 @@ proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
                     //def seginfo = seg[3];
                     ideal lpp = seg[1];
                     def constraints_info = seg[3];
-                    // system("sh", " echo 'grobcov lpp " + string(seg[1]) + "'>> /tmp/sing_debug.log");
-                    // TODO: INSIDE OF SEGINFO THERES INFO ABOUT IT BEING BAD -- Maybe look at Grob1Levels
-                    //// system("sh", " echo 'grobcov seginfo " + string(seginfo) + "'>> /tmp/sing_debug.log");
-                    // system("sh", " echo 'grobcov constraints_info " + string(constraints_info) + "'>> /tmp/sing_debug.log");
                     ideal E_null = constraints_info[1];
                     ideal N_nonnull = constraints_info[2];
                     out_idx++; out_list[out_idx] = "|||BRANCH|||" + string(branch_id) + newline;
@@ -222,11 +191,8 @@ proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
                         if (E_null[idx_j] != 0) { out_idx++; out_list[out_idx] = string(E_null[idx_j]) + newline; }
                     }
                     // Count number of solutions to parameter constraints
-
-                    // system("sh", " echo 'E_null " + string(E_null) + "'>> /tmp/sing_debug.log");
                     setring r_gc_pr;
                     ideal E_null_pr = imap(r_gc_dp, E_null);
-                    // system("sh", " echo 'E_null_pr " + string(E_null_pr) + "'>> /tmp/sing_debug.log");
                     if (size(variables(E_null_pr)) > 0)
                     {
                         string ring_cmd_temp;
@@ -238,7 +204,6 @@ proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
                             };
                         execute(ring_cmd_temp);
                         ideal E_null_temp = std(imap(r_gc_pr, E_null_pr));
-                        // system("sh", " echo 'E_null_temp " + string(E_null_temp) + "'>> /tmp/sing_debug.log");
                         int num_param_sols = vdim(E_null_temp);
                         out_idx++; out_list[out_idx] = "|||CONSTRAINT_BASIS|||"+newline;
                         if (num_param_sols > 0)
@@ -262,12 +227,9 @@ proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
                     }
                     out_idx++; out_list[out_idx] = "|||BASIS|||" + newline;
                     if (size(variables(basis)) > 0) {
-                        // system("sh", " echo 'in loop basis " + string(basis) + "'>> /tmp/sing_debug.log");
                         execute("ring r_temp = (0," + param_str + "), (" + string(variables(basis)) + "), lp;");
                         ideal basis_temp = std(imap(r_gc_dp, basis));
                         int num_solutions = vdim(basis_temp);
-                        // system("sh", " echo 'in loop bt " + string(basis_temp) + "'>> /tmp/sing_debug.log");
-                        // system("sh", " echo 'in loop num_solutions " + string(num_solutions) + "'>> /tmp/sing_debug.log");
                         for (idx_j=1; idx_j<=size(basis_temp); idx_j++)
                         {
                             out_idx++; out_list[out_idx] = string(basis_temp[idx_j]) + newline;
@@ -284,9 +246,6 @@ proc solve_cover(string fixed_params, string pot_vars, string eqs_csv)
                         out_idx++; out_list[out_idx] = "|||NUM_SOLUTIONS|||" + string(vdim(basis)) + newline;
                     }
                     kill seg, constraints_info, E_null, N_nonnull;
-                }
-                else{
-                    // system("sh", " echo 'no solution ----'>> /tmp/sing_debug.log");
                 }
                 }
                 kill Cov;

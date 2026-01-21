@@ -14,7 +14,7 @@ from sympy import symbols, sympify
 
 
 from sircuitenum.singular_interface import solve_with_singular, parse_singular_output, filter_redundant_branches
-from sircuitenum.singular_interface import extract_mappings, _robust_substitute, is_compatible
+from sircuitenum.singular_interface import extract_mappings, _robust_substitute, is_compatible, _eq_as_numer_denom
 
 
 import json
@@ -537,6 +537,18 @@ class TestSingularConsistency:
                     Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21]
         assert is_compatible(eq_set) is True
 
+    def test_fraction_inconsistency(self):
+        """System with fractions that is inconsistent."""
+        x, y = sym.symbols('x y')
+        eqs = [1/x + 1/y, x + y - 1]
+        assert is_compatible(eqs) is False
+
+    def test_fraction_consistency(self):
+        """System with fractions that is consistent."""
+        x, y = sym.symbols('x y')
+        eqs = [1/x + 1/y - 1, x*y - 2]
+        assert is_compatible(eqs) is True
+
 
 class TestSingularSolver():
 
@@ -744,6 +756,21 @@ class TestSingularSolver():
         success = compare_results(eqs, branches, math_branches, verbose=True)
         assert success, "Solver results do not match Mathematica benchmark."
 
+    def test_11_simple_lowercase(self):
+        x, y, nzVar = sym.symbols('x y nzVar')
+        eqs = [x - y - 1, -nzVar*(x - y) + 1]
+        branches = solve_with_singular(eqs)
+        assert len(branches) == 1
+
+    def test_12_with_fractions(self):
+        self.setup_method()
+        eqs = [self.a - self.b/self.x]
+        branches = solve_with_singular(eqs)
+        
+        # Expectation: 
+        # Only the a = b case
+        assert len(branches) == 2
+
 def test_simple_subset_removal():
     """
     Test that a specific solution (all vars=0) is removed if it 
@@ -894,6 +921,20 @@ def test_extract_mappings():
     assert len(real_maps) == 1
   
 
+def test_eq_as_numer_denom():
+    x, y = sym.symbols("x y")
+    numer, denom = _eq_as_numer_denom(sym.Eq(1/(x + 1), 0))
+    assert numer == 1
+    assert denom == x + 1
+
+    numer, denom = _eq_as_numer_denom(sym.Eq(x/y, 2))
+    assert sym.simplify(numer - (x - 2*y)) == 0
+    assert denom == y
+
+    numer, denom = _eq_as_numer_denom(sym.Eq((x + 1)/(x - 1), (y + 1)/(y - 1)))
+    assert denom == (x - 1)*(y - 1)
+
+
 if __name__ == "__main__":
     # Run tests
     # test_solver = TestSingularParser()
@@ -901,15 +942,17 @@ if __name__ == "__main__":
     # test_solver.test_parse_no_star()
     test_solver = TestSingularSolver()
     test_solver.test_01_parametric_singularity()
-    test_solver.test_02_reducible_geometry()
-    test_solver.test_03_inconsistent_system()
-    test_solver.test_04_mixed_dimension()
-    test_solver.test_05_cyclic_3()
-    test_solver.test_06_algebraic_number()
-    test_solver.test_07_vs_mathematica_1()
-    test_solver.test_08_vs_mathematica_2()
-    test_solver.test_09_duplicate_eqs()
-    test_solver.test_10_vs_mathematica_3()
+    # test_solver.test_02_reducible_geometry()
+    # test_solver.test_03_inconsistent_system()
+    # test_solver.test_04_mixed_dimension()
+    # test_solver.test_05_cyclic_3()
+    # test_solver.test_06_algebraic_number()
+    # test_solver.test_07_vs_mathematica_1()
+    # test_solver.test_08_vs_mathematica_2()
+    # test_solver.test_09_duplicate_eqs()
+    # test_solver.test_10_vs_mathematica_3()
+    # test_solver.test_11_simple_lowercase()
+    # test_solver.test_12_with_fractions()
     # test_filter = TestRedundantBranchFilter()
     # test_filter.test_simple_subset_removal()
     # test_filter.test_keep_singularity_filling_branch()
