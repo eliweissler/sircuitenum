@@ -7,8 +7,12 @@ __all__ = [
     "solve_with_singular", "is_compatible", "extract_mappings"
 ]
 
-import sys
+import subprocess
 import os
+import signal
+import time
+import sys
+import select
 
 import re
 import itertools, functools
@@ -17,6 +21,12 @@ from typing import List, Dict, Any, Optional, Union, Iterable
 
 # Singular Interface -- Initialize once per process
 from sage.interfaces.singular import Singular
+from sage.all import singular
+from sage.features import Executable
+try:
+    SINGULAR_PATH = Executable("Singular","Singular").absolute_filename()
+except:
+    raise ValueError("Cannot find Singular Binary")
 WORKER_SINGULAR = None
 
 import sympy as sym
@@ -703,12 +713,147 @@ def initialize_singular():
     # Sage's process spawner tries to flush stdout, but multiprocessing 
     # workers on macOS often have sys.stdout set to None. 
     # Assign it to /dev/null to prevent an AttributeError.
-    if sys.stdout is None:
-        sys.stdout = open(os.devnull, 'w')
-    if sys.stderr is None:
-        sys.stderr = open(os.devnull, 'w')
-    global WORKER_SINGULAR
-    WORKER_SINGULAR = Singular()
+    # if sys.stdout is None:
+    #     sys.stdout = open(os.devnull, 'w')
+    # if sys.stderr is None:
+    #     sys.stderr = open(os.devnull, 'w')
     lib_path = Path(__file__).with_name("poly_solver.sing")
-    WORKER_SINGULAR.eval(f'LIB "{str(lib_path)}";')
-    WORKER_SINGULAR.eval("ring SUPER_RING = 0, (a,b,c,d,f,g,h,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z), dp;")
+    startup_code = ""
+    startup_code += f'LIB "{str(lib_path)}";\n'
+    startup_code += "ring SUPER_RING = 0, (a,b,c,d,f,g,h,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z), dp;\n"
+    # startup_code += "option(prot);"
+    global WORKER_SINGULAR
+    WORKER_SINGULAR = SafeSingular(startup_code=startup_code, binary_path=SINGULAR_PATH, timeout=60)
+
+
+
+class SafeSingular:
+    def __init__(self, startup_code="", binary_path=SINGULAR_PATH, timeout=30):
+        self.binary_path = binary_path
+        self.startup_code = startup_code
+        self.timeout = timeout
+        self.process = None
+
+    def start(self):
+        """Launches process and runs startup code."""
+        self.process = subprocess.Popen(
+            [self.binary_path, "--no-tty", "--quiet"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True, # Critical for killing process tree
+            bufsize=1
+        )
+        
+        # Immediately run the startup code if it exists
+        if self.startup_code:
+            try:
+                self.eval(self.startup_code)
+            except (TimeoutError, RuntimeError):
+                print("Startup code failed! Killing process.")
+                self.kill()
+                raise
+
+    def eval(self, cmd, timeout=None):
+        """
+        Public method: Ensures process exists, then runs command.
+        """
+        # Auto-restart if dead
+        if self.process is None:
+            self.start()
+
+            
+        return self._execute_raw(cmd, timeout)
+    
+    def _execute_raw(self, cmd, timeout):
+
+        if timeout is None:
+            timeout = self.timeout
+        # Unique sentinel to mark end of command
+        sentinel = "___CMD_DONE___"
+        
+        # Ensure command ends with newline and forces a flush
+        if not cmd.strip().endswith(";"):
+            cmd += ";"
+        full_cmd = f"{cmd};\nprint('{sentinel}');\nprint('');\n"
+
+        if self.process.poll() is not None:
+            self.process = None
+            raise RuntimeError("Singular process is dead.")
+
+        # Write command
+        try:
+            self.process.stdin.write(full_cmd)
+            self.process.stdin.flush()
+        except (BrokenPipeError, AttributeError):
+            self.kill()
+            raise RuntimeError("Singular process died unexpectedly.")
+
+        output_buffer = ""
+        start_time = time.time()
+        
+        # Get file descriptor for low-level read
+        fd = self.process.stdout.fileno()
+
+        while True:
+            # Calculate timeout
+            if timeout:
+                remaining = timeout - (time.time() - start_time)
+                if remaining <= 0:
+                    self.kill()
+                    raise TimeoutError(f"Singular timed out after {timeout} seconds")
+            else:
+                remaining = None
+
+            # Select waits for DATA, not LINES. 
+            ready, _, _ = select.select([self.process.stdout], [], [], remaining)
+
+            if ready:
+                # RAW READ: Read up to 1024 bytes. 
+                # This returns '1' or '.' immediately without waiting for \n
+                chunk = os.read(fd, 1024).decode('utf-8', errors='replace')
+                
+                if not chunk: # EOF
+                    self.kill()
+                    raise RuntimeError("Singular process closed connection.")
+                
+                output_buffer += chunk
+
+                # Check for Soft Errors
+                if "?" in chunk and "error" in chunk.lower():
+                     # Simple heuristic: if we see "? ... error", abort
+                     pass 
+
+                # Check for sentinel
+                if sentinel in output_buffer:
+                    break
+            else:
+                self.kill()
+                raise TimeoutError("Singular timed out")
+
+        return output_buffer.replace(sentinel, "").strip()
+
+    def _wait_for_prompt(self, timeout):
+        """Consumes initial banner/prompt output."""
+        start = time.time()
+        fd = self.process.stdout.fileno()
+        buf = ""
+        while (time.time() - start) < timeout:
+            r, _, _ = select.select([self.process.stdout], [], [], 0.1)
+            if r:
+                chunk = os.read(fd, 1024).decode('utf-8')
+                buf += chunk
+                # Singular prompt is usually ">"
+                if ">" in buf:
+                    return
+        # If we time out, we assume it's silent and ready
+        return
+
+    def kill(self):
+        """Force kills the process group and resets state."""
+        if self.process:
+            pgid = os.getpgid(self.process.pid)
+            os.killpg(pgid, signal.SIGKILL)
+            self.process.wait()
+            self.process = None

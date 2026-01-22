@@ -7,7 +7,9 @@ __all__ = [
     "find_rational_vars_integer_results",
 ]
 import sympy as sym
-from z3 import Solver, Real, RealVal, Int, Sum, If, sat, unsat, unknown, Optimize, Or, IsInt, set_param
+from z3 import Solver, Real, RealVal, Int, Sum, If, sat, unsat, unknown, Optimize, Or, IsInt, set_param, Abs
+
+from sircuitenum.singular_interface import _eq_as_numer_denom
 
 # Set seeds for reproducibility
 set_param('smt.random_seed', 7)
@@ -15,7 +17,7 @@ set_param('sat.random_seed', 7)
 
 
 def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
-                                       variables, max_result_range=5, timeout_ms=10000,
+                                       variables, max_result_range=4, timeout_ms=10000,
                                        block_negative_equivalents=True):
     """
     Finds rational variable assignments that satisfy integer and nonzero constraints with minimal total cost.
@@ -52,78 +54,25 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
              
     :rtype: list[dict]
     """
+
+    # print("integer_constraints = ", integer_constraints)
+    # print("nonzero_constraints = ", nonzero_constraints)
+    # print("variables = ", variables)
+
+    min_possible_cost, solv, cost_terms, z3_vars, cost = _calc_min_cost(integer_constraints, nonzero_constraints,
+                                                variables, max_result_range,
+                                                timeout_ms=200)
     
-    # --- STEP 1: PRE-COMPILATION ---
-    z3_vars = {var: Real(str(var)) for var in variables}
-    solv = Solver()
-    
-    if timeout_ms:
-        solv.set("timeout", timeout_ms)
+    solv.set("timeout", timeout_ms)
 
-    tracked_exprs = []
-    
-    # 1a. Integer Constraints
-    # We simplify ONCE here to avoid overhead inside loops.
-    for expr in integer_constraints:
-        expr = sym.simplify(expr, rational=True)
-        if isinstance(expr, sym.Eq):
-            lhs = _sympy_to_z3(expr.lhs, z3_vars)
-            rhs = _sympy_to_z3(expr.rhs, z3_vars)
-            solv.add(lhs == rhs)
-        else:
-            z = _sympy_to_z3(expr, z3_vars)
-            solv.add(IsInt(z))
-            solv.add(z >= -max_result_range)
-            solv.add(z <= max_result_range)
-            tracked_exprs.append(z)
 
-    # 1b. Nonzero Constraints
-    tracked_expr_map = {str(z): i for i, z in enumerate(tracked_exprs)}
-    forced_nonzero_indices = set()
-    for expr in nonzero_constraints:
-        # Factor expression to handle products and add 
-        # Each factor as a separate non-zero constraint.
-        simple_expr = sym.simplify(expr, rational=True)
-        factored_expr = sym.factor(simple_expr)
-        if factored_expr.is_Mul:
-            factors = factored_expr.args
-        else:
-            factors = [factored_expr]
-        for sub_expr in factors:
-            z_expr = _sympy_to_z3(sub_expr, z3_vars)
-            solv.add(z_expr != 0)
 
-    # 1c. Cost Function (Sum of Absolute Values)
-    cost = Int('cost')
-    solv.add(cost == Sum([If(e >= 0, e, -e) for e in tracked_exprs]))
-
-    # --- STEP 2: LINEAR COST SWEEP ---
     # Theoretical Max Cost = (Number of Exprs) * (Max Value per Expr)
     # We start at 0 and work up. The first SAT we hit is the proven global minimum.
-    max_possible_cost = len(tracked_exprs) * max_result_range
-    
-    # Theoretical Min Cost = sum(min cost per term)
-    min_possible_cost = 0
-    # Very fast timeout (50ms) per check to infer minimum cost from forced non-zeros
-    solv.set("timeout", 50)
-    for i, z in enumerate(tracked_exprs):
-        min_val = 0
-        for val in range(0, max_result_range + 1):
-            solv.push()
-            solv.add(z == val)
-            result = solv.check()
-            solv.pop()
-            if result != unsat:
-                break
-            min_val += 1
-        min_possible_cost += min_val
-    # Reset timeout to the user's main timeout (or default)
-    if timeout_ms:
-        solv.set("timeout", timeout_ms)
-    else:
-        solv.set("timeout", 10**8) # Reset to Large Timeout if None specified
+    max_possible_cost = len(cost_terms) * max_result_range
 
     for target_cost in range(min_possible_cost, max_possible_cost + 1):
+
         # Push a temporary context to check "Can Cost == k?"
         solv.push()
         solv.add(cost == target_cost)
@@ -133,7 +82,7 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
         if check_result == sat:
             # SUCCESS! We found the lowest possible cost.
             # No verification loop needed because we checked 0, 1, 2... in order.
-            solutions = _enumerate_solutions(solv, tracked_exprs, z3_vars,
+            solutions = _enumerate_solutions(solv, cost_terms, z3_vars,
                                              block_negative_equivalents=block_negative_equivalents)
             solv.pop() 
             return solutions
@@ -144,6 +93,112 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
         solv.pop() # Remove "cost == k", continue to k+1
 
     return []
+
+
+def _calc_min_cost(integer_constraints, nonzero_constraints,
+                    variables, max_result_range=4, timeout_ms=200):
+    
+    # --- STEP 1: PRE-COMPILATION ---
+    z3_vars = {var: Real(str(var)) for var in variables}
+    solv = Solver()
+    solv.set("timeout", timeout_ms)
+
+    # 1a. Integer Constraints
+    # We simplify ONCE here to avoid overhead inside loops.
+    cost_terms = []
+    integer_expr = {}
+    for expr in integer_constraints:
+        rat_expr = sym.simplify(expr, rational=True)
+        num, den = _eq_as_numer_denom(rat_expr)
+        if (num, den) in integer_expr:
+            cost_terms.append(integer_expr[(num, den)])
+            continue
+        # Simple linear/poly constraint: Z01, Z02-Z22, etc.
+        # Or one with rational coefficients: Z01/2 etc.
+        # Bound it directly
+        if len(den.free_symbols) == 0:    
+            z = _sympy_to_z3(sym.simplify(num/den), z3_vars)
+            if not isinstance(z, int):
+                solv.add(IsInt(z))
+                solv.add(z >= -max_result_range)
+                solv.add(z <= max_result_range)
+                integer_expr[(num, den)] = z
+            cost_terms.append(z)
+        # Rational constraint: N/D
+        # Transform: N == k * D
+        # with auxiliary variable k
+        # (bound k)
+        else:
+            k = Int(f"aux_{len(cost_terms)}")
+            z_num = _sympy_to_z3(num, z3_vars)
+            z_den = _sympy_to_z3(den, z3_vars)
+            solv.add(z_num == k * z_den)
+            solv.add(k >= -max_result_range)
+            solv.add(k <= max_result_range)
+            integer_expr[(num, den)] = k
+            cost_terms.append(k)
+
+    # 1b. Nonzero Constraints
+    # Consider numerator and denominator seperately
+    nz_factors = set()
+    for expr in nonzero_constraints:
+        num, den = _eq_as_numer_denom(sym.nsimplify(expr, rational=True))
+        all_expr = [num]
+        if den != 1:
+            all_expr.append(den)
+        for nz_expr in all_expr:
+            factored_expr = sym.factor(nz_expr)
+            if factored_expr.is_Mul:
+                factors = factored_expr.args
+            else:
+                factors = [factored_expr]
+            for sub_expr in factors:
+                if sub_expr not in nz_factors:
+                    if len(sub_expr.free_symbols) == 0 and expr != 0:
+                        continue
+                    z_expr = _sympy_to_z3(sub_expr, z3_vars)
+                    solv.add(z_expr != 0)
+                    nz_factors.add(z_expr)
+
+    # 1c. Cost Function (Sum of Absolute Values)
+    cost = Int('cost')
+    
+    
+    # Theoretical Min Cost = sum(min cost per term)
+    min_possible_cost = 0
+    cost_term_dict = {}
+    total_cost = None
+    for term in cost_terms:
+        if total_cost is None:
+            total_cost = Abs(term)
+        else:
+            total_cost += Abs(term)
+        if term in cost_term_dict:
+            min_possible_cost += cost_term_dict[term]
+            continue
+        min_val = 0
+        for val in range(0, max_result_range + 1):
+            solv.push()
+            solv.add(term == val)
+            result = solv.check()
+            solv.pop()
+            if result != unsat:
+                break
+            min_val += 1
+        min_possible_cost += min_val
+        cost_term_dict[term] = min_val
+    solv.add(cost == total_cost)
+
+    # Verify
+    solv.push()
+    solv.add(cost < min_possible_cost)
+    check_result = solv.check()
+    if check_result == sat:
+        raise ValueError("Bad minimum value")
+    solv.pop()
+
+    return min_possible_cost, solv, cost_terms, z3_vars, cost
+
 
 def _enumerate_solutions(solver_with_state, tracked_exprs, z3_vars, max_solutions=1000,
                          block_negative_equivalents=True):
@@ -189,22 +244,23 @@ def _enumerate_solutions(solver_with_state, tracked_exprs, z3_vars, max_solution
     return results
 
 def _sympy_to_z3(e, z3_vars):
-    if e.is_Integer:
+    e = sym.sympify(e)
+    if e.is_Integer: 
         return int(e)
-    elif e.is_Rational:
-        return RealVal(e.p) / RealVal(e.q)
-    if e.is_Symbol:
+    if e.is_Symbol: 
         return z3_vars[e]
-    if e.is_Add:
+    if e.is_Add: 
         return Sum([_sympy_to_z3(arg, z3_vars) for arg in e.args])
     if e.is_Mul:
         res = 1
-        for arg in e.args:
+        for arg in e.args: 
             res = res * _sympy_to_z3(arg, z3_vars)
         return res
     if e.is_Pow:
         base, exp = e.args
         return _sympy_to_z3(base, z3_vars) ** int(exp)
+    if e.is_Rational:
+        return RealVal(e.p) / RealVal(e.q)
     raise ValueError(f"Unsupported expression type: {type(e)}")
 
 

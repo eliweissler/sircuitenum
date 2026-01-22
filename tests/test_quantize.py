@@ -598,6 +598,33 @@ def test__find_Z_deterministic():
     assert sym.im(Zsub).is_zero_matrix
 
 
+def test__find_Z_min_cost():
+
+    Z21, Z12, Z01, Z02, Z11, Z22 = sym.symbols('Z21 Z12 Z01 Z02 Z11 Z22')
+    wJ =  sym.Matrix([[1, 1, 1, 0, 0, 0], [-1, 0, 0, 1, 1, 0], [0, -1, 0, -1, 0, 1], [0, 0, -1, 0, -1, -1]])
+    var_types =  {'compact': [0], 'extended': [1, 2], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [3]}
+
+    # Same as test z3 interface, but with 3 entries from compact mode
+    Z = sym.Matrix([[-1/4, -Z01/4 - Z21/4, -3*Z02*Z21/(4*(2*Z01 - Z21)) - Z02/4, 1/4], [3/4, 3*Z01/4 - Z21/4, Z02*Z21/(4*(2*Z01 - Z21)) + 3*Z02/4, 1/4], [-1/4, -Z01/4 + 3*Z21/4, Z02*Z21/(4*(2*Z01 - Z21)) - Z02/4, 1/4], [-1/4, -Z01/4 - Z21/4, Z02*Z21/(4*(2*Z01 - Z21)) - Z02/4, 1/4]])
+    var_list =  [Z01, Z02, Z21]
+    min_cost = quantize._find_Z_min_cost(Z, var_list, var_types, wJ)
+    assert min_cost == 9
+
+    Z =  sym.Matrix([[-1/4, 3*Z11/4, -Z22/2, 1/4], [3/4, -Z11/4, Z22/2, 1/4], [-1/4, -Z11/4, Z22/2, 1/4], [-1/4, -Z11/4, -Z22/2, 1/4]])
+    wJT =  sym.Matrix([[-1, Z11, -Z22, 0], [0, Z11, -Z22, 0], [0, Z11, 0, 0], [1, 0, 0, 0], [1, 0, Z22, 0], [0, 0, Z22, 0]])
+    var_list = [Z11, Z22]
+    min_cost = quantize._find_Z_min_cost(Z, var_list, var_types, wJ)
+    assert min_cost == 10
+
+    Z =  sym.Matrix([[-1/4, -3*Z21/8, 3*Z12/4, 1/4], [3/4, Z21/8, -Z12/4, 1/4], [-1/4, 5*Z21/8, -Z12/4, 1/4], [-1/4, -3*Z21/8, -Z12/4, 1/4]])
+    wJT =  sym.Matrix([[-1, -Z21/2, Z12, 0], [0, -Z21, Z12, 0], [0, 0, Z12, 0], [1, -Z21/2, 0, 0], [1, Z21/2, 0, 0], [0, Z21, 0, 0]])
+    var_list = [Z21, Z12]
+    min_cost = quantize._find_Z_min_cost(Z, var_list, var_types, wJ)
+    assert min_cost == 13
+
+
+    return
+
 def test__find_Z_instance():
 
     # solution with one free variable, which is divided by 2 somewhere
@@ -775,7 +802,7 @@ def test_H_hash():
     assert hashes[0] == '111_1-100_0_0-000_0-000'
     assert quantize._find_equiv_mats(Z, [Z[:, hashes[1]]]) == [0]
     hashes = quantize.H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, extra_nl=True)
-    assert hashes[0] == '111_1-100-4-5553_0_0-000_0-000'
+    assert hashes[0] == '111_1-100-4-1-5553_0_0-000_0-000'
     assert quantize._find_equiv_mats(Z, [Z[:, hashes[1]]]) == [0]
 
     circuit = [("J1",),("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
@@ -1046,6 +1073,12 @@ def test_secondary_decouple():
 def test_choose_Z():
 
 
+    # All compact
+    circuit = [('C_1',), ('C_2',), ('J_1',), ('C_3', 'J_2'), ('C_4',), ('C_5',)]
+    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    Z, var_types, val = quantize.choose_Z(circuit, edges, return_instance=True)
+    assert val == "200_0-0-2-1-5445_1_0-0_1-1"
+
 
     # Zero-pi
     circuit = [("J",),("J",), ("L",), ("L",), ("C",), ("C",)]
@@ -1063,7 +1096,7 @@ def test_choose_Z():
                                                 [0, 1],
                                                 [1, 0]]), 
                                     [Z[:,:2]]) == [0]
-    assert val == '111_1-100-4-5553_0_0-000_0-000'
+    assert val == '111_1-100-4-1-5553_0_0-000_0-000'
 
     circuit, edges = [('J1',), ('J2',), ('J3',)], [(0, 1), (0, 2), (1, 2)]
     cMat = quantize.gen_cap_mat(circuit, edges)
@@ -1195,7 +1228,7 @@ def test_choose_Z():
                                                 [0, 1],
                                                 [1, 0]]), 
                                     [Z[:,:2]]) == [0]
-    assert val == '111_1-100-4-5553_2_1-001_1-010'
+    assert val == '111_1-100-4-1-5553_2_1-001_1-010'
 
 
     edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
@@ -1478,8 +1511,9 @@ def main():
     # test__independent_from()
 
     # test_secondary_decouple()
-    # test_choose_Z()
-    test__find_Z_instance()
+    test_choose_Z()
+    # test__find_Z_instance()
+    # test__find_Z_min_cost()
 
     # test__maximize_wT()
     # test__wT_key()

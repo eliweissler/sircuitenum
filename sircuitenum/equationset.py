@@ -68,7 +68,17 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
         for d in nonzero_constraints:
             nz_eq *= d
         nz_term = [1 - nz_var * nz_eq]
-        
+
+    # Unique-ify terms
+    new_terms = []
+    for ti in terms:
+        new_ti = []
+        for eq in ti:
+            if not any(eq-eq0 == 0 for eq0 in new_ti):
+                new_ti.append(eq)
+        new_terms.append(new_ti)
+    terms = new_terms
+
     # Mark ones that are individually compatible
     n_terms = len(terms)
     is_solvable = [is_compatible(terms[i] + nz_term, check_fraction=False) if terms[i] else False for i in range(n_terms)]
@@ -86,7 +96,6 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
         if not is_compatible(combined_terms + nz_term, check_fraction=False):
             incompatible_pairs.add((i1, i2))
     
-
     G = nx.Graph()
     G.add_nodes_from(range(n_terms))
     G.add_edges_from(incompatible_pairs)

@@ -470,26 +470,20 @@ def _gen_ham_class_row(args):
 
     if df.shape[0] > 1:
         raise ValueError("Multiple Circuits on Unique Key")
+    
+    # Choose the transformation
+    ## Different Circuit Paramter values
     entry = df.iloc[0]
-
-    # Generate the Hamiltonian
+    circuit, edges = utils.add_elem_number(entry.circuit), entry.edges
     try:
-        ## Same Circuit Paramter values
-        # Choose transformation
-        Z_sym, var_types, h_class_sym = quantize.choose_Z(entry.circuit, entry.edges)
-        n_nd = 0
-        for nd_mode in ["free", "frozen", "sigma"]:
-            n_nd += len(var_types.get(nd_mode, []))
-
-        # Apply transformation and record form of nonlinear terms
-        circuit, edges = utils.add_elem_number(entry.circuit), entry.edges
-        wJT = quantize.gen_w(circuit, edges, "J").transpose()
-        wJT_trans_sym, wJT_key_sym, _ = quantize._maximize_wT(sym.simplify(wJT*Z_sym[0])[:, :-n_nd])
-
-        ## Different Circuit Paramter values
         Z, var_types, h_class = quantize.choose_Z(circuit, edges)
-        wJT_trans, wJT_key, _ = quantize._maximize_wT(sym.simplify(wJT*Z[0])[:, :-n_nd])
-
+        wJT_key = h_class.split("_")[1].split("-")[-1]
+    except TimeoutError as timeout:
+        print("[TIMEOUT]")
+        print("circuit =", circuit)
+        print("edges =", edges)
+        h_class = "UNDEFINED"
+        wJT_key = "UNDEFINED"
     except KeyboardInterrupt as kbi:
         raise kbi
     except Exception as exc:
@@ -497,9 +491,36 @@ def _gen_ham_class_row(args):
         print("Unable to Generate Hamiltonian for:", uid)
         print(traceback.format_exc())
         print(exc)
+        print("circuit =", circuit)
+        print("edges =", edges)
         print("-------------------------------------------")
-        return
+        h_class = "UNDEFINED"
+        wJT_key = "UNDEFINED"
     
+    ## Same Circuit Paramter values
+    circuit, edges = entry.circuit, entry.edges
+    try:
+        Z_sym, var_types, h_class_sym = quantize.choose_Z(circuit, edges)
+        wJT_key_sym = h_class_sym.split("_")[1].split("-")[-1]
+    except TimeoutError as timeout:
+        print("[TIMEOUT]")
+        print("circuit =", circuit)
+        print("edges =", edges)
+        h_class_sym = "UNDEFINED"
+        wJT_key_sym = "UNDEFINED"
+    except KeyboardInterrupt as kbi:
+        raise kbi
+    except Exception as exc:
+        print("-------------------------------------------")
+        print("Unable to Generate Hamiltonian for:", uid)
+        print(traceback.format_exc())
+        print(exc)
+        print("circuit =", circuit)
+        print("edges =", edges)
+        print("-------------------------------------------")
+        h_class_sym = "UNDEFINED"
+        wJT_key_sym = "UNDEFINED"
+
     # Set values
     to_update = ["n_compact", "n_extended", "n_harmonic",
                 "n_free", "n_frozen", "n_sigma",
@@ -572,6 +593,7 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
         else:
             unique_keys = unique_keys_all
 
+    # breakpoint()
     # Randmize order because difficult ones tend to be near each other
     # This will give more accurate time estimates and spread workers better
     np.random.shuffle(unique_keys)
@@ -584,7 +606,7 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
                           total=n_total, initial=n_total-len(unique_keys)):
             pass
     else:
-        for arg_set in tqdm(args):
+        for arg_set in tqdm(args, total=n_total, initial=n_total-len(unique_keys)):
             _gen_ham_class_row((arg_set[0], arg_set[1]))
 
 
@@ -629,8 +651,8 @@ def generate_and_trim(n_nodes: int, db_file: str = "circuits.db",
                         n_workers=n_workers)
         print("Finished trimming " + str(n_nodes) + " node circuits.")
 
-    # Hamiltonian is the slow part
-    if (not resume) or (not H_group_started):
+    if (not resume) or H_started:
+        # Hamiltonian is the slow part
         print("Appending Hamiltonian Classes to " + str(n_nodes) + " node circuits.")
         add_hamiltonian_classes(db_file=db_file, n_nodes=n_nodes,
                                 n_workers=n_workers, resume=resume)

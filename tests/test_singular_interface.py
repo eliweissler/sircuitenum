@@ -7,15 +7,20 @@ Singular grobcov.lib documentation.
 Author: Eli Weissler
 """
 
+
 import pytest
+import psutil
+import time
+import os
 import re
+from pathlib import Path
 import sympy as sym
 from sympy import symbols, sympify
 
 
 from sircuitenum.singular_interface import solve_with_singular, parse_singular_output, filter_redundant_branches
 from sircuitenum.singular_interface import extract_mappings, _robust_substitute, is_compatible, _eq_as_numer_denom
-
+from sircuitenum.singular_interface import SafeSingular
 
 import json
 import json
@@ -703,7 +708,7 @@ class TestSingularSolver():
         """
         Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02')
         sys_vars =  Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02
-        math_branches = parse_mathematica_reduce_json("test01.json", sys_vars=sys_vars)
+        math_branches = parse_mathematica_reduce_json(str(Path(__file__).with_name("test01.json")), sys_vars=sys_vars)
         
         eq_set = [Z00*Z11 - 2*Z10*Z11 + Z10*Z21 + Z11*Z20 - 2*Z20*Z21,
                     Z00*Z22*(Z12 - Z22) + 2*Z12**2*Z20 - 2*Z12*Z20*Z22 + 2*Z20*Z22**2,
@@ -720,7 +725,7 @@ class TestSingularSolver():
         """
         Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02 = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02')
         sys_vars =  Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02
-        math_branches = parse_mathematica_reduce_json("test02.json", sys_vars=sys_vars)
+        math_branches = parse_mathematica_reduce_json(str(Path(__file__).with_name("test02.json")), sys_vars=sys_vars)
         
         eq_set = [Z00*Z12 - Z10*Z12 - Z20*Z22,
                     Z11*Z12 + Z21*Z22, 
@@ -751,7 +756,7 @@ class TestSingularSolver():
                -Z00**2*Z11*Z12,
                -Z00**2*Z21*Z22,
                -Z00*nzVar*(Z11*Z22 - Z12*Z21) + 1]
-        math_branches = parse_mathematica_reduce_json("test03.json", sys_vars=sys_vars)
+        math_branches = parse_mathematica_reduce_json(str(Path(__file__).with_name("test03.json")), sys_vars=sys_vars)
         branches = solve_with_singular(eqs)
         success = compare_results(eqs, branches, math_branches, verbose=True)
         assert success, "Solver results do not match Mathematica benchmark."
@@ -935,6 +940,91 @@ def test_eq_as_numer_denom():
     assert denom == (x - 1)*(y - 1)
 
 
+class TestSingularLifecycle:
+    
+    @pytest.fixture
+    def solver(self):
+        """Fixture to create and clean up the solver."""
+        # Use a minimal startup code for speed
+        s = SafeSingular(startup_code="ring r=0,(x,y),dp;")
+        yield s
+        # Final cleanup after test finishes
+        s.kill()
+
+    def test_timeout_kills_process_completely(self, solver):
+        """
+        Verifies that a timeout triggers a hard kill of the underlying PID.
+        """
+        # 1. Start the solver and get the initial PID
+        solver.start()
+        assert solver.process is not None
+        old_pid = solver.process.pid
+        
+        print(f"\n[Test] Initial Singular PID: {old_pid}")
+        
+        # Verify the process actually exists in the OS
+        assert psutil.pid_exists(old_pid)
+        
+        # 2. Run a command guaranteed to hang (Infinite Loop)
+        # "while(1){ 1; }" forces Singular to spin forever without output
+        print("[Test] Sending infinite loop command...")
+        
+        with pytest.raises(TimeoutError):
+            # Set a short timeout (e.g., 1 second)
+            solver.eval("while(1){ 1; }", timeout=1.0)
+            
+        print("[Test] Timeout caught successfully.")
+
+        # 3. VERIFY DEATH: The old PID should no longer exist
+        # We give the OS a tiny moment to update the process table, though wait() in kill() should be synchronous.
+        time.sleep(0.1) 
+        
+        is_alive = psutil.pid_exists(old_pid)
+        
+        # If psutil says it exists, check if it's just a "zombie" (dead but not reaped)
+        # Note: Your class calls .wait(), so it should be fully gone.
+        if is_alive:
+            try:
+                p = psutil.Process(old_pid)
+                status = p.status()
+                print(f"[Test] Process status: {status}")
+                # If it's running/sleeping, that's a FAIL. If it's zombie/dead, it's acceptable (but ideally gone).
+                assert status == psutil.STATUS_ZOMBIE, f"Process {old_pid} is still {status}!"
+            except psutil.NoSuchProcess:
+                # It died between the check and now, which is a pass
+                pass
+        else:
+            print(f"[Test] Process {old_pid} is confirmed dead.")
+
+    def test_auto_healing_after_crash(self, solver):
+        """
+        Verifies that the solver automatically starts a NEW process 
+        after the previous one was killed.
+        """
+        solver.start()
+        pid_1 = solver.process.pid
+        
+        # 1. Crash it intentionally with a timeout
+        with pytest.raises(TimeoutError):
+            solver.eval("while(1){ 1; }", timeout=0.5)
+            
+        # 2. Run a valid command immediately after
+        # This triggers the "healing" logic (start new process + run startup code)
+        result = solver.eval("1 + 1", timeout=5)
+        
+        
+        # 3. Assertions
+        assert result.strip().split("\n")[0] == "2"
+        assert solver.process is not None
+        pid_2 = solver.process.pid
+
+
+        
+        print(f"\n[Test] PID 1: {pid_1}, PID 2: {pid_2}")
+        
+        assert pid_1 != pid_2, "The solver reused the same hung process ID! (It should be new)"
+
+
 if __name__ == "__main__":
     # Run tests
     # test_solver = TestSingularParser()
@@ -969,3 +1059,4 @@ if __name__ == "__main__":
     # test_const.test_empty_system()
     # test_const.test_variable_overflow()
     # test_const.test_difficult_systems()
+    

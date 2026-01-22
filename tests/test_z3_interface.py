@@ -1,10 +1,12 @@
 import pytest
 import sympy as sym
-from sircuitenum.z3_interface import find_rational_vars_integer_results
+from sircuitenum.z3_interface import find_rational_vars_integer_results, _calc_min_cost
 
 # Define symbols for re-use across tests
 @pytest.fixture
 def vars():
+    return sym.symbols('Z1 Z2 Z3')
+def vars2():
     return sym.symbols('Z1 Z2 Z3')
 
 def test_basic_rational_constraints(vars):
@@ -213,5 +215,31 @@ def test_as_long_error():
     assert sum(abs(s) for s in solutions[0]['results']) == 4
 
 
+def test_calc_min_cost():
+
+    Z21, Z12, Z01, Z02, Z11, Z22 = sym.symbols('Z21 Z12 Z01 Z02 Z11 Z22')
+    integer_constraints =  [-Z21/2, Z12, -Z21, Z12, Z12, -Z21/2, Z21/2, Z21]
+    nonzero_constraints =  [8, 4, Z12*Z21/4]
+    variables =  [Z12, Z21]
+    min_cost, _, _,_,_ = _calc_min_cost(integer_constraints, nonzero_constraints,
+                                        variables)
+    assert min_cost == 10
+
+    integer_constraints =  [-Z01, -2*Z01*Z02/(2*Z01 - Z21), -Z21, -Z02*Z21/(2*Z01 - Z21), -Z02*Z21/(2*Z01 - Z21), Z01 - Z21, Z02, Z01, Z02, Z21]
+    nonzero_constraints =  [4*Z01 - 2*Z21, 4, -Z02*Z21**2/(8*Z01 - 4*Z21)]
+    variables =  [Z01, Z02, Z21]
+    min_cost, _, _,_,_ = _calc_min_cost(integer_constraints, nonzero_constraints,
+                                        variables)
+    assert min_cost == 6
+
+    integer_constraints =  [Z11, -Z22, Z11, -Z22, Z11, Z22, Z22]
+    nonzero_constraints =  [2, 4, -Z11*Z22/4]
+    variables =  [Z11, Z22]
+    min_cost, _, _,_,_ = _calc_min_cost(integer_constraints, nonzero_constraints,
+                                        variables)
+    assert min_cost == 7
+
 if __name__ == "__main__":
-    test_as_long_error()
+    # test_as_long_error()
+    test_basic_rational_constraints(vars2())
+    test_calc_min_cost()

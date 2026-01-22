@@ -21,7 +21,7 @@ from sympy.core.add import Add
 from sircuitenum import utils
 from sircuitenum.equationset import maximally_compatible_sol, extract_denom, eq_indep_of_vars, _unique_products, _eq_as_numer_denom
 from sircuitenum.singular_interface import is_compatible, solve_with_singular, extract_mappings
-from sircuitenum.z3_interface import find_rational_vars_integer_results
+from sircuitenum.z3_interface import find_rational_vars_integer_results, _calc_min_cost
 
 PERIODIC_CHARGE = "n"
 PERIODIC_PHASE = "θ"
@@ -565,6 +565,50 @@ def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
     return sym.nsimplify(Z.subs(subs), rational=True)
 
 
+def _find_Z_min_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
+                     var_types: dict, wJ: sym.Matrix, vals=WJ_VALS, nonzero=[]):
+    
+    n_nl = len(var_types.get("compact", [])) + len(var_types.get("extended", []))
+
+    # Variables to substitute concrete values in for
+    det = sym.simplify(_det_fast(Z), rational=True)
+    if det not in nonzero:
+        nonzero = nonzero + [det]
+
+    # Identify a valid assignment that yields a non-singular Z
+    # with all integer entries in wJ^T*Z
+    wJT_trans = wJ.transpose()*Z
+    
+    # Identify nonzero entries in wJ^T*Z
+    nz_entries = {}
+    fixed_cost = 0
+    for i in range(wJT_trans.shape[0]):
+        for j in var_types.get("compact", []) + var_types.get("extended", []):
+            wJval = sym.simplify(wJT_trans[i,j])
+            if wJval != 0:
+                if len(wJval.free_symbols) == 0:
+                    if sym.core.numbers.int_valued(wJval):
+                        fixed_cost += abs(int(wJval))
+                    else:
+                        raise ValueError("Fixed Non Integer Present")
+                else:
+                    nz_entries[(i,j)] = wJval
+    if len(nz_entries) == 0:
+        return fixed_cost
+    
+    # Pass to z3 to solve for integer assignments
+    # while ensuring det(Z) != 0 and minimizing sum of abs values
+    nz_idx = sorted(nz_entries.keys(), key=lambda x: (x[0], x[1]))
+    integer_constraints = [nz_entries[(i,j)] for (i,j) in nz_idx]
+    nonzero_constraints = nonzero
+    var_list = set()
+    for expr in integer_constraints + nonzero_constraints:
+        var_list = var_list.union(expr.free_symbols)
+    var_list = sorted(var_list, key=str)
+    variable_cost = _calc_min_cost(integer_constraints,nonzero_constraints,var_list)[0]
+    return fixed_cost + variable_cost
+    
+
 def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
                      var_types: dict, wJ: sym.Matrix, vals=WJ_VALS, nonzero=[]):
     
@@ -590,7 +634,7 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
     # Identify a valid assignment that yields a non-singular Z
     # with all integer entries in wJ^T*Z
     ext = var_types.get("extended", [])
-    wJT_trans = wJ.transpose()*Z
+    wJT_trans = sym.simplify(wJ.transpose()*Z)
     # Nothing to solve for
     if len(wJT_trans.free_symbols) == 0:
         return _find_Z_instance_deterministic(Z, var_list, max_tries=100, nonzero=nonzero)
@@ -619,17 +663,17 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
         raise TimeoutError("No solutions found")
 
     # Identify best solution by wJ^T canonicalization
+    # Minimize L1 norm, with tiebreaker being max term
     WJ_zero = len(WJ_VALS)//2
     min_key = ""
     best_s = None
     for sol in all_sols:
         s = sol["variables"]
-        # if any(abs(v) > 2 for v in sol["results"]):
-        #     breakpoint()
         wJT_subs = sym.simplify(wJT_trans.subs(s))
-        _, key, _ = _maximize_wT(wJT_subs[:, :n_nl])
-        n_val = sum(int(x) != WJ_zero for x in key)
-        key = str(n_val) + "-" + key
+        _, wMax, _ = _maximize_wT(wJT_subs[:, :n_nl])
+        n_val = sum(abs(int(x)-WJ_zero) for x in wMax)
+        max_n_val = max(abs(int(x)-WJ_zero) for x in wMax)
+        key = str(n_val) + "-" + str(max_n_val) + "-" + wMax
         if key < min_key or min_key == "":
             min_key = key
             best_s = s
@@ -691,17 +735,6 @@ def compact_alignment_transformation(wT:sym.Matrix, n_c:int):
     # Consider unchanged if it works
     if compact_well_aligned(wc, n_c):
         all_Zc.append(sym.eye(n_c))
-
-    # TODO:
-    # Think about row magnitudes, we want the rows with the
-    # smallest magnitude
-    # In general we want the lattice vectors to be the *shortest*
-    # translations that give periodicity, but with linearly dependent
-    # junction connectivity this will be a given
-    # The last one will be a loop, so just adds to finish the loop
-    # will always be a +/- 1 on the other loop junction variables
-    # We can check if the transformation respected the overall periodicity
-    # by checking if all other entries are integers
 
     # Try all different linearly independent row combinations
     row_sets = _linearly_indep_row_sets(wc)
@@ -849,7 +882,8 @@ def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True,
         if extra_nl:
             wT_tilde, wT_key_full, _ = _maximize_wT(_sort_wT(wJtTrans[:, perm][:, :n_nl]))
             n_val = sum(abs(int(x)-WJ_zero) for x in wT_key_full)
-            w_key += "-" + str(n_val) + "-" + wT_key_full
+            max_n_val = max(abs(int(x)-WJ_zero) for x in wT_key_full)
+            w_key += "-" + str(n_val) + "-" + str(max_n_val) + "-" + wT_key_full
 
         # If ordering doesn't matter
         if not ordering_matters:
@@ -1255,6 +1289,8 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     coupling = []
     zero_keys = []
     count = 0
+
+
     for trMat in to_decouple:
         for (i, j) in pairs:
             vars_in_eq = [v for v in var_list if v in trMat[i, j].free_symbols]
@@ -1363,7 +1399,7 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
     n_nl = len(var_types["compact"] + var_types["extended"])
 
     # Step 1: Enumerate different choices of compact variable
-    wJT_trans = wJ.transpose()*Z0
+    wJT_trans = sym.simplify(wJ.transpose()*Z0)
     Z1 = [Z0*Z for Z in compact_alignment_transformation(wJT_trans, len(var_types["compact"]))]
 
     # Step 2: Minimize intermode coupling
@@ -1417,7 +1453,20 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         # so collect all the denominators
         Z_final_instance = []
         hash_final_instance = ""
+
+
+        min_costs = []
         for Zf in Z_final:
+            var_list = [x for x in Zf.free_symbols if "Z" in str(x)]
+            min_costs.append(_find_Z_min_cost(Zf, var_list, var_types, wJ, nonzero=extract_denom(Zf)))
+        
+        order = np.argsort(min_costs)
+        best_cost = 5*wJ.shape[0]*wJ.shape[1]
+        for i in order:
+            Zf = Z_final[i]
+            min_cost = min_costs[i]
+
+
             var_list = [x for x in Zf.free_symbols if "Z" in str(x)]
             ans = None
             ans = _find_Z_instance(Zf, var_list, var_types=var_types,
@@ -1431,10 +1480,15 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
                 cTransInv = cTrans.inv()
             lTrans = sym.simplify(ans.transpose()*lMat*ans)
             wJtTrans = sym.simplify(wJ.transpose()*ans)
+
             hash_val, _ = H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types=var_types, extra_nl=True)
             if hash_val < hash_final_instance or hash_final_instance == "":
                 hash_final_instance = hash_val
                 Z_final_instance = [ans]
+                best_cost = int(hash_val.split("_")[1].split("-")[2])
+            elif hash_val == hash_final_instance:
+                Z_final_instance.append(ans)
+
         Z_final = Z_final_instance
         hash_final = hash_final_instance
     
@@ -1876,16 +1930,16 @@ if __name__ == "__main__":
     # edges =  [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
 
-    circuit = [('C_1', 'J_1'), ('J_2', 'L_1', 'C_2'), ('C_3',), ('L_2', 'J_3'), ('L_3',), ('J_4', 'L_4'), ('L_5', 'C_4'), ('C_5', 'J_5', 'L_6'), ('J_6', 'L_7', 'C_6')]
-    edges =  [(0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
-    # Remove numbers
-    circuit_new = []
-    for elems in circuit:
-        new_elems = []
-        for elem in elems:
-            new_elems.append(elem[0])
-        circuit_new.append(tuple(new_elems))
-    circuit = circuit_new
+    # circuit = [('C_1', 'J_1'), ('J_2', 'L_1', 'C_2'), ('C_3',), ('L_2', 'J_3'), ('L_3',), ('J_4', 'L_4'), ('L_5', 'C_4'), ('C_5', 'J_5', 'L_6'), ('J_6', 'L_7', 'C_6')]
+    # edges =  [(0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+    # # Remove numbers
+    # circuit_new = []
+    # for elems in circuit:
+    #     new_elems = []
+    #     for elem in elems:
+    #         new_elems.append(elem[0])
+    #     circuit_new.append(tuple(new_elems))
+    # circuit = circuit_new
 
 
     # # Max Connected N Node Circuit
@@ -1909,7 +1963,6 @@ if __name__ == "__main__":
     # edges = [(0, 1), (1, 2), (2, 0)]
     # circuit = [("L", "C"), ("J", "C"), ("L",)]
     # circuit = utils.add_elem_number(circuit)
-    # draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="fixed")
 
     # circuit = [('J_1', 'L_1', 'C_1'), ('C_2', 'L_2'), ('C_3', 'J_2', 'L_3'), ('C_4', 'L_4'), ('C_5', 'J_3', 'L_5'), ('C_6',)]
     # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
@@ -1917,7 +1970,14 @@ if __name__ == "__main__":
     # circuit = [('C_1', 'J_1', 'L_1'), ('L_2', 'C_2', 'J_2'), ('L_3', 'J_3'), ('J_4', 'L_4'), ('C_3', 'J_5', 'L_5'), ('C_4', 'J_6')]
     # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
+    # circuit = [('J',), ('J',), ('J', 'L'), ('C', 'J'), ('C', 'J'), ('C', 'J', 'L')]
+    # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    circuit =  [('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'J', 'L'), ('J', 'L'), ('C', 'J', 'L')]
+    edges =  [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    # circuit = utils.add_elem_number(circuit)
 
+
+    draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="fixed")
     cMat = gen_cap_mat(circuit, edges)
     lMat = gen_ind_mat(circuit, edges)
     times = []
@@ -1934,7 +1994,7 @@ if __name__ == "__main__":
         times.append(tf-t0)
     print("Max", np.max(times), "Min:", np.min(times))
     print("Mean:", np.mean(times), "+/-", np.std(times))
-
+    breakpoint()
     # print(Z)
     # print("C Transformed:\n", sym.simplify(cTrans))
     # print("L Transformed:\n", sym.simplify(lTrans))
