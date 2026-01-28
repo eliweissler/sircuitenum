@@ -848,7 +848,7 @@ def initialize_singular():
 
 
 class SafeSingular:
-    def __init__(self, startup_code="", binary_path=SINGULAR_PATH, timeout=30):
+    def __init__(self, startup_code="", binary_path=SINGULAR_PATH, timeout=60):
         self.binary_path = binary_path
         self.startup_code = startup_code
         self.timeout = timeout
@@ -882,11 +882,13 @@ class SafeSingular:
         # Auto-restart if dead
         if self.process is None:
             self.start()
-
-            
-        return self._execute_raw(cmd, timeout)
+        # print("SINGULAR CALL", cmd)
+        out = self._execute_raw(cmd, timeout)
+        # print("done")
+        return out
     
     def _execute_raw(self, cmd, timeout):
+
 
         if timeout is None:
             timeout = self.timeout

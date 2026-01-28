@@ -479,12 +479,12 @@ def _gen_ham_class_row(args):
         circuit, edges = entry.circuit, entry.edges
     else:
         circuit, edges = utils.add_elem_number(entry.circuit), entry.edges
-    Z0, var_types = quantize.var_trans_basis(circuit, edges)
     try:
         Z, var_types, h_class = quantize.choose_Z(circuit, edges)
         wJT_key = h_class.split("_")[1].split("-")[-1]
     except TimeoutError as timeout:
         print("[TIMEOUT]")
+        print(traceback.format_exc())
         print("circuit =", circuit)
         print("edges =", edges)
         h_class = "UNDEFINED"

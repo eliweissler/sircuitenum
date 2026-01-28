@@ -1979,7 +1979,9 @@ if __name__ == "__main__":
     # circuit = utils.add_elem_number(circuit)
 
     # circuit = [('J',), ('J',), ('C', 'L'), ('J', 'L'), ('J',), ('C', 'J')]
-    circuit = [('J',), ('C', 'L'), ('C', 'J'), ('C', 'J'), ('J', 'L'), ('C', 'J')]
+    # circuit = [('J',), ('C', 'L'), ('C', 'J'), ('C', 'J'), ('J', 'L'), ('C', 'J')]
+    # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    circuit = [('J',), ('J',), ('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'J', 'L')]
     edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
     # circuit = utils.add_elem_number(circuit)
 
