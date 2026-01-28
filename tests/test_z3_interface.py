@@ -1,6 +1,6 @@
 import pytest
 import sympy as sym
-from sircuitenum.z3_interface import find_rational_vars_integer_results, _calc_min_cost
+from sircuitenum.z3_interface import find_rational_vars_integer_results, _calc_min_cost, _heuristic_upper_bound
 
 # Define symbols for re-use across tests
 @pytest.fixture
@@ -258,6 +258,8 @@ def test_rational_vars_zero():
                                              [], variables=vars)
 
     assert sum(abs(x) for x in res[0]["results"]) == 9
+
+
 if __name__ == "__main__":
     # test_as_long_error()
     # test_basic_rational_constraints(vars2())

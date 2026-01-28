@@ -301,7 +301,6 @@ def _enumerate_solutions(solver_with_state, tracked_exprs, z3_vars, max_solution
         if block_negative_equivalents:
             block_clause = [tracked_exprs[i] != -res_vals[i] for i in range(len(tracked_exprs))]
             solver_with_state.add(Or(block_clause))
-
     return results
 
 
@@ -312,6 +311,7 @@ def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constr
     for nz in nonzero_constraints:
         nz_prod *= nz
     nz_numer, nz_denom = _eq_as_numer_denom(nz_prod)
+    nz_numer = sym.expand(nz_numer)
     if isinstance(nz_numer, sym.Add):
         nz_terms = nz_numer.args
     else:
@@ -320,6 +320,7 @@ def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constr
         nonzero_constraints.append(nz_denom)
     best_val = len(integer_constraints)*max_result_range
     res = []
+    unique_subs = set()
     for i in range(len(nz_terms)):
         is_nonzero = [nz_terms[i]]
         if isinstance(nz_denom, sym.Expr):
@@ -328,9 +329,18 @@ def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constr
         for var in variables:
             if var not in nz_terms[i].free_symbols:
                 zero_subs[var] = 0
+        unique_subs_key = tuple(sorted(zero_subs.items(), key=lambda x: str(x[0])))
+        if unique_subs_key in unique_subs:
+            continue
+        unique_subs.add(unique_subs_key)
 
         new_constraints = [c.subs(zero_subs) for c in integer_constraints if c.subs(zero_subs) != 0]
         new_zero_constraints = [c.subs(zero_subs) for c in zero_constraints if c.subs(zero_subs) != 0]
+
+        # Make sure to only include variables that remain finite
+        if any(c.has(sym.core.numbers.ComplexInfinity) or c.has(sym.core.numbers.Infinity) for c in new_constraints+new_zero_constraints):
+            continue
+
         new_variables = sorted(set(itertools.chain.from_iterable(c.free_symbols for c in new_constraints+zero_constraints+list(nz_terms))), key=str)
         this_res = find_rational_vars_integer_results(new_constraints, nonzero_constraints=is_nonzero,
                                                         zero_constraints=new_zero_constraints,

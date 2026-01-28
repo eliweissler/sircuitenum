@@ -110,7 +110,8 @@ def solve_0D_backsub(sympy_eqs, sympy_vars, sympy_params=None, rational_only=Fal
                     candidate_polys.append(poly)
             if not candidate_polys:
                 raise ValueError(f"Unconstrained variable: {target_var}")
-            poly_to_solve = min(candidate_polys, key=lambda p: sym.degree(p, target_var)).as_poly(target_var)
+            degrees = [sym.degree(p, target_var) for p in candidate_polys]
+            poly_to_solve = candidate_polys[np.argmin(degrees)].as_poly(target_var)
             # 3. Find roots via factorization -> solve
             roots = []
             if rational_only:
@@ -143,7 +144,7 @@ def solve_0D_backsub(sympy_eqs, sympy_vars, sympy_params=None, rational_only=Fal
     return final_results
 
 
-def is_compatible(equations: Iterable[Union[sym.Expr, sym.Equality]], check_fraction: bool = True) -> bool:
+def is_compatible(equations: Iterable[Union[sym.Expr, sym.Equality]], check_fraction: bool = True, timeout=None) -> bool:
     """
     Checks if a system of SymPy equations is mathematically consistent (has at least one solution).
 
@@ -225,14 +226,14 @@ def is_compatible(equations: Iterable[Union[sym.Expr, sym.Equality]], check_frac
     # 2. Then define the ideal and call the proc
     cmd = f"setring SUPER_RING; check_solvability(ideal({str_eqs}));"
     
-    return _cached_compatible(cmd)
+    return _cached_compatible(cmd, timeout)
 
 
 @functools.cache
-def _cached_compatible(cmd: str):
+def _cached_compatible(cmd: str, timeout: Optional[float] = None) -> bool:
     if WORKER_SINGULAR is None:
         initialize_singular()
-    cleaned = clean_singular_string(WORKER_SINGULAR.eval(cmd))
+    cleaned = clean_singular_string(WORKER_SINGULAR.eval(cmd, timeout))
     return "1" in cleaned
 
 
@@ -883,9 +884,8 @@ class SafeSingular:
         # Auto-restart if dead
         if self.process is None:
             self.start()
-
-            
-        return self._execute_raw(cmd, timeout)
+        out = self._execute_raw(cmd, timeout)
+        return out
     
     def _execute_raw(self, cmd, timeout):
 

@@ -28,7 +28,7 @@ UNSOLVABLE_CACHE = set()  # sets of equations with no solutions
 
 def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr] = [],
                              nonzero_constraints: list[sym.Expr] = [],
-                             rational_only = False) -> Tuple[list, list]:
+                             rational_only = False, stop_at_first=False) -> Tuple[list, list]:
     """
     Given a list of list of systems of equations, identifies the largest set of compatible
     systems of equations that can be solved simultaneously. Returns the indices of the selected
@@ -83,8 +83,16 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
     terms = new_terms
 
     # Mark ones that are individually compatible
+    # Quick check to skip incompatible terms
     n_terms = len(terms)
-    is_solvable = [is_compatible(terms[i] + nz_term, check_fraction=False) if terms[i] else False for i in range(n_terms)]
+    is_solvable = []
+    for i in range(len(terms)):
+        compat = True
+        try:
+            compat = is_compatible(terms[i] + nz_term, check_fraction=False, timeout=1)
+        except TimeoutError:
+            compat = True
+        is_solvable.append(compat)
     if sum(is_solvable) == 0:
         return [], []
 
@@ -96,7 +104,14 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
             incompatible_pairs.add((i1, i2))
             continue
         combined_terms = terms[i1] + terms[i2]
-        if not is_compatible(combined_terms + nz_term, check_fraction=False):
+        compat = True
+        # Check compatibility -- Okay to time out here we want a quick check
+        # and sometimes pairwise checks can be slower than larger sets
+        try:
+            compat = is_compatible(combined_terms + nz_term, check_fraction=False, timeout=1)
+        except TimeoutError:
+            compat = True
+        if not compat:
             incompatible_pairs.add((i1, i2))
     
     G = nx.Graph()
@@ -138,6 +153,8 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
                     all_sols.append(sols)
                     sol_keys.append(keys)
                     sol_found = True
+                    if stop_at_first:
+                        break
         if sol_found:
             return sol_keys, all_sols
     
