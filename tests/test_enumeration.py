@@ -352,7 +352,8 @@ def test__gen_ham_class_row():
     con.commit()
     con.close()
 
-    enum._gen_ham_class_row((uid, TEMP_FILE))
+    enum._gen_ham_class_row((uid, TEMP_FILE, False))
+    enum._gen_ham_class_row((uid, TEMP_FILE, True))
 
     # Test stuff is right
     df = utils.get_circuit_data_batch(TEMP_FILE, 2, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
@@ -403,8 +404,8 @@ def test_add_hamiltonian_classes():
     
     # Generate all the 3 node circuits and check that
     # there's 19 H classes
-    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=4, quiet=False)
     enum.generate_all_circuits(TEMP_FILE2, 2, 3, base=7, n_workers=1, quiet=False)
+    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=4, quiet=False)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
     df2 = utils.get_circuit_data_batch(TEMP_FILE2, 3)
     for i, row in df2.iterrows():
@@ -578,7 +579,7 @@ if __name__ == "__main__":
     # test__reduce_individual_set()
     # test_trim_graph_node()
     # test__gen_ham_class_row()
-    test_add_hamiltonian_classes()
-    # test_generate_all_circuits()
+    # test_add_hamiltonian_classes()
+    test_generate_all_circuits()
     # test_qps_enum()
 

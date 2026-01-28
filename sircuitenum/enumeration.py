@@ -460,7 +460,7 @@ def _gen_ham_class_row(args):
         ValueError: Error with circuit database
         kbi: Keyboard interrupt
     """
-    uid, db_file = args
+    uid, db_file, eq_params = args
 
     # Load the graphs with the specified edges counts and graph index
     filter_str = f"WHERE unique_key LIKE '{uid}'"
@@ -469,12 +469,17 @@ def _gen_ham_class_row(args):
                                       filter_str=filter_str)
 
     if df.shape[0] > 1:
+        breakpoint()
         raise ValueError("Multiple Circuits on Unique Key")
     
     # Choose the transformation
     ## Different Circuit Paramter values
     entry = df.iloc[0]
-    circuit, edges = utils.add_elem_number(entry.circuit), entry.edges
+    if eq_params:
+        circuit, edges = entry.circuit, entry.edges
+    else:
+        circuit, edges = utils.add_elem_number(entry.circuit), entry.edges
+    Z0, var_types = quantize.var_trans_basis(circuit, edges)
     try:
         Z, var_types, h_class = quantize.choose_Z(circuit, edges)
         wJT_key = h_class.split("_")[1].split("-")[-1]
@@ -496,54 +501,34 @@ def _gen_ham_class_row(args):
         print("-------------------------------------------")
         h_class = "UNDEFINED"
         wJT_key = "UNDEFINED"
-    
-    ## Same Circuit Paramter values
-    circuit, edges = entry.circuit, entry.edges
-    try:
-        Z_sym, var_types, h_class_sym = quantize.choose_Z(circuit, edges)
-        wJT_key_sym = h_class_sym.split("_")[1].split("-")[-1]
-    except TimeoutError as timeout:
-        print("[TIMEOUT]")
-        print("circuit =", circuit)
-        print("edges =", edges)
-        h_class_sym = "UNDEFINED"
-        wJT_key_sym = "UNDEFINED"
-    except KeyboardInterrupt as kbi:
-        raise kbi
-    except Exception as exc:
-        print("-------------------------------------------")
-        print("Unable to Generate Hamiltonian for:", uid)
-        print(traceback.format_exc())
-        print(exc)
-        print("circuit =", circuit)
-        print("edges =", edges)
-        print("-------------------------------------------")
-        h_class_sym = "UNDEFINED"
-        wJT_key_sym = "UNDEFINED"
 
-    # Set values
-    to_update = ["n_compact", "n_extended", "n_harmonic",
-                "n_free", "n_frozen", "n_sigma",
-                "H_class", "wJT",  "H_class_sym", "wJT_sym"]
-    df.at[uid, "H_class"] = h_class
-    df.at[uid, "H_class_sym"] = h_class_sym
-    df.at[uid, "wJT"] = wJT_key
-    df.at[uid, "wJT_sym"] = wJT_key_sym
-    df.at[uid, "n_compact"] = len(var_types.get("compact", []))
-    df.at[uid, "n_extended"] = len(var_types.get("extended", []))
-    df.at[uid, "n_harmonic"] = len(var_types.get("harmonic", []))
-    df.at[uid, "n_free"] = len(var_types.get("free", []))
-    df.at[uid, "n_frozen"] = len(var_types.get("frozen", []))
-    df.at[uid, "n_sigma"] = len(var_types.get("sigma", []))
 
+    # Set values    
+    if eq_params:
+        to_update = ["H_class_sym", "wJT_sym"]
+        df.at[uid, "wJT_sym"] = wJT_key
+        df.at[uid, "H_class_sym"] = h_class
+        str_cols=["H_class_sym","wJT_sym"]
+    else:
+        to_update = ["n_compact", "n_extended", "n_harmonic",
+                "n_free", "n_frozen", "n_sigma", "H_class", "wJT"]
+        df.at[uid, "H_class"] = h_class
+        df.at[uid, "wJT"] = wJT_key
+        df.at[uid, "n_compact"] = len(var_types.get("compact", []))
+        df.at[uid, "n_extended"] = len(var_types.get("extended", []))
+        df.at[uid, "n_harmonic"] = len(var_types.get("harmonic", []))
+        df.at[uid, "n_free"] = len(var_types.get("free", []))
+        df.at[uid, "n_frozen"] = len(var_types.get("frozen", []))
+        df.at[uid, "n_sigma"] = len(var_types.get("sigma", []))
+        str_cols=["H_class","wJT"]
 
     # Update value in database
-    utils.update_db_from_df(db_file, df, to_update,
-                            str_cols=["H_class", "H_class_sym","wJT", "wJT_sym"])
+    utils.update_db_from_df(db_file, df, to_update, str_cols=str_cols)
 
 
 def add_hamiltonian_classes(db_file: str, n_nodes: int,
-                              n_workers: int = 4, resume: bool = False):
+                              n_workers: int = 4, resume: bool = False,
+                              eq_params=False):
     """
     Constructs a variable transformation and identifies the hamiltonian
     class for each circuit in the database
@@ -556,6 +541,7 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
         resume (bool, optional): whether to resume a previously started run.
                                  this only grabs rows that don't have Hamiltonians
                                  yet.
+        eq_params (bool, optional): whether to set circuit parameters to be equal
 
     Raises:
         ValueError: if multiple circuits with the same unique key exist
@@ -570,44 +556,43 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
         cur = con.cursor()
         table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
         if not resume:
+            columns = utils.list_all_columns(db_file, table_name)
             new_cols = ["n_compact", "n_extended", "n_harmonic",
-                        "n_free", "n_frozen", "n_sigma",
-                        "H_class", "wJT",  "H_class_sym", "wJT_sym"]
+                            "n_free", "n_frozen", "n_sigma",
+                            "H_class", "wJT",  "H_class_sym", "wJT_sym"]
             for col in new_cols:
-                sql_str = f"ALTER TABLE {table_name}\n"
-                sql_str += f"ADD {col}"
-                cur.execute(sql_str)
-                con.commit()
-        
-        # Gather all unique keys
-        sql_query = f"SELECT DISTINCT unique_key\
-                      FROM {table_name}\
-                      WHERE in_non_iso_set LIKE 1\
-                      AND filter LIKE 1"
-        unique_keys_all = [x[0] for x in cur.execute(sql_query).fetchall()]
-        n_total = len(unique_keys_all)
+                if col not in columns:
+                    sql_str = f"ALTER TABLE {table_name}\n"
+                    sql_str += f"ADD {col}"
+                    cur.execute(sql_str)
+                    con.commit()
+               
         # If we're resuming filter out those without H_class made
+        sql_query = f"SELECT DISTINCT unique_key\
+                    FROM {table_name}\
+                    WHERE in_non_iso_set LIKE 1\
+                    AND filter LIKE 1"
         if resume:
-            sql_query += " AND H_class is null"
-            unique_keys = [x[0] for x in cur.execute(sql_query).fetchall()]
-        else:
-            unique_keys = unique_keys_all
-
-    # breakpoint()
+            if eq_params:
+                sql_query += " AND (H_class_sym is null OR H_class_sym = 'UNDEFINED')"
+            else:
+                sql_query += " AND (H_class is null OR H_class = 'UNDEFINED')"
+        unique_keys = [x[0] for x in cur.execute(sql_query).fetchall()]
+    n_to_do = len(unique_keys)
     # Randmize order because difficult ones tend to be near each other
     # This will give more accurate time estimates and spread workers better
     np.random.shuffle(unique_keys)
 
     # Go through all the circuits and update rows with info
-    args = list(zip(unique_keys, [db_file]*len(unique_keys)))
+    args = list(zip(unique_keys, [db_file]*len(unique_keys), [eq_params]*len(unique_keys)))
     if n_workers > 1:
         pool = Pool(processes=n_workers, initializer=initialize_singular)
         for _ in tqdm(pool.imap_unordered(_gen_ham_class_row, args),
-                          total=n_total, initial=n_total-len(unique_keys)):
+                          total=n_to_do):
             pass
     else:
-        for arg_set in tqdm(args, total=n_total, initial=n_total-len(unique_keys)):
-            _gen_ham_class_row((arg_set[0], arg_set[1]))
+        for arg_set in tqdm(args, total=n_to_do):
+            _gen_ham_class_row((arg_set[0], arg_set[1], arg_set[2]))
 
 
 
@@ -655,7 +640,10 @@ def generate_and_trim(n_nodes: int, db_file: str = "circuits.db",
         # Hamiltonian is the slow part
         print("Appending Hamiltonian Classes to " + str(n_nodes) + " node circuits.")
         add_hamiltonian_classes(db_file=db_file, n_nodes=n_nodes,
-                                n_workers=n_workers, resume=resume)
+                                n_workers=n_workers, resume=resume, eq_params=False)
+        print("Appending Hamiltonian Classes (equal params) to " + str(n_nodes) + " node circuits.")
+        add_hamiltonian_classes(db_file=db_file, n_nodes=n_nodes,
+                                n_workers=n_workers, resume=resume, eq_params=True)
 
 
     return True

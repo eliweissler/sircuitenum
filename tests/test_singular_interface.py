@@ -20,7 +20,8 @@ from sympy import symbols, sympify
 
 from sircuitenum.singular_interface import solve_with_singular, parse_singular_output, filter_redundant_branches
 from sircuitenum.singular_interface import extract_mappings, _robust_substitute, is_compatible, _eq_as_numer_denom
-from sircuitenum.singular_interface import SafeSingular
+from sircuitenum.singular_interface import SafeSingular, solve_0D_backsub, get_sage_groebner_basis
+
 
 import json
 import json
@@ -28,6 +29,9 @@ import sympy as sym
 
 import json
 import sympy as sym
+
+from sage.all import singular, PolynomialRing, QQ, ideal, SR, var, QQbar
+
 
 def load_mathematica_benchmark(json_path, system_vars):
     """
@@ -670,8 +674,7 @@ class TestSingularSolver():
             self.x*self.y*self.z - 1
         ]
         # This system has exactly 6 discrete solutions (permutations of roots of unity)
-        branches = solve_with_singular(eqs, [self.x, self.y, self.z])
-        
+        branches = solve_with_singular(eqs, [self.x, self.y, self.z], rational_only=False)
         assert len(branches) == 6, "Cyclic-3 should have 6 solutions"
         unique_base = set()
         for b in branches:
@@ -775,6 +778,19 @@ class TestSingularSolver():
         # Expectation: 
         # Only the a = b case
         assert len(branches) == 2
+
+    def test_13_difficult_rational(self):
+        
+        Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02, nzVar = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02 nzVar')
+        vars = [Z01, Z02, Z12, nzVar]
+        params = [Z11, Z21, Z22]
+        eqs = [Z11*Z12 + Z21*Z22,
+               -5*Z01*Z12**2 - 2*Z01*Z12*Z22 - 2*Z01*Z22**2 + 5*Z02*Z11*Z12 + Z02*Z11*Z22 + Z02*Z12*Z21 + 2*Z02*Z21*Z22 - 2*Z11*Z12*Z22 - Z11*Z22**2 + 2*Z12**2*Z21 + Z12*Z21*Z22,
+               -10*Z01*Z12**2 - 2*Z01*Z12*Z22 - 9*Z01*Z22**2 + 10*Z02*Z11*Z12 + Z02*Z11*Z22 + Z02*Z12*Z21 + 9*Z02*Z21*Z22 - 5*Z11*Z12*Z22 - 4*Z11*Z22**2 + 5*Z12**2*Z21 + 4*Z12*Z21*Z22,
+               -4*Z01*Z12**2 - 8*Z01*Z22**2 + 4*Z02*Z11*Z12 + 8*Z02*Z21*Z22 - 2*Z11*Z12*Z22 - 4*Z11*Z22**2 + 2*Z12**2*Z21 + 4*Z12*Z21*Z22,
+               -nzVar*(Z11*Z22 - Z12*Z21) + 1]
+        sols = solve_with_singular(eqs, rational_only=True)
+        assert len(sols) == 0
 
 def test_simple_subset_removal():
     """
@@ -940,6 +956,214 @@ def test_eq_as_numer_denom():
     assert denom == (x - 1)*(y - 1)
 
 
+class TestSageGroebnerBridge:
+    def test_returns_sympy_objects(self):
+        """Ensure the function converts Sage types back to SymPy types."""
+        x, y = sym.symbols('x y')
+        eqs = [x**2 - 1, y - x]
+        
+        basis = get_sage_groebner_basis(eqs, [x, y])
+        
+        assert isinstance(basis, list)
+        assert len(basis) > 0
+        # Check that the result elements are actual SymPy objects, not Sage objects
+        assert isinstance(basis[0], sym.Basic) 
+
+    def test_groebner_correctness(self):
+        """Test a known Groebner basis result."""
+        x, y, z = sym.symbols('x y z')
+        # Simple system: x=1, y=2, z=3
+        eqs = [x - 1, y - 2, z - 3]
+        
+        basis = get_sage_groebner_basis(eqs, [x, y, z])
+        
+        # For this simple system, the basis should just be the equations themselves 
+        # (normalized to monic, which they already are).
+        # We compare string representations or subtract to check equivalence
+        assert len(basis) == 3
+        # Check if x-1 is in the basis
+        assert any(sym.simplify(b - (z - 3)) == 0 for b in basis)
+
+
+class Test0DSolver:
+    def test_branching_rationals(self):
+        """
+        Test that it finds multiple rational roots.
+        Equation: x^2 - 4 = 0  =>  x = 2, x = -2
+        """
+        x = symbols('x')
+        eqs = [sym.Eq(x**2, 4)]
+        
+        results = solve_0D_backsub(eqs, [x])
+        
+        assert len(results) == 2
+        # Check that both 2 and -2 are in the results
+        values = [r[x] for r in results]
+        assert 2 in values
+        assert -2 in values
+
+    def test_irrational_filtering(self):
+        """
+        Test that it strictly ignores irrational roots.
+        Equation: x^2 - 2 = 0  =>  x = sqrt(2) (Irrational)
+        """
+        x = symbols('x')
+        eqs = [sym.Eq(x**2, 2)]
+        
+        results = solve_0D_backsub(eqs, [x], rational_only=True)
+        
+        # Should be empty
+        assert results == []
+
+        results = solve_0D_backsub(eqs, [x], rational_only=False)
+        
+        # Should be +/- sqrt(2)
+        for res in results:
+            for val in res.values():
+                assert abs(val**2 - 2) < 1e-09
+
+    def test_mixed_factors(self):
+        """
+        Test a polynomial with both rational and irrational factors.
+        Equation: (x^2 - 1)(x^2 - 2) = 0
+        Roots: 1, -1 (Rational) AND sqrt(2), -sqrt(2) (Irrational)
+        Result: Should return only 1 and -1.
+        """
+        x = symbols('x')
+        eqs = [sym.Eq((x**2 - 1) * (x**2 - 2), 0)]
+        
+        results = solve_0D_backsub(eqs, [x], rational_only=True)
+        assert len(results) == 2
+        values = [r[x] for r in results]
+        assert 1 in values
+        assert -1 in values
+        # Ensure no sqrt(2) leaked in
+        assert all(v.is_rational for v in values)
+
+        results = solve_0D_backsub(eqs, [x], rational_only=False)
+        
+        assert len(results) == 4
+        values = [r[x] for r in results]
+        assert 1 in values
+        assert -1 in values
+        # Ensure sqrt(2) present
+        for val in values:
+            if abs(val) != 1:
+                assert abs(val**2 - 2) < 1e-09
+
+    def test_system_branching(self):
+        """
+        Test branching in a multi-variable system.
+        x^2 = 1      => x = 1, -1
+        y = x + 1
+        Solutions: (1, 2) and (-1, 0)
+        """
+        x, y = symbols('x y')
+        eqs = [
+            sym.Eq(x**2, 1),
+            sym.Eq(y, x + 1)
+        ]
+        
+        results = solve_0D_backsub(eqs, [x, y])
+        assert len(results) == 2
+        
+        # Verify Solution 1: (1, 2)
+        assert any(r[x] == 1 and r[y] == 2 for r in results)
+        
+        # Verify Solution 2: (-1, 0)
+        assert any(r[x] == -1 and r[y] == 0 for r in results)
+
+    def test_parameters_simple(self):
+        """
+        Test solving with parameters (Rational Functions).
+        a*x - 6 = 0  =>  x = 6/a
+        """
+        x, a = symbols('x a')
+        eqs = [sym.Eq(a * x, 6)]
+        
+        results = solve_0D_backsub(eqs, [x], sympy_params=[a])
+        
+        assert len(results) == 1
+        val = results[0][x]
+        assert sym.simplify(val - 6/a) == 0
+
+    def test_parameters_branching(self):
+        """
+        Test that parameters branch correctly when factorable.
+        x^2 - a^2 = 0  =>  (x - a)(x + a) = 0
+        Solutions: x = a, x = -a
+        """
+        x, a = symbols('x a')
+        eqs = [sym.Eq(x**2, a**2)]
+        
+        results = solve_0D_backsub(eqs, [x], sympy_params=[a])
+        
+        assert len(results) == 2
+        values = [r[x] for r in results]
+        
+        # Use simplify to check symbolic equality
+        assert any(sym.simplify(v - a) == 0 for v in values)
+        assert any(sym.simplify(v + a) == 0 for v in values)
+
+    def test_parameters_irrational(self):
+        """
+        Test that radicals in parameters are included
+        x^2 - a = 0  =>  x = sqrt(a)
+        """
+        x, a = symbols('x a')
+        eqs = [sym.Eq(x**2, a)]
+        
+        results = solve_0D_backsub(eqs, [x], sympy_params=[a], rational_only=True)
+        assert len(results) == 2
+        values = [r[x] for r in results]
+        assert any(sym.simplify(v - sym.sqrt(a)) == 0 for v in values)
+        assert any(sym.simplify(v + sym.sqrt(a)) == 0 for v in values)
+
+
+    def test_no_solution_inconsistent(self):
+        """Test an inconsistent system returns empty list."""
+        x = symbols('x')
+        eqs = [sym.Eq(x, 1), sym.Eq(x, 2)]
+        
+        results = solve_0D_backsub(eqs, [x])
+        assert results == []
+
+    def test_high_degree_rational(self):
+        """
+        Test that high degree polynomials work if they have integer roots.
+        x^3 - 1 = 0 => (x-1)(x^2+x+1) = 0
+        Rational Root: x = 1
+        Complex Roots: (-1 +/- i*sqrt(3))/2 (Should be ignored)
+        """
+        x = symbols('x')
+        eqs = [sym.Eq(x**3 - 1, 0)]
+        
+        results = solve_0D_backsub(eqs, [x], rational_only=True)
+        
+        assert len(results) == 1
+        assert results[0][x] == 1
+
+    def test_infinite_solutions_error(self):
+        """Test that infinite solutions raise the specific error."""
+        x, y = var('x, y')
+        # x + y = 0 has infinite solutions
+        eqs = [x + y == 0]
+        
+        with pytest.raises(ValueError, match="Unconstrained variable"):
+            solve_0D_backsub(eqs, [x, y])
+
+    def test_difficult_rational(self):
+        
+        Z10, Z01, Z11, Z12, Z22, Z21, Z00, Z20, Z02, nzVar = sym.symbols('Z10 Z01 Z11 Z12 Z22 Z21 Z00 Z20 Z02 nzVar')
+        vars = [Z01, Z02, Z12, nzVar]
+        params = [Z11, Z21, Z22]
+        eqs = [Z22**3*nzVar**3*(Z11**3 - 15*Z11**2*Z21 + 3*Z11*Z21**2 + 2*Z21**3) + 3*Z22**2*nzVar**2*(-Z11**2 + 10*Z11*Z21 - Z21**2) + 3*Z22*nzVar*(Z11 - 5*Z21) - 1,
+               2*Z11*Z22 + Z12*Z21 - 15*Z21*Z22 + Z22**3*nzVar**2*(Z11**3 - 15*Z11**2*Z21 + 3*Z11*Z21**2 + 2*Z21**3) - 3*Z22**2*nzVar*(Z11**2 - 10*Z11*Z21 + Z21**2),
+               6*Z02*Z21**2 + 2*Z11**2*Z22 - 30*Z11*Z21*Z22 + Z12*Z21*(2*Z11 - 11*Z21) - 2*Z21**2*Z22 - 2*Z22**2*nzVar*(Z11**3 - 15*Z11**2*Z21 + 3*Z11*Z21**2 + 2*Z21**3),
+               6*Z01*Z21 + Z11**2 - 11*Z11*Z21 - 5*Z21**2 - Z22*nzVar*(Z11**3 - 15*Z11**2*Z21 + 3*Z11*Z21**2 + 2*Z21**3)]
+        sols = solve_0D_backsub(eqs, vars, params, rational_only=True)
+        assert len(sols) == 0
+
 class TestSingularLifecycle:
     
     @pytest.fixture
@@ -1030,8 +1254,8 @@ if __name__ == "__main__":
     # test_solver = TestSingularParser()
     # test_solver.test_parse()
     # test_solver.test_parse_no_star()
-    test_solver = TestSingularSolver()
-    test_solver.test_01_parametric_singularity()
+    # test_solver = TestSingularSolver()
+    # test_solver.test_01_parametric_singularity()
     # test_solver.test_02_reducible_geometry()
     # test_solver.test_03_inconsistent_system()
     # test_solver.test_04_mixed_dimension()
@@ -1043,6 +1267,7 @@ if __name__ == "__main__":
     # test_solver.test_10_vs_mathematica_3()
     # test_solver.test_11_simple_lowercase()
     # test_solver.test_12_with_fractions()
+    # test_solver.test_13_difficult_rational()
     # test_filter = TestRedundantBranchFilter()
     # test_filter.test_simple_subset_removal()
     # test_filter.test_keep_singularity_filling_branch()
@@ -1059,4 +1284,19 @@ if __name__ == "__main__":
     # test_const.test_empty_system()
     # test_const.test_variable_overflow()
     # test_const.test_difficult_systems()
+    # test_gb = TestSageGroebnerBridge()
+    # test_gb.test_returns_sympy_objects()
+    # test_gb.test_groebner_correctness()
+
+    test_solver = Test0DSolver()
+    # test_solver.test_branching_rationals()
+    # test_solver.test_irrational_filtering()
+    # test_solver.test_mixed_factors()
+    test_solver.test_infinite_solutions_error()
+    # test_solver.test_system_branching()
+    # test_solver.test_parameters_simple()
+    # test_solver.test_parameters_irrational()
+    # test_solver.test_no_solution_inconsistent()
+    # test_solver.test_high_degree_rational()
+    # test_solver.test_difficult_rational()
     

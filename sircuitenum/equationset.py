@@ -27,7 +27,8 @@ UNSOLVABLE_CACHE = set()  # sets of equations with no solutions
 
 
 def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr] = [],
-                             nonzero_constraints: list[sym.Expr] = []) -> Tuple[list, list]:
+                             nonzero_constraints: list[sym.Expr] = [],
+                             rational_only = False) -> Tuple[list, list]:
     """
     Given a list of list of systems of equations, identifies the largest set of compatible
     systems of equations that can be solved simultaneously. Returns the indices of the selected
@@ -45,6 +46,8 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
         Expressions that must be nonzero in solutions. Are checked after solving.
     nonzero_constraints : list[sym.Expr], optional
         Expressions to be included as constraints to the solver to enforce nonzero conditions.
+    rational_only : bool, optional
+        If ``True``, only allows for solutions that contain rational numbers
         
     Returns
     -------
@@ -121,7 +124,7 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
                 # print("Solving combined eq", combined_eqs)
                 # Solve combined equations
                 sols = []
-                branches = solve_with_singular(combined_eqs, check_fraction=False)
+                branches = solve_with_singular(combined_eqs, check_fraction=False, rational_only=rational_only)
                 for sol in extract_mappings(branches, real_only=True):
                     # Sub out nzvar if present
                     if nz_var in sol:

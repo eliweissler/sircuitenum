@@ -20,7 +20,6 @@ from sympy.core.add import Add
 
 from sircuitenum import utils
 from sircuitenum.equationset import maximally_compatible_sol, extract_denom, eq_indep_of_vars, _unique_products, _eq_as_numer_denom
-from sircuitenum.singular_interface import is_compatible, solve_with_singular, extract_mappings
 from sircuitenum.z3_interface import find_rational_vars_integer_results, _calc_min_cost
 
 PERIODIC_CHARGE = "n"
@@ -469,8 +468,7 @@ def _maximize_wT(wT):
     best_val = -np.inf
     best_key = ""
 
-    base_n = len(WJ_VALS)
-    add = (base_n - 1)//2
+    wJ_zero = len(WJ_VALS)//2
 
     # Choice of row swaps
     # Which columns to invert
@@ -488,7 +486,7 @@ def _maximize_wT(wT):
                     row_order = list(itertools.chain.from_iterable(row_perm))
                     wT_perm = wT_mod[row_order, :].astype(int)
                     # Flattened matrix in base n -- for canonical ordering
-                    key = "".join((wT_perm + add).flatten().astype(str))
+                    key = "".join((wT_perm + wJ_zero).flatten().astype(str))
                     if val > best_val or (val == best_val and key > best_key):
                         best_val = val
                         best_key = key
@@ -605,7 +603,7 @@ def _find_Z_min_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
     for expr in integer_constraints + nonzero_constraints:
         var_list = var_list.union(expr.free_symbols)
     var_list = sorted(var_list, key=str)
-    variable_cost = _calc_min_cost(integer_constraints,nonzero_constraints,var_list)[0]
+    variable_cost = _calc_min_cost(integer_constraints,nonzero_constraints,[],var_list)[0]
     return fixed_cost + variable_cost
     
 
@@ -615,7 +613,6 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
     # If no variables, just return
     if len(Z.free_symbols) == 0:
         return Z
-    
     
     n_nl = len(var_types.get("compact", [])) + len(var_types.get("extended", []))
 
@@ -651,13 +648,13 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
     # while ensuring det(Z) != 0 and minimizing sum of abs values
     nz_idx = sorted(nz_entries.keys(), key=lambda x: (x[0], x[1]))
     integer_constraints = [nz_entries[(i,j)] for (i,j) in nz_idx]
-    nonzero_constraints = nonzero
+    nonzero_constraints = [nz for nz in nonzero if len(nz.free_symbols) > 0]
     var_list = set()
     for expr in integer_constraints + nonzero_constraints:
         var_list = var_list.union(expr.free_symbols)
     var_list = sorted(var_list, key=str)
     all_sols = find_rational_vars_integer_results(integer_constraints,
-                                            nonzero_constraints,
+                                            nonzero_constraints, [],
                                             var_list)
     if all_sols is None:
         raise TimeoutError("No solutions found")
@@ -1321,7 +1318,8 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
 
     # Flatten the list of possible substitutions
     all_keys, all_subs = maximally_compatible_sol(coupling,
-                            nonzero_constraints=[_det_fast(Z_poly), Z_common_denom])
+                            nonzero_constraints=[_det_fast(Z_poly), Z_common_denom],
+                            rational_only=True)
 
     # breakpoint()
     # Cannot decouple anything
@@ -1454,7 +1452,6 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         Z_final_instance = []
         hash_final_instance = ""
 
-
         min_costs = []
         for Zf in Z_final:
             var_list = [x for x in Zf.free_symbols if "Z" in str(x)]
@@ -1462,11 +1459,14 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         
         order = np.argsort(min_costs)
         best_cost = 5*wJ.shape[0]*wJ.shape[1]
-        for i in order:
-            Zf = Z_final[i]
-            min_cost = min_costs[i]
-
-
+        # for i in order:
+        #     print("Z", i, min_costs[i], Z_final[i])
+        for iZ in order:
+            Zf = Z_final[iZ]
+            min_cost = min_costs[iZ]
+            # Don't bother trying if we already know the cost can't be beat
+            if best_cost < min_cost:
+                continue
             var_list = [x for x in Zf.free_symbols if "Z" in str(x)]
             ans = None
             ans = _find_Z_instance(Zf, var_list, var_types=var_types,
@@ -1972,8 +1972,15 @@ if __name__ == "__main__":
 
     # circuit = [('J',), ('J',), ('J', 'L'), ('C', 'J'), ('C', 'J'), ('C', 'J', 'L')]
     # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
-    circuit =  [('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'J', 'L'), ('J', 'L'), ('C', 'J', 'L')]
-    edges =  [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    # circuit =  [('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'J', 'L'), ('J', 'L'), ('C', 'J', 'L')]
+    # edges =  [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    # circuit = [('J_1', 'L_1'), ('J_2', 'L_2'), ('J_3', 'L_3'), ('J_4', 'L_4'), ('J_5', 'L_5'), ('J_6', 'L_6')]
+    # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]    
+    # circuit = utils.add_elem_number(circuit)
+
+    # circuit = [('J',), ('J',), ('C', 'L'), ('J', 'L'), ('J',), ('C', 'J')]
+    circuit = [('J',), ('C', 'L'), ('C', 'J'), ('C', 'J'), ('J', 'L'), ('C', 'J')]
+    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
     # circuit = utils.add_elem_number(circuit)
 
 

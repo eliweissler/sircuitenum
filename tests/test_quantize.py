@@ -483,6 +483,16 @@ def test__sort_wT():
 
 
 def test__maximize_wT():
+
+    test = sym.nsimplify(sym.Matrix([
+                        [-1, -1,  0, 0],
+                        [-1,  0,  1, 0],
+                        [-1,  0,  0, 0],
+                        [ 0,  1,  1, 0],
+                        [ 0,  1,  0, 0],
+                        [ 0,  0, -1, 0]]), rational=True)
+    wT, best_key, (row_vec, col_vec, row_order) = quantize._maximize_wT(test[:, :-1])
+    assert best_key == '544454445554545453'
      
     test = np.array([[1, 0, 0],
                       [0, 1, 0],
@@ -601,6 +611,29 @@ def test__find_Z_deterministic():
 def test__find_Z_min_cost():
 
     Z21, Z12, Z01, Z02, Z11, Z22 = sym.symbols('Z21 Z12 Z01 Z02 Z11 Z22')
+
+    wJ = sym.nsimplify(sym.Matrix([
+            [ 1,  1,  0,  0,  0],
+            [-1,  0,  1,  1,  0],
+            [ 0, -1, -1,  0,  1],
+            [ 0,  0,  0, -1, -1]]), rational=True)
+    Z = sym.nsimplify(sym.Matrix([
+            [-1/2,  Z11/2, Z22/2, 1/4],
+            [ 1/2,      0,     0, 1/4],
+            [ 1/2,      0,  -Z22, 1/4],
+            [-1/2, -Z11/2, Z22/2, 1/4]]))
+    var_types = {'compact': [0], 'extended': [1, 2], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [3]}
+    var_list = [Z11, Z22]
+    min_cost = quantize._find_Z_min_cost(Z, var_list, var_types, wJ)
+    #     wJ.transpose()*Z_final[-1] = 
+    # Matrix([
+    # [-1, Z11/2,    Z22/2, 0],
+    # [-1, Z11/2,  3*Z22/2, 0],
+    # [ 0,     0,      Z22, 0],
+    # [ 1, Z11/2,   -Z22/2, 0],
+    # [ 1, Z11/2, -3*Z22/2, 0]]) -> Z11,Z22 = 1 -> min_cost = 4+1+3+2+1+3 = 14 +(4 compact) = 18
+    assert min_cost == 18
+
     wJ =  sym.Matrix([[1, 1, 1, 0, 0, 0], [-1, 0, 0, 1, 1, 0], [0, -1, 0, -1, 0, 1], [0, 0, -1, 0, -1, -1]])
     var_types =  {'compact': [0], 'extended': [1, 2], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [3]}
 
@@ -626,6 +659,36 @@ def test__find_Z_min_cost():
     return
 
 def test__find_Z_instance():
+
+    Z11, Z22 = sym.symbols("Z11 Z22")
+    wJ = sym.nsimplify(sym.Matrix([
+            [ 1,  1,  0,  0,  0],
+            [-1,  0,  1,  1,  0],
+            [ 0, -1, -1,  0,  1],
+            [ 0,  0,  0, -1, -1]]), rational=True)
+    Z = sym.nsimplify(sym.Matrix([
+            [-1/2,  Z11/2, Z22/2, 1/4],
+            [ 1/2,      0,     0, 1/4],
+            [ 1/2,      0,  -Z22, 1/4],
+            [-1/2, -Z11/2, Z22/2, 1/4]]))
+    var_types = {'compact': [0], 'extended': [1, 2], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [3]}
+    var_list = [Z11, Z22]
+    min_cost = quantize._find_Z_min_cost(Z, var_list, var_types, wJ)
+    #     wJ.transpose()*Z_final[-1] = 
+    # Matrix([
+    # [-1, Z11/2,    Z22/2, 0],
+    # [-1, Z11/2,  3*Z22/2, 0],
+    # [ 0,     0,      Z22, 0],
+    # [ 1, Z11/2,   -Z22/2, 0],
+    # [ 1, Z11/2, -3*Z22/2, 0]]) -> Z11,Z22 = 1 -> min_cost = 4+1+3+2+1+3 = 14 +(4 compact) = 18
+    var_list = [Z11, Z22]
+    Zsub = quantize._find_Z_instance(Z, var_list, wJ=wJ, var_types=var_types)
+    ans = sym.nsimplify(sym.Matrix([
+                        [-1/2, -1, -1, 1/4],
+                        [ 1/2,  0,  0, 1/4],
+                        [ 1/2,  0,  2, 1/4],
+                        [-1/2,  1, -1, 1/4]]), rational=True)
+    assert quantize._equal_up_to_column_shift_and_sign(Zsub, ans)
 
     # solution with one free variable, which is divided by 2 somewhere
     Z11 = sym.symbols("Z11")
@@ -1511,8 +1574,8 @@ def main():
     # test__independent_from()
 
     # test_secondary_decouple()
-    test_choose_Z()
-    # test__find_Z_instance()
+    # test_choose_Z()
+    test__find_Z_instance()
     # test__find_Z_min_cost()
 
     # test__maximize_wT()

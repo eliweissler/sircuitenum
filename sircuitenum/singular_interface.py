@@ -4,7 +4,7 @@ __version__ = "0.1.0"
 
 
 __all__ = [
-    "solve_with_singular", "is_compatible", "extract_mappings"
+    "solve_with_singular", "is_compatible", "extract_mappings", "get_sage_groebner_basis", "solve_with_sage_0D"
 ]
 
 import subprocess
@@ -14,14 +14,15 @@ import time
 import sys
 import select
 
+import sympy as sym
+from sympy import S
 import re
 import itertools, functools
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union, Iterable
 
 # Singular Interface -- Initialize once per process
-from sage.interfaces.singular import Singular
-from sage.all import singular
+from sage.all import singular, PolynomialRing, QQ, ideal, SR, var, QQbar, lcm
 from sage.features import Executable
 try:
     SINGULAR_PATH = Executable("Singular","Singular").absolute_filename()
@@ -29,7 +30,117 @@ except:
     raise ValueError("Cannot find Singular Binary")
 WORKER_SINGULAR = None
 
-import sympy as sym
+# Sircuitenum
+from sircuitenum.rational_check import has_at_least_one_clean_root, get_clean_roots, _has_rational_coeffs
+
+
+
+def get_sage_groebner_basis(sympy_eqs, sympy_vars):
+    """
+    Calculates the Groebner Basis using SageMath (Singular backend) 
+    but accepts and returns SymPy objects.
+    
+    Args:
+        sympy_eqs: List of SymPy equations or expressions (assumed = 0)
+        sympy_vars: List of SymPy symbols
+    
+    Returns:
+        List of SymPy expressions representing the Groebner Basis
+    """
+    var_names = [str(v) for v in sympy_vars]
+    R = PolynomialRing(QQ, names=var_names, order='lex')
+    
+    sage_eqs = []
+    for eq in sympy_eqs:
+        if isinstance(eq, sym.Eq):
+            expr = eq.lhs - eq.rhs
+        else:
+            expr = eq
+        sage_eqs.append(R(str(expr)))
+        
+    I = ideal(sage_eqs)
+    B = I.groebner_basis()
+    
+    sympy_basis = []
+    for poly in B:
+        sympy_basis.append(SR(poly)._sympy_())
+    return sympy_basis
+
+
+def solve_0D_backsub(sympy_eqs, sympy_vars, sympy_params=None, rational_only=False):
+    """
+    Finds ALL rational solutions for a system with parameters.
+    Includes a final substitution pass to ensure all variables are fully numeric.
+    """
+    if sympy_params is None: sympy_params = []
+
+    # Get triangular groebner basis using sage
+    # Order: vars > params (lex is mandatory for triangular form)
+    all_vars = sympy_vars + sympy_params
+    gb = get_sage_groebner_basis(sympy_eqs, all_vars)
+    # Inconsistent system
+    if len(gb) == 1 and gb[0] == 1:
+        return []
+    # Identify any variables that don't actually appear
+    sympy_vars =[v for v in sympy_vars if any(v in eq.free_symbols for eq in gb)]
+    if len(sympy_vars) == 0:
+        raise ValueError(f"Unconstrained variables: {sympy_vars}")
+
+    # Backsubstitute, with branching for multiple roots
+    solve_order = sympy_vars[::-1]
+    current_branches = [{}] 
+    param_set = set(sympy_params)
+    for target_var in solve_order:
+        next_branches = []
+        for partial_sol in current_branches:
+            # 1. Substitute knowns
+            specialized_basis = [poly.subs(partial_sol) for poly in gb]
+            
+            # 2. Select Polynomial
+            candidate_polys = []
+            allowed_symbols = param_set | {target_var}
+            for poly in specialized_basis:
+                if poly == 0:
+                    continue
+                if target_var not in poly.free_symbols:
+                    continue
+                if poly.free_symbols.issubset(allowed_symbols):
+                    candidate_polys.append(poly)
+            if not candidate_polys:
+                raise ValueError(f"Unconstrained variable: {target_var}")
+            poly_to_solve = min(candidate_polys, key=lambda p: sym.degree(p, target_var))
+            poly_to_solve = sym.Poly(poly_to_solve, target_var)
+            # 3. Find roots via factorization -> solve
+            roots = []
+            if rational_only:
+                if has_at_least_one_clean_root(poly_to_solve):
+                    for root in get_clean_roots(poly_to_solve):
+                        if _has_rational_coeffs(root, sympy_params):
+                            roots.append({target_var: root})
+            else:
+                coeff, factors = sym.factor_list(poly_to_solve)
+                for factor, exp in factors:
+                    sols = sym.solve(factor, target_var, dict=True, simplify=True)
+                    print("sols", sols)
+                    roots.extend(sols)
+
+            # 4. Create new branches from roots
+            for r in roots:
+                new_branch = partial_sol.copy() | r
+                next_branches.append(new_branch)
+        
+        current_branches = next_branches
+        if not current_branches:
+            return []
+
+    # Final Simplify Pass
+    final_results = []
+    for sol in current_branches:
+        clean_sol = {k: sym.simplify(v) for k, v in sol.items()}
+        final_results.append(clean_sol)
+        
+    return final_results
+
 
 def is_compatible(equations: Iterable[Union[sym.Expr, sym.Equality]], check_fraction: bool = True) -> bool:
     """
@@ -125,7 +236,7 @@ def _cached_compatible(cmd: str):
 
 
 def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvability=True,
-                        check_fraction: bool = True) -> List[Dict[str, Any]]:
+                        check_fraction: bool = True, rational_only: bool = False) -> List[Dict[str, Any]]:
     """
     Solves a system of SymPy equations using the Groebner Cover algorithm via Singular.
 
@@ -147,6 +258,7 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
     :type check_solvability: bool, optional
     :param check_fraction: If ``True``, processes equations to clear denominators and enforce 
                            non-zero conditions on them. Defaults to ``True``.
+    :param rational_only: If ``True``, only allows for solutions that contain rational numbers
     :type check_fraction: bool, optional
 
     :return: A list of solution branches. Each branch is a dictionary containing:
@@ -226,7 +338,7 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
         if raw_br['basis'] == [1]: continue # Inconsistent
 
         # Resolve (Handles recursion, filtering, refinement)
-        resolved_list = resolve_branch_logic(raw_br, equations)
+        resolved_list = resolve_branch_logic(raw_br, equations, rational_only=rational_only)
         
         final_branches.extend(resolved_list)
     # 3. Final Validity Check
@@ -428,7 +540,7 @@ def parse_singular_output(raw_output: str,
     return parsed_raw_branches
 
 
-def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Dict]:
+def resolve_branch_logic(branch_data: dict, original_equations: list, rational_only=False) -> List[Dict]:
     """
     Takes a raw branch dict, handles ghost constraints, solves sub-systems
     (finitely or recursively), and merges the results into fully resolved branches.
@@ -475,7 +587,8 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
         vars_to_solve = [v for v in branch_data['params'] 
                          if any(v in eq.free_symbols for eq in eqs_to_solve)]
         
-        raw_sols = sym.solve(eqs_to_solve, vars_to_solve, dict=True)
+        raw_sols = solve_0D_backsub(eqs_to_solve, vars_to_solve,
+                                    rational_only=rational_only)
         
         # NONNULL FILTER
         nonnull_exprs = branch_data.get('nonnull', [])
@@ -499,7 +612,7 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
         # This returns a list of full branch dictionaries.
         # We pass 'params' as the variables to solve for.
         param_branches = solve_with_singular(active_constraints, solve_vars=branch_data['params'], 
-                                             check_fraction=False)
+                                             check_fraction=False, rational_only=rational_only)
 
     # ---------------------------------------------------------------------
     # 3. SOLVE DEPENDENT VARIABLES (Triangular)
@@ -513,7 +626,8 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
     else:
         # B. Finite Case
         if branch_data['num_solutions'] != -1:
-            raw_dep_sols = sym.solve(dep_eqs, dep_vars, dict=True, simplify=True)
+            raw_dep_sols = solve_0D_backsub(dep_eqs, dep_vars, branch_data["params"],
+                                            rational_only=rational_only)
             for sol in raw_dep_sols:
                 dep_branches.append({
                     'mapping': sol,
@@ -524,7 +638,8 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
         # C. Infinite Case (Recursive Singular Call)
         else:
             # Recursively solve the dependent system.
-            dep_branches = solve_with_singular(dep_eqs, solve_vars=dep_vars, check_fraction=False)
+            dep_branches = solve_with_singular(dep_eqs, solve_vars=dep_vars, check_fraction=False,
+                                               rational_only=rational_only)
 
     # ---------------------------------------------------------------------
     # 4. COMBINE and MERGE BRANCHES
@@ -565,7 +680,7 @@ def resolve_branch_logic(branch_data: dict, original_equations: list) -> List[Di
         new_br['free_params'] = [v for v in branch_data['params'] if v not in combined_mapping]
         
         resolved_branches.append(new_br)
-        
+    
     return resolved_branches
 
 
@@ -593,11 +708,16 @@ def make_dummy_map(var_list: List[sym.Symbol]):
     return dummy_map, inv_dummy_map
 
 
-def check_branch_validity(branch, original_eqs):
+def check_branch_validity(branch, original_eqs, eps=1e-12):
     # Simple check to ensure we don't return garbage
     mapping = branch['mapping']
     for eq in original_eqs:
-        if sym.simplify(_robust_substitute(eq, mapping)) != 0:
+        val = sym.simplify(_robust_substitute(eq, mapping))
+        failed = True
+        if len(val.free_symbols) == 0:
+            if abs(val) < eps:
+                failed = False
+        if failed:
             print(f"Branch {branch['id']} failed validity check on equation {eq} with mapping {mapping}")
             print(f"Result: {_robust_substitute(eq, mapping)}")
             return False

@@ -16,7 +16,6 @@ proc check_solvability(ideal Id) {
     return(1);
 }
 
-
 // solve_cover(fixed_params_csv, potential_vars_csv, eqs_csv)
 // - fixed_params_csv: comma-separated parameter names (no spaces), e.g. "a,b"
 // - potential_vars_csv: comma-separated variable names (no spaces), e.g. "x,y"

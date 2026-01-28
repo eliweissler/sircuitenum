@@ -31,6 +31,7 @@ def test_basic_rational_constraints(vars):
     results = find_rational_vars_integer_results(
         integer_constraints=constraints,
         nonzero_constraints=[],
+        zero_constraints=[],
         variables=[Z1, Z2],
         max_result_range=2
     )
@@ -63,6 +64,7 @@ def test_half_type_handling(vars):
         results = find_rational_vars_integer_results(
             integer_constraints=constraints,
             nonzero_constraints=[],
+            zero_constraints=[],
             variables=[Z1],
             max_result_range=2
         )
@@ -85,6 +87,7 @@ def test_nonzero_constraints(vars):
     results = find_rational_vars_integer_results(
         integer_constraints=constraints,
         nonzero_constraints=nonzero,
+        zero_constraints=[],
         variables=[Z1, Z2],
         max_result_range=1
     )
@@ -106,6 +109,7 @@ def test_return_format_types(vars):
     results = find_rational_vars_integer_results(
         integer_constraints=constraints,
         nonzero_constraints=[],
+        zero_constraints=[],
         variables=[Z1],
         max_result_range=1
     )
@@ -141,11 +145,11 @@ def test_unsatisfiable_system(vars):
     
     constraints = [Z1]
     # We add a hard equality constraint that Z1 must be 3/2
-    constraints.append(sym.Eq(Z1, sym.Rational(3, 2)))
     
     results = find_rational_vars_integer_results(
         integer_constraints=constraints,
         nonzero_constraints=[],
+        zero_constraints=[Z1-sym.Rational(3,2)],
         variables=[Z1],
         max_result_range=5
     )
@@ -169,6 +173,7 @@ def test_l1_minimization(vars):
     results = find_rational_vars_integer_results(
         integer_constraints=constraints,
         nonzero_constraints=nonzero,
+        zero_constraints=[],
         variables=[Z1, Z2],
         max_result_range=5
     )
@@ -197,6 +202,7 @@ def test_as_long_error():
     solutions = find_rational_vars_integer_results(
         integer_constraints=integer_constraints,
         nonzero_constraints=nonzero_constraints,
+        zero_constraints=[],
         variables=variables,
         max_result_range=max_range,
         block_negative_equivalents=True
@@ -208,6 +214,7 @@ def test_as_long_error():
         integer_constraints=integer_constraints,
         nonzero_constraints=nonzero_constraints,
         variables=variables,
+        zero_constraints=[],
         max_result_range=max_range,
         block_negative_equivalents=False
     )
@@ -221,25 +228,38 @@ def test_calc_min_cost():
     integer_constraints =  [-Z21/2, Z12, -Z21, Z12, Z12, -Z21/2, Z21/2, Z21]
     nonzero_constraints =  [8, 4, Z12*Z21/4]
     variables =  [Z12, Z21]
-    min_cost, _, _,_,_ = _calc_min_cost(integer_constraints, nonzero_constraints,
+    min_cost, _, _,_,_ = _calc_min_cost(integer_constraints, nonzero_constraints,[],
                                         variables)
     assert min_cost == 10
 
     integer_constraints =  [-Z01, -2*Z01*Z02/(2*Z01 - Z21), -Z21, -Z02*Z21/(2*Z01 - Z21), -Z02*Z21/(2*Z01 - Z21), Z01 - Z21, Z02, Z01, Z02, Z21]
     nonzero_constraints =  [4*Z01 - 2*Z21, 4, -Z02*Z21**2/(8*Z01 - 4*Z21)]
     variables =  [Z01, Z02, Z21]
-    min_cost, _, _,_,_ = _calc_min_cost(integer_constraints, nonzero_constraints,
+    min_cost, _, _,_,_ = _calc_min_cost(integer_constraints, nonzero_constraints,[],
                                         variables)
     assert min_cost == 6
 
     integer_constraints =  [Z11, -Z22, Z11, -Z22, Z11, Z22, Z22]
     nonzero_constraints =  [2, 4, -Z11*Z22/4]
     variables =  [Z11, Z22]
-    min_cost, _, _,_,_ = _calc_min_cost(integer_constraints, nonzero_constraints,
+    min_cost, _, _,_,_ = _calc_min_cost(integer_constraints, nonzero_constraints,[],
                                         variables)
     assert min_cost == 7
 
+
+def test_rational_vars_zero():
+
+    Z00, Z01, Z02, Z10, Z11, Z12, Z20, Z21, Z22 = sym.symbols('Z00, Z01, Z02, Z10, Z11, Z12, Z20, Z21, Z22')
+    vars = [Z00, Z01, Z02, Z10, Z11, Z12, Z20, Z21, Z22]
+    is_nonzero = sum([Z00*Z11*Z22/4, -Z00*Z12*Z21/4, -Z01*Z10*Z22/4, -Z02*Z11*Z20/4, Z01*Z12*Z20/4, Z02*Z10*Z21/4])
+    integer_constraints = [Z00 - Z10, Z01 - Z11, Z02 - Z12, Z00 - Z20, Z01 - Z21, Z02 - Z22, Z00, Z01, Z02, Z10 - Z20, Z11 - Z21, Z12 - Z22, Z10, Z11, Z12, Z20, Z21, Z22]
+
+    res = find_rational_vars_integer_results(integer_constraints, [is_nonzero],
+                                             [], variables=vars)
+
+    assert sum(abs(x) for x in res[0]["results"]) == 9
 if __name__ == "__main__":
     # test_as_long_error()
-    test_basic_rational_constraints(vars2())
-    test_calc_min_cost()
+    # test_basic_rational_constraints(vars2())
+    # test_calc_min_cost()
+    test_rational_vars_zero()
