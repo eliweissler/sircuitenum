@@ -760,7 +760,10 @@ def decouple_column(v:sym.Matrix, nd_mat:sym.Matrix, mat:sym.Matrix):
     # Decouple each nondynamical mode individually
     i = nd_mat.shape[1]
     while i >= 1:
-        Z1 = Z1*_decoupling_transformation((Z1).transpose()*mat*(Z1), n_d=i)    
+        try:
+            Z1 = Z1*_decoupling_transformation(sym.simplify((Z1).transpose()*mat*(Z1)), n_d=i)
+        except:
+            breakpoint()   
         i -= 1
     return sym.simplify(Z1[:, 0])
     
@@ -772,6 +775,8 @@ def _decoupling_transformation(X:sym.Matrix, n_d:int):
     for i in range(n_d, X.shape[0]):
         if any(X[i, n_d:]):
             coupled.append(i)
+    if len(coupled) == 0:
+        return sym.eye(X.shape[0])
 
     # Make the transformation to uncouple them
     # (I 0)
@@ -1319,9 +1324,7 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     # Flatten the list of possible substitutions
     all_keys, all_subs = maximally_compatible_sol(coupling,
                             nonzero_constraints=[_det_fast(Z_poly), Z_common_denom],
-                            rational_only=True)
-
-    # breakpoint()
+                            rational_only=True, stop_at_first=True)
     # Cannot decouple anything
     if not all_keys:
         if return_tiebreaker:
@@ -1395,6 +1398,8 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
     Z0, var_types = var_trans_basis(circuit, edges, ground_node=ground_node)
     n_dyn = len(var_types["compact"] + var_types["extended"] + var_types["harmonic"])
     n_nl = len(var_types["compact"] + var_types["extended"])
+    if n_dyn == 0:
+        raise ValueError("No Dynamical Modes in Circuit -- Cannot Choose Z Transformation")
 
     # Step 1: Enumerate different choices of compact variable
     wJT_trans = sym.simplify(wJ.transpose()*Z0)
@@ -1423,6 +1428,11 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
                 elif val == lowest_hash:
                     lowest_Z += [Z_tot]
 
+    # Filter out any bonkers transformations
+    str_len = [len(str(Z)) for Z in lowest_Z]
+    min_len = min(str_len)
+    lowest_Z = [Z for Z in lowest_Z if len(str(Z)) <= 50*min_len]
+
     # If there are multiple Z with the same lowest hash
     # then see if they separate with equal L/C values
     Z_final = []
@@ -1444,7 +1454,6 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             Z_final = [Z]
         elif val == hash_final:
             Z_final.append(Z)
-
     # Get a specific instance of the transformation
     if return_instance:
         # Nonzero terms -- det is already done in find_Z_instance
@@ -1459,8 +1468,6 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         
         order = np.argsort(min_costs)
         best_cost = 5*wJ.shape[0]*wJ.shape[1]
-        # for i in order:
-        #     print("Z", i, min_costs[i], Z_final[i])
         for iZ in order:
             Zf = Z_final[iZ]
             min_cost = min_costs[iZ]
@@ -1981,9 +1988,18 @@ if __name__ == "__main__":
     # circuit = [('J',), ('J',), ('C', 'L'), ('J', 'L'), ('J',), ('C', 'J')]
     # circuit = [('J',), ('C', 'L'), ('C', 'J'), ('C', 'J'), ('J', 'L'), ('C', 'J')]
     # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
-    circuit = [('J',), ('J',), ('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'J', 'L')]
-    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    # circuit = [('J',), ('J',), ('L',), ('J', 'L'), ('J',), ('C', 'J')]
+    # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
     # circuit = utils.add_elem_number(circuit)
+
+    # circuit = [('J_1',), ('J_2',), ('J_3', 'L_1'), ('J_4', 'L_2'), ('C_1', 'J_5', 'L_3'), ('L_4',), ('J_6', 'L_5'), ('L_6',), ('J_7', 'L_7'), ('L_8',)]
+    # edges = [(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+
+    # circuit = [('C_1',), ('C_2',), ('C_3',), ('C_4',), ('J_1', 'L_1'), ('C_5',), ('C_6',), ('L_2',)]
+    # edges = [(0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 4), (3, 4)]
+
+    circuit = [('C_1', 'L_1'), ('L_2',), ('L_3',), ('C_2',), ('L_4',), ('C_3', 'L_5'), ('L_6',), ('J_1',)]
+    edges = [(0, 2), (0, 3), (0, 4), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
 
 
     # draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="fixed")
