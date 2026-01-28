@@ -15,6 +15,7 @@ import sys
 import select
 
 import sympy as sym
+import numpy as np
 from sympy import S
 import re
 import itertools, functools
@@ -96,7 +97,8 @@ def solve_0D_backsub(sympy_eqs, sympy_vars, sympy_params=None, rational_only=Fal
             # 1. Substitute knowns
             specialized_basis = [poly.subs(partial_sol) for poly in gb]
             
-            # 2. Select Polynomial
+            # 2. Select Polynomial that contains only target_var + params
+            # Pick the one with the lowest degree in target_var
             candidate_polys = []
             allowed_symbols = param_set | {target_var}
             for poly in specialized_basis:
@@ -108,8 +110,7 @@ def solve_0D_backsub(sympy_eqs, sympy_vars, sympy_params=None, rational_only=Fal
                     candidate_polys.append(poly)
             if not candidate_polys:
                 raise ValueError(f"Unconstrained variable: {target_var}")
-            poly_to_solve = min(candidate_polys, key=lambda p: sym.degree(p, target_var))
-            poly_to_solve = sym.Poly(poly_to_solve, target_var)
+            poly_to_solve = min(candidate_polys, key=lambda p: sym.degree(p, target_var)).as_poly(target_var)
             # 3. Find roots via factorization -> solve
             roots = []
             if rational_only:
