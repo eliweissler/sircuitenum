@@ -1984,7 +1984,7 @@ if __name__ == "__main__":
     # circuit = utils.add_elem_number(circuit)
 
 
-    draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="fixed")
+    # draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="fixed")
     cMat = gen_cap_mat(circuit, edges)
     lMat = gen_ind_mat(circuit, edges)
     times = []
@@ -2001,7 +2001,7 @@ if __name__ == "__main__":
         times.append(tf-t0)
     print("Max", np.max(times), "Min:", np.min(times))
     print("Mean:", np.mean(times), "+/-", np.std(times))
-    breakpoint()
+    # breakpoint()
     # print(Z)
     # print("C Transformed:\n", sym.simplify(cTrans))
     # print("L Transformed:\n", sym.simplify(lTrans))
