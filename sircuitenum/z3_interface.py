@@ -22,7 +22,7 @@ set_param('sat.random_seed', 7)
 
 
 def find_rational_vars_integer_results(integer_constraints, nonzero_constraints, zero_constraints,
-                                       variables, max_result_range=4, timeout_ms=int(1e05),
+                                       variables, max_result_range=4, timeout_ms=int(6*1e04),
                                        block_negative_equivalents=True, heuristic_upper=True):
     """
     Finds rational variable assignments that satisfy integer and nonzero constraints with minimal total cost.
@@ -129,10 +129,7 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
             return solutions
         
         elif check_result == unknown:
-            # breakpoint()
-            print(f"  > Z3 gave up! Reason: {solv.reason_unknown()}")
-            # print("timed out, continuing")
-            # raise TimeoutError("Z3 Solver timed out during cost sweep.")
+            raise TimeoutError(f"  > Z3 gave up! Reason: {solv.reason_unknown()}")
 
         solv.pop() # Remove "cost == k", continue to k+1
 
