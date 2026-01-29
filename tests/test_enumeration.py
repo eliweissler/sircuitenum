@@ -352,8 +352,8 @@ def test__gen_ham_class_row():
     con.commit()
     con.close()
 
-    enum._gen_ham_class_row((uid, TEMP_FILE, False))
-    enum._gen_ham_class_row((uid, TEMP_FILE, True))
+    enum._gen_ham_class_row((uid, TEMP_FILE, False, True))
+    enum._gen_ham_class_row((uid, TEMP_FILE, True, True))
 
     # Test stuff is right
     df = utils.get_circuit_data_batch(TEMP_FILE, 2, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
@@ -579,7 +579,7 @@ if __name__ == "__main__":
     # test__reduce_individual_set()
     # test_trim_graph_node()
     # test__gen_ham_class_row()
-    # test_add_hamiltonian_classes()
-    test_generate_all_circuits()
+    test_add_hamiltonian_classes()
+    # test_generate_all_circuits()
     # test_qps_enum()
 

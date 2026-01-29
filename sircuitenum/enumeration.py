@@ -460,7 +460,7 @@ def _gen_ham_class_row(args):
         ValueError: Error with circuit database
         kbi: Keyboard interrupt
     """
-    uid, db_file, eq_params = args
+    uid, db_file, eq_params, update = args
 
     # Load the graphs with the specified edges counts and graph index
     filter_str = f"WHERE unique_key LIKE '{uid}'"
@@ -523,12 +523,14 @@ def _gen_ham_class_row(args):
         str_cols=["H_class","wJT"]
 
     # Update value in database
-    utils.update_db_from_df(db_file, df, to_update, str_cols=str_cols)
+    if update:
+        utils.update_db_from_df(db_file, df, to_update, str_cols=str_cols)
+    return df, to_update, str_cols
 
 
 def add_hamiltonian_classes(db_file: str, n_nodes: int,
                               n_workers: int = 4, resume: bool = False,
-                              eq_params=False):
+                              eq_params=False, save_every=100):
     """
     Constructs a variable transformation and identifies the hamiltonian
     class for each circuit in the database
@@ -584,15 +586,28 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
     np.random.shuffle(unique_keys)
 
     # Go through all the circuits and update rows with info
-    args = list(zip(unique_keys, [db_file]*len(unique_keys), [eq_params]*len(unique_keys)))
+    args = zip(unique_keys, itertools.repeat(db_file, n_to_do), itertools.repeat(eq_params, n_to_do), itertools.repeat(False, n_to_do))
+    df_update = []
+    count = 0
     if n_workers > 1:
         pool = Pool(processes=n_workers, initializer=initialize_singular)
-        for _ in tqdm(pool.imap_unordered(_gen_ham_class_row, args),
+        for entry, to_update, str_cols in tqdm(pool.imap_unordered(_gen_ham_class_row, args),
                           total=n_to_do):
-            pass
+            count += 1
+            df_update.append(entry)
+            if count % save_every == 0 or count == n_to_do:
+                combined_df = pd.concat(df_update)
+                utils.update_db_from_df(db_file, combined_df, to_update, str_cols=str_cols)
+                df_update = []
     else:
         for arg_set in tqdm(args, total=n_to_do):
-            _gen_ham_class_row((arg_set[0], arg_set[1], arg_set[2]))
+            entry, to_update, str_cols = _gen_ham_class_row((arg_set[0], arg_set[1], arg_set[2], arg_set[3]))
+            count += 1
+            df_update.append(entry)
+            if count % save_every == 0 or count == n_to_do:
+                combined_df = pd.concat(df_update)
+                utils.update_db_from_df(db_file, combined_df, to_update, str_cols=str_cols)
+                df_update = []
 
 
 
