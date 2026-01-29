@@ -606,7 +606,7 @@ def circuit_in_set(circuit: list, c_set: list):
 ###############################################################################
 
 
-def write_df(file: str, df: pd.DataFrame, n_nodes: int, overwrite=False):
+def write_df(file: str, df: pd.DataFrame, n_nodes: int, overwrite=False, table_name: str = None):
     """
     Writes the given dataframe to a database file. Appends it if the
     table is already there.
@@ -636,15 +636,17 @@ def write_df(file: str, df: pd.DataFrame, n_nodes: int, overwrite=False):
         if_exists = "replace"
 
     with sqlite3.connect(file) as con:
-        to_write.to_sql(f"CIRCUITS_{n_nodes}_NODES",
-                        con, if_exists=if_exists, index=False)
+        if table_name is None:
+            table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
+        to_write.to_sql(table_name, con, if_exists=if_exists, index=False)
 
 
 def update_db_from_df(file: str, df: pd.DataFrame,
                       to_update: list,
                       str_cols: list = [],
                       float_cols: list = [],
-                      uids: list = []):
+                      uids: list = [], parallel_safe: bool = True,
+                      table_name: str = None):
     """
     Updates the given columns listed in to_update
     for entries within df.
@@ -658,50 +660,64 @@ def update_db_from_df(file: str, df: pd.DataFrame,
         str_cols (list): columns that are string valued
         float_cols (list): columns that are float valued
         uids (list): list of individual uids to update
+        parallel_safe (bool): if True, uses a method that is safe
+                              for parallel writing to the database
 
     Returns:
         None, writes the dataframe info to the database
 
     """
-
-    n_fields = len(to_update)
-
     if len(uids) == 0:
         uids = list(df.unique_key.values)
 
+
+
+
+    # Group updates by table (n_nodes)
+    updates_by_table = {}
+    
+    for uid in uids:
+        row = df.loc[uid]
+        n_nodes = row['n_nodes']
+        
+        if n_nodes not in updates_by_table:
+            updates_by_table[n_nodes] = []
+        
+        values = []
+        for col in to_update:
+            val = row[col]
+            if col not in str_cols and col not in float_cols:
+                values.append(int(val))
+            elif col in str_cols:
+                values.append(str(val).replace("'", ""))
+            else:
+                values.append(float(val))
+        values.append(row['unique_key'])  # WHERE clause value
+        updates_by_table[n_nodes].append(tuple(values))
+
     with sqlite3.connect(file, timeout=5000) as con:
         cur = con.cursor()
-        # sql_str = ""
-        for uid in uids:
-            row = df.loc[uid]
-        # for _, row in df.iterrows():
-            n_nodes = row['n_nodes']
-            sql_str = f"UPDATE CIRCUITS_{n_nodes}_NODES SET "
-            for i, col in enumerate(to_update):
-                val = row[col]
-                if col not in str_cols and col not in float_cols:
-                    val = int(val)
-                elif col in str_cols:
-                    val = str(val).replace("'", "")
-                else:
-                    val = float(val)
-                if i < n_fields - 1:
-                    sql_str += f"{col} = '{val}', "
-                else:
-                    sql_str += f"{col} = '{val}' "
-                    sql_str += f"WHERE unique_key = '{row['unique_key']}';\n"
         
+        cur.execute("PRAGMA busy_timeout = 30000")
+        if parallel_safe:
+            cur.execute("PRAGMA synchronous = NORMAL")
+        else:
+            cur.execute("PRAGMA cache_size = -64000")
+         
+        for n_nodes, batch_values in updates_by_table.items():
+            set_clause = ", ".join(f"{col} = ?" for col in to_update)
+            if table_name is None:
+                table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
+            sql = f"UPDATE {table_name} SET {set_clause} WHERE unique_key = ?"
+            
             written = False
             while not written:
                 try:
-                    cur.executescript(sql_str)
+                    cur.executemany(sql, batch_values)
                     written = True
                 except sqlite3.OperationalError as exc:
-                    # Database is locked, wait random amount
-                    # of time and try again
-                    print("Database Error -", exc)
                     sleep(np.abs(np.random.random()))
-
+        
         con.commit()
 
 

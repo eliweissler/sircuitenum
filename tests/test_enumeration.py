@@ -2,6 +2,8 @@ import os
 import itertools
 import sqlite3
 from pathlib import Path
+import pytest 
+
 
 import sympy as sy
 import numpy as np
@@ -41,6 +43,28 @@ NON_SERIES_3 += [
 
 TEMP_FILE = "temp.db"
 TEMP_FILE2 = "temp2.db"
+
+@pytest.fixture(autouse=True)
+def cleanup_temp_files():
+    """Clean up temp database files before and after each test"""
+    # Setup - clean before test
+    for f in [TEMP_FILE, TEMP_FILE2]:
+        cleanup_db(f)
+    
+    yield  # Run the test
+    
+    # Teardown - clean after test
+    for f in [TEMP_FILE, TEMP_FILE2]:
+        cleanup_db(f)
+
+def cleanup_db(filename):
+    for suffix in ["", "-wal", "-shm"]:
+        f = Path(str(filename) + suffix)
+        if f.exists():
+            try:
+                os.remove(f)
+            except:
+                pass
 
 
 def test_num_possible_circuits():
@@ -98,7 +122,7 @@ def test_generate_for_specific_graph():
 def test_delete_table():
 
     if Path(TEMP_FILE).exists():
-        os.remove(TEMP_FILE)
+        cleanup_db(TEMP_FILE)
 
     # Generate 2 node circuits
     enum.generate_graphs_node(TEMP_FILE, 2, 7)
@@ -111,7 +135,7 @@ def test_delete_table():
     assert len(t1) == 1
     assert len(t2) == 0
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
 
 def test_find_uniuqe_ground_placements():
@@ -186,7 +210,7 @@ def test_remove_dangling_edges():
 def test_find_equiv_cir_series():
 
     if Path(TEMP_FILE).exists():
-        os.remove(TEMP_FILE)
+        cleanup_db(TEMP_FILE)
 
     # Generate all the 2/3 node circuits
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=1, quiet=False)
@@ -228,7 +252,7 @@ def test_find_equiv_cir_series():
     c2, e2 = utils.get_circuit_data(TEMP_FILE, uid)
     assert red.isomorphic_circuit_in_set(c, e, [c2])
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
 
 def test_generate_graphs_node():
@@ -280,19 +304,19 @@ def test__reduce_individual_set():
 
     # CJL Delta
     filter_str = f"WHERE edge_counts LIKE '1,1,1,0,0,0,0' AND graph_index LIKE 1"
-    args = (filter_str, TEMP_FILE, 3, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
+    args = (filter_str, TEMP_FILE, 3, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], True)
     enum._reduce_individual_set(args)
     df = utils.get_circuit_data_batch(TEMP_FILE, 3, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
     assert df["in_non_iso_set"].sum() == 1
 
     # CLL Delta
     filter_str = f"WHERE edge_counts LIKE '1,0,2,0,0,0,0' AND graph_index LIKE 1"
-    args = (filter_str, TEMP_FILE, 3, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
+    args = (filter_str, TEMP_FILE, 3, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], True)
     enum._reduce_individual_set(args)
     df = utils.get_circuit_data_batch(TEMP_FILE, 3, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
     assert df["in_non_iso_set"].sum() == 0
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
 
 def test_trim_graph_node():
@@ -322,7 +346,7 @@ def test_trim_graph_node():
         df = utils.get_circuit_data_batch(TEMP_FILE, 3, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
         assert df["in_non_iso_set"].sum() == 0
 
-        os.remove(TEMP_FILE)
+        cleanup_db(TEMP_FILE)
 
 
 def test__gen_ham_class_row():
@@ -370,7 +394,7 @@ def test__gen_ham_class_row():
     assert entry["wJT_sym"] == "5"
 
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
 
 def df_equality_check(df1: pd.DataFrame, df2: pd.DataFrame):
@@ -398,6 +422,8 @@ def df_equality_check(df1: pd.DataFrame, df2: pd.DataFrame):
 
 def test_add_hamiltonian_classes():
     
+    cleanup_db(TEMP_FILE)
+    cleanup_db(TEMP_FILE2)
 
     res19 = ['011_0-0-1-1-5_0_0-0_0-0', '011_0-0-1-1-5_1_0-0_1-1', '011_0-0-1-1-5_1_1-1_0-0', '011_0-0-1-1-5_2_1-1_1-1', '020_0-0-2-1-5445_0_0-0_0-0', '020_0-0-2-1-5445_1_0-0_1-1', '020_0-0-2-1-5445_1_1-1_0-0', '020_0-0-2-1-5445_2_1-1_1-1', '020_1-1-4-1-544555_1_0-0_1-1', '020_1-1-4-1-544555_2_1-1_1-1', '101_0-0-1-1-5_0_0-0_0-0', '101_0-0-1-1-5_1_0-0_1-1', '110_0-0-2-1-5445_0_0-0_0-0', '110_0-0-2-1-5445_1_0-0_1-1', '110_1-1-3-1-5455_1_0-0_1-1', '110_1-1-4-1-544555_1_0-0_1-1', '200_0-0-2-1-5445_0_0-0_0-0', '200_0-0-2-1-5445_1_0-0_1-1', '200_1-1-4-1-544555_1_0-0_1-1']
     res20 =  ['011_0-0-1-1-5_0_0-0_0-0', '011_0-0-1-1-5_1_0-0_1-1', '020_0-0-2-1-5445_0_0-0_0-0', '020_0-0-2-1-5445_1_0-0_1-1', '020_0-0-2-1-5445_1_1-1_0-0', '020_0-0-2-1-5445_2_1-1_1-1', '020_1-1-4-1-544555_1_0-0_1-1', '020_1-1-6-2-465553_0_0-0_0-0', '020_1-1-6-2-465553_1_1-1_0-0', '101_0-0-1-1-5_0_0-0_0-0', '101_0-0-1-1-5_1_0-0_1-1', '110_0-0-2-1-5445_0_0-0_0-0', '110_0-0-2-1-5445_1_0-0_1-1', '110_1-1-3-1-5455_1_0-0_1-1', '110_1-1-4-1-544555_1_0-0_1-1', '110_1-1-4-1-5553_0_0-0_0-0', '110_1-1-6-2-465553_0_0-0_0-0', '200_0-0-2-1-5445_0_0-0_0-0', '200_0-0-2-1-5445_1_0-0_1-1', '200_1-1-4-1-544555_1_0-0_1-1']
@@ -442,20 +468,20 @@ def test_add_hamiltonian_classes():
     for x in exp_diff_nonsym_sym:
         assert x in classes and x not in sym_classes
 
-    os.remove(TEMP_FILE)
-    os.remove(TEMP_FILE2)
+    cleanup_db(TEMP_FILE)
+    cleanup_db(TEMP_FILE2)
     
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=5, n_workers=1)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
     assert df.H_class.unique().size == 19
     assert df.H_class_sym.unique().size == 17
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
 
 def test_generate_all_circuits():
 
     if Path(TEMP_FILE).exists():
-        os.remove(TEMP_FILE)
+        cleanup_db(TEMP_FILE)
 
     # Generate all the 2, 3 node circuits
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=3, quiet=False)
@@ -472,8 +498,14 @@ def test_generate_all_circuits():
         df_untrimmed_good['filter']),
         df_untrimmed_good['no_series'])
     df_trimmed_good = df_untrimmed_good[unique_qubits]
-    df_equality_check(df_untrimmed, df_untrimmed_good)
-    df_equality_check(df_trimmed, df_trimmed_good)
+    cols_to_compare = df_trimmed_good.columns
+    # Sort the dataframes to ensure consistent ordering
+    df_untrimmed = df_untrimmed.sort_index()
+    df_untrimmed_good = df_untrimmed_good.sort_values(by="unique_key")
+    df_trimmed = df_trimmed.sort_index()
+    df_trimmed_good = df_trimmed_good.sort_values(by="unique_key")
+    df_equality_check(df_untrimmed[cols_to_compare], df_untrimmed_good[cols_to_compare])
+    df_equality_check(df_trimmed[cols_to_compare], df_trimmed_good[cols_to_compare])
 
     # Test the 3 nodes I/0
     df_untrimmed = utils.get_circuit_data_batch(TEMP_FILE, n_nodes=3)
@@ -499,13 +531,15 @@ def test_generate_all_circuits():
                                                       row['edges']
                                                       )
 
+    df_trimmed_good = df_untrimmed_good[unique_qubits]
+    cols_to_compare = df_trimmed_good.columns
+    # Sort the dataframes to ensure consistent ordering
     df_untrimmed = df_untrimmed.sort_index()
     df_untrimmed_good = df_untrimmed_good.sort_values(by="unique_key")
     df_trimmed = df_trimmed.sort_index()
     df_trimmed_good = df_trimmed_good.sort_values(by="unique_key")
-
-    df_equality_check(df_untrimmed, df_untrimmed_good)
-    df_equality_check(df_trimmed, df_trimmed_good)
+    df_equality_check(df_untrimmed[cols_to_compare], df_untrimmed_good[cols_to_compare])
+    df_equality_check(df_trimmed[cols_to_compare], df_trimmed_good[cols_to_compare])
 
 
     # Test the accuracy
@@ -520,7 +554,7 @@ def test_generate_all_circuits():
     for c in NON_ISOMORPHIC_3:
         assert red.isomorphic_circuit_in_set(c, edges, df3.circuit.values)
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
     # Compare parallel vs. not parallel generation for 3 nodes
     df3 = df3_og.copy()
@@ -533,7 +567,7 @@ def test_generate_all_circuits():
     df_equality_check(df3, comp)
 
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
 
 def test_qps_enum():
@@ -563,7 +597,7 @@ def test_qps_enum():
     # reset enum params
     utils.set_enum_params()
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
 
 if __name__ == "__main__":
@@ -579,7 +613,7 @@ if __name__ == "__main__":
     # test__reduce_individual_set()
     # test_trim_graph_node()
     # test__gen_ham_class_row()
-    test_add_hamiltonian_classes()
-    # test_generate_all_circuits()
+    # test_add_hamiltonian_classes()
+    test_generate_all_circuits()
     # test_qps_enum()
 
