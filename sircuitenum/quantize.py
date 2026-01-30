@@ -20,7 +20,7 @@ from sympy.core.add import Add
 
 from sircuitenum import utils
 from sircuitenum.equationset import maximally_compatible_sol, extract_denom, eq_indep_of_vars, _unique_products, _eq_as_numer_denom
-from sircuitenum.z3_interface import find_rational_vars_integer_results, _calc_min_cost
+from sircuitenum.z3_interface import find_rational_vars_integer_results, _calc_min_cost, _heuristic_upper_bound
 
 PERIODIC_CHARGE = "n"
 PERIODIC_PHASE = "θ"
@@ -562,10 +562,8 @@ def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
         return sym.nsimplify(Z.subs(subs), rational=True), subs
     return sym.nsimplify(Z.subs(subs), rational=True)
 
-
-def _find_Z_min_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
-                     var_types: dict, wJ: sym.Matrix, vals=WJ_VALS, nonzero=[]):
-    
+def _fixed_cost_plus_integer_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
+                                 var_types: dict, wJ: sym.Matrix, vals=WJ_VALS, nonzero=[]):
     n_nl = len(var_types.get("compact", [])) + len(var_types.get("extended", []))
 
     # Variables to substitute concrete values in for
@@ -592,7 +590,7 @@ def _find_Z_min_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
                 else:
                     nz_entries[(i,j)] = wJval
     if len(nz_entries) == 0:
-        return fixed_cost
+        return fixed_cost, [], [], [], []
     
     # Pass to z3 to solve for integer assignments
     # while ensuring det(Z) != 0 and minimizing sum of abs values
@@ -603,12 +601,22 @@ def _find_Z_min_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
     for expr in integer_constraints + nonzero_constraints:
         var_list = var_list.union(expr.free_symbols)
     var_list = sorted(var_list, key=str)
+    return fixed_cost, integer_constraints, nonzero_constraints, var_list, nz_idx
+
+
+def _find_Z_min_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
+                     var_types: dict, wJ: sym.Matrix, vals=WJ_VALS, nonzero=[]):
+    fixed_cost, integer_constraints, nonzero_constraints, var_list, _ = _fixed_cost_plus_integer_cost(Z, var_list,
+                                                                                               var_types, wJ, vals, nonzero)
+    if integer_constraints == []:
+        return fixed_cost
     variable_cost = _calc_min_cost(integer_constraints,nonzero_constraints,[],var_list)[0]
     return fixed_cost + variable_cost
     
 
 def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
-                     var_types: dict, wJ: sym.Matrix, vals=WJ_VALS, nonzero=[]):
+                     var_types: dict, wJ: sym.Matrix, vals=WJ_VALS, nonzero=[],
+                     apriori_sol=None):
     
     # If no variables, just return
     if len(Z.free_symbols) == 0:
@@ -616,9 +624,6 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
     
     n_nl = len(var_types.get("compact", [])) + len(var_types.get("extended", []))
 
-    # Sort vals by abs value, with positive first
-    max_val = max(abs(v) for v in vals)
-    
     # Variables to substitute concrete values in for
     det = sym.simplify(_det_fast(Z), rational=True)
     if det not in nonzero:
@@ -636,28 +641,49 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
     if len(wJT_trans.free_symbols) == 0:
         return _find_Z_instance_deterministic(Z, var_list, max_tries=100, nonzero=nonzero)
 
-    # Identify nonzero entries in wJ^T*Z
-    nz_entries = {}
-    for i in range(wJT_trans.shape[0]):
-        for j in ext:
-            wJval = sym.simplify(wJT_trans[i,j])
-            if wJval != 0:
-                nz_entries[(i,j)] = wJval
-    
-    # Pass to z3 to solve for integer assignments
-    # while ensuring det(Z) != 0 and minimizing sum of abs values
-    nz_idx = sorted(nz_entries.keys(), key=lambda x: (x[0], x[1]))
-    integer_constraints = [nz_entries[(i,j)] for (i,j) in nz_idx]
-    nonzero_constraints = [nz for nz in nonzero if len(nz.free_symbols) > 0]
-    var_list = set()
-    for expr in integer_constraints + nonzero_constraints:
-        var_list = var_list.union(expr.free_symbols)
-    var_list = sorted(var_list, key=str)
-    all_sols = find_rational_vars_integer_results(integer_constraints,
-                                            nonzero_constraints, [],
-                                            var_list)
-    if all_sols is None:
-        raise TimeoutError("No solutions found")
+    fixed_cost, integer_constraints, nonzero_constraints, var_list, nz_idx = _fixed_cost_plus_integer_cost(Z, var_list,
+                                                                                var_types, wJ, vals, nonzero)
+    # Encode symmetry map of row swaps, column sign flips, and row sign flips
+    n_terms = len(nz_idx)
+    max_row = max(i for (i,j) in nz_idx)
+    min_col = min(j for (i,j) in nz_idx)
+    max_col = max(j for (i,j) in nz_idx)
+    perms = []
+    # Make a list of all possible column sign flips,
+    # this seems to be the main symmetry in Z3 solutions
+    valid_perms = set()
+    for row_perm in [range(max_row+1)]:
+        new_order = []
+        new_nz_idx = [(row_perm[i], j) for (i,j) in nz_idx]
+        new_order = sorted(range(n_terms), key=lambda x: (new_nz_idx[x][0], new_nz_idx[x][1]))
+        for row_signs in [[1]*(max_row+1)]:
+            for col_signs in itertools.product([1, -1], repeat=max_col-min_col+1):
+                sign_map = {(i,j): row_signs[i]*col_signs[j - min_col] for (i,j) in nz_idx}
+                this_perm = tuple((new_order[k], sign_map[nz_idx[k]]) for k in range(n_terms))
+                valid_perms.add(this_perm)
+    valid_perms = sorted(valid_perms, key=str)
+    def _symmetry_perms(terms):
+        perms = []
+        for v_perm in valid_perms:
+            new_terms = []
+            for (idx, sign) in v_perm:
+                new_terms.append(sign*terms[idx])
+            perms.append(new_terms)
+        return perms
+    if apriori_sol is None:
+        all_sols = find_rational_vars_integer_results(integer_constraints,
+                                            nonzero_constraints, [], var_list,
+                                            heuristic_upper=True,
+                                            symmetry_map=_symmetry_perms)
+    else:
+        all_sols = find_rational_vars_integer_results(integer_constraints,
+                                            nonzero_constraints, [], var_list,
+                                            apriori_sol=apriori_sol-fixed_cost,
+                                            heuristic_upper=False,
+                                            symmetry_map=_symmetry_perms)
+        # Can't beat apriori solution
+        if all_sols == []:
+            return []
 
     # Identify best solution by wJ^T canonicalization
     # Minimize L1 norm, with tiebreaker being max term
@@ -865,8 +891,18 @@ def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True,
     cTransInv = cTransInv[:n_dyn, :n_dyn]
     wJ = wJtTrans[:, :n_dyn]
     
-    # All different ways to arrange columns
-    # Interchanging like variable columns
+    # All different ways to arrange column permutations in Z
+    # that preserve variable types
+    # Try all permutations of dynamical modes only
+    # Note: column shift in Z is row and column shift in L, C
+    # For permutation P and Z, the transformed L2 is
+    # as L2 = (Z*P)^T * L * (Z*P) = P^T * Z^T * L * Z * P
+    # C2inv is
+    # C2inv = [(Z*P)^T * C * (Z*P)]^-1 = (Z*P)^-1 * C^-1 * (Z*P)^T^-1
+    # = P^-1 * Z^-1 * C^-1 * Z^T^-1 * P^T^-1
+    # Recall that P^-1 = P^T for permutation matrices
+    # For wJ^T, we have
+    # wJt2^T = wJ^T * (Z*P) = (wJ^T*Z) * P
     if try_perms and ordering_matters:
         perms = _var_col_perms(var_types, dyn_only=True)
         perms = [p[:n_dyn] for p in perms]
@@ -878,8 +914,8 @@ def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True,
     WJ_zero = len(WJ_VALS)//2
     for perm in perms:
         
-        L_key = _nonzero_entries_str(lTrans[:, perm])
-        C_key =  _nonzero_entries_str(cTransInv[:, perm])
+        L_key = _nonzero_entries_str(lTrans[perm, perm])
+        C_key =  _nonzero_entries_str(cTransInv[perm, perm])
         w_key = _nonzero_entries_str(incidence_to_square(wJtTrans[:, perm].transpose(), EJ))
         if extra_nl:
             wT_tilde, wT_key_full, _ = _maximize_wT(_sort_wT(wJtTrans[:, perm][:, :n_nl]))
@@ -1428,10 +1464,11 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
                 elif val == lowest_hash:
                     lowest_Z += [Z_tot]
 
-    # Filter out any bonkers transformations
+    # Filter out any bonkers transformations and sort by string length
     str_len = [len(str(Z)) for Z in lowest_Z]
-    min_len = min(str_len)
-    lowest_Z = [Z for Z in lowest_Z if len(str(Z)) <= 50*min_len]
+    order = np.argsort(str_len)
+    min_len = str_len[order[0]]
+    lowest_Z = [lowest_Z[i] for i in order if str_len[i] <= 50*min_len]
 
     # If there are multiple Z with the same lowest hash
     # then see if they separate with equal L/C values
@@ -1454,6 +1491,7 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             Z_final = [Z]
         elif val == hash_final:
             Z_final.append(Z)
+    
     # Get a specific instance of the transformation
     if return_instance:
         # Nonzero terms -- det is already done in find_Z_instance
@@ -1465,19 +1503,22 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         for Zf in Z_final:
             var_list = [x for x in Zf.free_symbols if "Z" in str(x)]
             min_costs.append(_find_Z_min_cost(Zf, var_list, var_types, wJ, nonzero=extract_denom(Zf)))
-        
-        order = np.argsort(min_costs)
-        best_cost = 5*wJ.shape[0]*wJ.shape[1]
-        for iZ in order:
-            Zf = Z_final[iZ]
-            min_cost = min_costs[iZ]
+        best_cost = None
+
+        for Zf, min_cost in zip(Z_final, min_costs):
             # Don't bother trying if we already know the cost can't be beat
-            if best_cost < min_cost:
-                continue
+            if not best_cost is None:
+                if best_cost < min_cost:
+                    continue
             var_list = [x for x in Zf.free_symbols if "Z" in str(x)]
             ans = None
+            # Include apriori solution to speed up search
             ans = _find_Z_instance(Zf, var_list, var_types=var_types,
-                                          wJ=wJ, nonzero=extract_denom(Zf))
+                                    wJ=wJ, nonzero=extract_denom(Zf),
+                                    apriori_sol=best_cost)
+            # Can't beat best cost
+            if ans == []:
+                continue
             if ans is None:
                 raise ValueError("Could not find instance of Z transformation")
             cTrans = sym.simplify(ans.transpose()*cMat*ans)[:n_dyn, :n_dyn]
@@ -1498,7 +1539,8 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
 
         Z_final = Z_final_instance
         hash_final = hash_final_instance
-    
+
+   
     col_perms = [x + tuple(range(n_dyn, Z0.shape[1])) for x in _var_col_perms(var_types, dyn_only=True)]
     _, idx = _remove_permutation_equivalent_transformations(Z_final, perms=col_perms)
     Z_final = [Z_final[i] for i in idx]
@@ -1998,9 +2040,18 @@ if __name__ == "__main__":
     # circuit = [('C_1',), ('C_2',), ('C_3',), ('C_4',), ('J_1', 'L_1'), ('C_5',), ('C_6',), ('L_2',)]
     # edges = [(0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 4), (3, 4)]
 
-    circuit = [('C_1', 'L_1'), ('L_2',), ('L_3',), ('C_2',), ('L_4',), ('C_3', 'L_5'), ('L_6',), ('J_1',)]
-    edges = [(0, 2), (0, 3), (0, 4), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+    # circuit = [('C_1', 'L_1'), ('L_2',), ('L_3',), ('C_2',), ('L_4',), ('C_3', 'L_5'), ('L_6',), ('J_1',)]
+    # edges = [(0, 2), (0, 3), (0, 4), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
 
+    # circuit = [('L_1',), ('L_2',), ('L_3',), ('C_1', 'L_4'), ('J_1', 'L_5'), ('C_2', 'J_2', 'L_6'), ('J_3', 'L_7'), ('C_3', 'J_4', 'L_8'), ('C_4', 'J_5', 'L_9'), ('J_6', 'L_10')]
+    # edges = [(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+
+    circuit = [('J', 'L'), ('J', 'L'), ('C', 'J', 'L'), ('J', 'L'), ('C', 'J', 'L'), ('C', 'J', 'L')]
+    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+
+    # circuit = [('J',), ('J', 'L'), ('J', 'L')]
+    # edges = [(0, 1), (0, 2), (1, 2)]
+    # circuit = utils.add_elem_number(circuit)
 
     # draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="fixed")
     cMat = gen_cap_mat(circuit, edges)
@@ -2020,10 +2071,11 @@ if __name__ == "__main__":
     print("Max", np.max(times), "Min:", np.min(times))
     print("Mean:", np.mean(times), "+/-", np.std(times))
     # breakpoint()
-    # print(Z)
-    # print("C Transformed:\n", sym.simplify(cTrans))
-    # print("L Transformed:\n", sym.simplify(lTrans))
-    # print("wJ Transformed:\n", sym.simplify(wJTrans))
+    print("Z Transformation:\n")
+    print(Z)
+    print("C Transformed:\n", sym.simplify(cTrans))
+    print("L Transformed:\n", sym.simplify(lTrans))
+    print("wJ Transformed:\n", sym.simplify(wJTrans))
 
     # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
     # for n in range(4, 5):
