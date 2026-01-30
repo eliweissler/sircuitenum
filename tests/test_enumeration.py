@@ -479,13 +479,8 @@ def test_add_hamiltonian_classes():
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=5, n_workers=1)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
     assert df.H_class.unique().size == 19
-<<<<<<< HEAD
-    assert df.H_class_sym.unique().size == 17
-    cleanup_db(TEMP_FILE)
-=======
     assert df.H_class_sym.unique().size == 16
     os.remove(TEMP_FILE)
->>>>>>> 3be7a2183f647ffb306c522a69587f579db2c8cd
 
 
 def test_generate_all_circuits():
