@@ -205,7 +205,7 @@ def test_as_long_error():
         zero_constraints=[],
         variables=variables,
         max_result_range=max_range,
-        block_negative_equivalents=True
+        symmetry_map=lambda x: [x, [-v for v in x]]
     )
     assert len(solutions) == 2
     assert sum(abs(s) for s in solutions[0]['results']) == 4
@@ -216,7 +216,7 @@ def test_as_long_error():
         variables=variables,
         zero_constraints=[],
         max_result_range=max_range,
-        block_negative_equivalents=False
+        symmetry_map=lambda x: [x]
     )
     assert len(solutions) == 4
     assert sum(abs(s) for s in solutions[0]['results']) == 4
@@ -258,6 +258,229 @@ def test_rational_vars_zero():
                                              [], variables=vars)
 
     assert sum(abs(x) for x in res[0]["results"]) == 9
+
+
+def test_consistent_results_multiple_runs():
+    """
+    Regression test: Ensure that multiple runs of the solver produce
+    consistent results. This tests for non-determinism issues in Z3.
+    """
+    Z10, Z11 = sym.symbols('Z10 Z11')
+    
+    integer_constraints = [-2*Z10, -Z10, Z11, Z10, Z11]
+    nonzero_constraints = [1, 3, -2*Z10*Z11/3]
+    
+    # Run the solver multiple times and check for consistency
+    results_list = []
+    for _ in range(5):
+        results = find_rational_vars_integer_results(
+            integer_constraints=integer_constraints,
+            nonzero_constraints=nonzero_constraints,
+            zero_constraints=[],
+            variables=[Z10, Z11],
+            max_result_range=4,
+            symmetry_map=lambda x: [x]
+        )
+        results_list.append(results)
+    
+    # All runs should produce the same results
+    first_results = results_list[0]
+    for i, results in enumerate(results_list[1:], start=1):
+        assert len(results) == len(first_results), f"Run {i} produced different number of solutions"
+        for j, (r1, r2) in enumerate(zip(first_results, results)):
+            assert r1["results"] == r2["results"], (
+                f"Run {i}, solution {j}: results differ. "
+                f"Expected {r1['results']}, got {r2['results']}"
+            )
+
+
+def test_cost_constraint_preserved_during_enumeration():
+    """
+    Regression test: Ensure that when enumerating solutions, all solutions
+    have the same (minimal) cost. This catches bugs where the cost constraint
+    is popped before enumeration.
+    """
+    Z01, Z10 = sym.symbols('Z01 Z10')
+    
+    # This constraint set has multiple solutions at different costs
+    integer_constraints = [-Z10, Z01, Z01, Z10]
+    nonzero_constraints = [3, -Z01*Z10/3]
+    
+    results = find_rational_vars_integer_results(
+        integer_constraints=integer_constraints,
+        nonzero_constraints=nonzero_constraints,
+        zero_constraints=[],
+        variables=[Z01, Z10],
+        max_result_range=4,
+        enumerate_sols=True
+    )
+    
+    assert len(results) > 0
+    
+    # All solutions should have the same cost
+    costs = [sum(abs(x) for x in r["results"]) for r in results]
+    assert all(c == costs[0] for c in costs), (
+        f"Solutions have inconsistent costs: {costs}"
+    )
+    
+    # The cost should be the minimum (4 in this case)
+    assert costs[0] == 4, f"Expected minimum cost 4, got {costs[0]}"
+
+
+def test_heuristic_upper_bound_returns_optimal():
+    """
+    Regression test: Ensure that when the heuristic finds a solution at the
+    lower bound, it is correctly returned without searching higher costs.
+    """
+    Z10, Z11 = sym.symbols('Z10 Z11')
+    
+    integer_constraints = [-2*Z10, -Z10, Z11, Z10, Z11]
+    nonzero_constraints = [1, 3, -2*Z10*Z11/3]
+    
+    # Get the minimum cost first
+    min_cost, _, _, _, _ = _calc_min_cost(
+        integer_constraints, nonzero_constraints, [],
+        [Z10, Z11], max_result_range=4
+    )
+    
+    # Now solve with heuristic
+    results = find_rational_vars_integer_results(
+        integer_constraints=integer_constraints,
+        nonzero_constraints=nonzero_constraints,
+        zero_constraints=[],
+        variables=[Z10, Z11],
+        max_result_range=4,
+        heuristic_upper=True
+    )
+    
+    assert len(results) > 0
+    
+    # The result cost should be the minimum achievable
+    result_cost = sum(abs(x) for x in results[0]["results"])
+    assert result_cost == min_cost, (
+        f"Heuristic returned cost {result_cost}, but minimum is {min_cost}"
+    )
+
+
+def test_heuristic_does_not_modify_input_constraints():
+    """
+    Regression test: Ensure that _heuristic_upper_bound does not modify
+    the input nonzero_constraints list.
+    """
+    Z01, Z10 = sym.symbols('Z01 Z10')
+    
+    integer_constraints = [Z01, Z10]
+    nonzero_constraints = [3, -Z01*Z10/3]
+    original_nonzero = nonzero_constraints.copy()
+    
+    _heuristic_upper_bound(
+        integer_constraints=integer_constraints,
+        nonzero_constraints=nonzero_constraints,
+        zero_constraints=[],
+        variables=[Z01, Z10],
+        max_result_range=4
+    )
+    
+    # The original list should not be modified
+    assert nonzero_constraints == original_nonzero, (
+        f"nonzero_constraints was modified from {original_nonzero} to {nonzero_constraints}"
+    )
+
+
+def test_lower_bound_early_exit():
+    """
+    Test that when the lower bound is immediately satisfiable,
+    we get the correct solution without additional searching.
+    """
+    Z1, Z2 = sym.symbols('Z1 Z2')
+    
+    # Simple constraints where lower bound should be achievable
+    integer_constraints = [Z1, Z2]
+    nonzero_constraints = [Z1 * Z2]
+    
+    results = find_rational_vars_integer_results(
+        integer_constraints=integer_constraints,
+        nonzero_constraints=nonzero_constraints,
+        zero_constraints=[],
+        variables=[Z1, Z2],
+        max_result_range=4
+    )
+    
+    assert len(results) > 0
+    
+    # Minimum non-zero solution should have cost 2 (e.g., Z1=1, Z2=1)
+    cost = sum(abs(x) for x in results[0]["results"])
+    assert cost == 2
+
+
+def test_enumerate_solutions_sorted_deterministically():
+    """
+    Test that enumerated solutions are sorted deterministically,
+    ensuring consistent ordering across runs.
+    """
+    Z01, Z10 = sym.symbols('Z01 Z10')
+    
+    integer_constraints = [Z01, Z10]
+    nonzero_constraints = [Z01 * Z10]
+    
+    # Run twice and compare ordering
+    results1 = find_rational_vars_integer_results(
+        integer_constraints=integer_constraints,
+        nonzero_constraints=nonzero_constraints,
+        zero_constraints=[],
+        variables=[Z01, Z10],
+        max_result_range=2,
+        enumerate_sols=True
+    )
+    
+    results2 = find_rational_vars_integer_results(
+        integer_constraints=integer_constraints,
+        nonzero_constraints=nonzero_constraints,
+        zero_constraints=[],
+        variables=[Z01, Z10],
+        max_result_range=2,
+        enumerate_sols=True
+    )
+    
+    assert len(results1) == len(results2)
+    for r1, r2 in zip(results1, results2):
+        assert r1["results"] == r2["results"], "Solutions not in same order"
+
+
+def test_symmetry_map_blocks_equivalent_solutions():
+    """
+    Test that the symmetry_map correctly blocks equivalent solutions.
+    With negation symmetry, we should get half as many solutions.
+    """
+    Z1, Z2 = sym.symbols('Z1 Z2')
+    
+    integer_constraints = [Z1, Z2]
+    nonzero_constraints = [Z1 * Z2]
+    
+    # Without negation symmetry
+    results_no_sym = find_rational_vars_integer_results(
+        integer_constraints=integer_constraints,
+        nonzero_constraints=nonzero_constraints,
+        zero_constraints=[],
+        variables=[Z1, Z2],
+        max_result_range=2,
+        symmetry_map=lambda x: [x]  # Identity only
+    )
+    
+    # With negation symmetry (default)
+    results_with_sym = find_rational_vars_integer_results(
+        integer_constraints=integer_constraints,
+        nonzero_constraints=nonzero_constraints,
+        zero_constraints=[],
+        variables=[Z1, Z2],
+        max_result_range=2,
+        symmetry_map=lambda x: [x, [-v for v in x]]
+    )
+    
+    # With symmetry, we should have roughly half the solutions
+    # (some solutions may be self-symmetric)
+    assert len(results_with_sym) <= len(results_no_sym)
+    assert len(results_with_sym) >= len(results_no_sym) // 2
 
 
 if __name__ == "__main__":

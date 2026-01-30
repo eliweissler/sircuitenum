@@ -610,8 +610,25 @@ def test__find_Z_deterministic():
 
 def test__find_Z_min_cost():
 
+    Z00, Z01, Z02, Z10, Z11, Z12, Z20, Z21, Z22 = sym.symbols('Z00, Z01, Z02, Z10, Z11, Z12, Z20, Z21, Z22')
+    wJ =  sym.Matrix([[1, 1, 1, 0, 0, 0], [-1, 0, 0, 1, 1, 0], [0, -1, 0, -1, 0, 1], [0, 0, -1, 0, -1, -1]])
+    var_list = [Z20, Z10, Z21, Z22]
+    nonzero = [1, 2*Z10 + Z20, 4]
+    Z = sym.Matrix([[-Z10 - Z20, 3*Z21*(-Z10 + Z20)/(4*(2*Z10 + Z20)) + Z21*(Z10 + 2*Z20)/(4*(2*Z10 + Z20)) - Z21/4, Z22/4, 1/4], [Z10, -Z21*(-Z10 + Z20)/(4*(2*Z10 + Z20)) - 3*Z21*(Z10 + 2*Z20)/(4*(2*Z10 + Z20)) - Z21/4, Z22/4, 1/4], [Z20, -Z21*(-Z10 + Z20)/(4*(2*Z10 + Z20)) + Z21*(Z10 + 2*Z20)/(4*(2*Z10 + Z20)) + 3*Z21/4, Z22/4, 1/4], [0, -Z21*(-Z10 + Z20)/(4*(2*Z10 + Z20)) + Z21*(Z10 + 2*Z20)/(4*(2*Z10 + Z20)) - Z21/4, -3*Z22/4, 1/4]])
+    var_types = {'compact': [], 'extended': [0, 1, 2], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [3]}
+    min_cost = quantize._find_Z_min_cost(Z, var_list, var_types, wJ)
+    assert min_cost == 5
+
     Z21, Z12, Z01, Z02, Z11, Z22 = sym.symbols('Z21 Z12 Z01 Z02 Z11 Z22')
 
+    #     wJ.transpose()*Z_final[-1] = 
+    # Matrix([
+    # [-1, Z11/2,    Z22/2, 0],
+    # [-1, Z11/2,  3*Z22/2, 0],
+    # [ 0,     0,      Z22, 0],
+    # [ 1, Z11/2,   -Z22/2, 0],
+    # [ 1, Z11/2, -3*Z22/2, 0]]) -> Z11,Z22 = 1 -> min_cost = 4+1+3+2+1+3 = 14 +(4 compact) = 18
+    
     wJ = sym.nsimplify(sym.Matrix([
             [ 1,  1,  0,  0,  0],
             [-1,  0,  1,  1,  0],
@@ -660,28 +677,20 @@ def test__find_Z_min_cost():
 
 def test__find_Z_instance():
 
-    Z11, Z22 = sym.symbols("Z11 Z22")
-    wJ = sym.nsimplify(sym.Matrix([
-            [ 1,  1,  0,  0,  0],
-            [-1,  0,  1,  1,  0],
-            [ 0, -1, -1,  0,  1],
-            [ 0,  0,  0, -1, -1]]), rational=True)
+    Z00, Z01, Z02, Z10, Z11, Z12, Z20, Z21, Z22 = sym.symbols('Z00, Z01, Z02, Z10, Z11, Z12, Z20, Z21, Z22')
+ 
     Z = sym.nsimplify(sym.Matrix([
             [-1/2,  Z11/2, Z22/2, 1/4],
             [ 1/2,      0,     0, 1/4],
             [ 1/2,      0,  -Z22, 1/4],
             [-1/2, -Z11/2, Z22/2, 1/4]]))
+    wJ = sym.nsimplify(sym.Matrix([
+            [ 1,  1,  0,  0,  0],
+            [-1,  0,  1,  1,  0],
+            [ 0, -1, -1,  0,  1],
+            [ 0,  0,  0, -1, -1]]), rational=True)
+    var_list = [Z11, Z22]
     var_types = {'compact': [0], 'extended': [1, 2], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [3]}
-    var_list = [Z11, Z22]
-    min_cost = quantize._find_Z_min_cost(Z, var_list, var_types, wJ)
-    #     wJ.transpose()*Z_final[-1] = 
-    # Matrix([
-    # [-1, Z11/2,    Z22/2, 0],
-    # [-1, Z11/2,  3*Z22/2, 0],
-    # [ 0,     0,      Z22, 0],
-    # [ 1, Z11/2,   -Z22/2, 0],
-    # [ 1, Z11/2, -3*Z22/2, 0]]) -> Z11,Z22 = 1 -> min_cost = 4+1+3+2+1+3 = 14 +(4 compact) = 18
-    var_list = [Z11, Z22]
     Zsub = quantize._find_Z_instance(Z, var_list, wJ=wJ, var_types=var_types)
     ans = sym.nsimplify(sym.Matrix([
                         [-1/2, -1, -1, 1/4],
@@ -689,6 +698,22 @@ def test__find_Z_instance():
                         [ 1/2,  0,  2, 1/4],
                         [-1/2,  1, -1, 1/4]]), rational=True)
     assert quantize._equal_up_to_column_shift_and_sign(Zsub, ans)
+
+    # Test apriori_sol that doesn't work
+    Z = sym.nsimplify(sym.Matrix([
+            [-1/2,  Z11/2, Z22/2, 1/4],
+            [ 1/2,      0,     0, 1/4],
+            [ 1/2,      0,  -Z22, 1/4],
+            [-1/2, -Z11/2, Z22/2, 1/4]]))
+    wJ = sym.nsimplify(sym.Matrix([
+            [ 1,  1,  0,  0,  0],
+            [-1,  0,  1,  1,  0],
+            [ 0, -1, -1,  0,  1],
+            [ 0,  0,  0, -1, -1]]), rational=True)
+    var_list = [Z11, Z22]
+    var_types = {'compact': [0], 'extended': [1, 2], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [3]}
+    Zsub = quantize._find_Z_instance(Z, var_list, wJ=wJ, var_types=var_types, apriori_sol=4)
+    assert Zsub == []
 
     # solution with one free variable, which is divided by 2 somewhere
     Z11 = sym.symbols("Z11")
@@ -825,6 +850,19 @@ def test_decoupling_transformation():
 
 def test_H_hash():
 
+    # Misbehaving case from earlier version
+    L, C, C_J = sym.symbols("L, C, C_J", positive=True)
+    J_1, J_2, J_3, J_4, J_5, J_6 = sym.symbols("J_1, J_2, J_3, J_4, J_5, J_6", positive=True)
+    Z = sym.Matrix([[-1, -1, -1/4, 1/4], [2, 0, -1/4, 1/4], [-1, 1, -1/4, 1/4], [0, 0, 3/4, 1/4]])
+    cTransInv = sym.Matrix([[1/(6*C + 24*C_J), 0, 0], [0, 1/(2*C + 8*C_J), 0], [0, 0, 1/(3*C + 3*C_J)]])
+    lTrans = sym.Matrix([[24/L, 0, 0, 0], [0, 8/L, 0, 0], [0, 0, 3/L, 0], [0, 0, 0, 0]])
+    wJtTrans = sym.Matrix([[-3, -1, 0, 0], [0, -2, 0, 0], [-1, -1, -1, 0], [3, -1, 0, 0], [2, 0, -1, 0], [-1, 1, -1, 0]])
+    EJ = (J_1, J_2, J_3, J_4, J_5, J_6)
+    var_types = {'compact': [], 'extended': [0, 1, 2], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [3]}
+    hashes = quantize.H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types)
+    assert hashes[0] == '030_3-111_0_0-000_0-000'
+    hashes = quantize.H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, extra_nl=True)
+    assert hashes[0] == '030_3-111-19-3-446564475473535355_0_0-000_0-000'
 
     # Transmon
     edges = [(0, 1)]
@@ -1574,15 +1612,15 @@ def main():
     # test__independent_from()
 
     # test_secondary_decouple()
-    # test_choose_Z()
+
+    # test_H_hash()
     test__find_Z_instance()
+    # test_choose_Z()
     # test__find_Z_min_cost()
 
     # test__maximize_wT()
     # test__wT_key()
     # test_var_trans_basis()
-
-    # test_H_hash()
     # test_incidence_to_square()
     # test_gen_cap_mat()
     # test_var_trans_basis()

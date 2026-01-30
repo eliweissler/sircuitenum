@@ -845,12 +845,12 @@ def initialize_singular():
     startup_code += "ring SUPER_RING = 0, (a,b,c,d,f,g,h,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z), dp;\n"
     # startup_code += "option(prot);"
     global WORKER_SINGULAR
-    WORKER_SINGULAR = SafeSingular(startup_code=startup_code, binary_path=SINGULAR_PATH, timeout=60)
+    WORKER_SINGULAR = SafeSingular(startup_code=startup_code, binary_path=SINGULAR_PATH, timeout=100)
 
 
 
 class SafeSingular:
-    def __init__(self, startup_code="", binary_path=SINGULAR_PATH, timeout=60):
+    def __init__(self, startup_code="", binary_path=SINGULAR_PATH, timeout=100):
         self.binary_path = binary_path
         self.startup_code = startup_code
         self.timeout = timeout
