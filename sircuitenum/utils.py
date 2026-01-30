@@ -819,21 +819,17 @@ def get_circuit_data_batch(db_file: str, n_nodes: int,
     if char_mapping is None:
         char_mapping = ENUM_PARAMS["CHAR_TO_COMBINATION"]
     table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
-    connection_obj = sqlite3.connect(db_file, timeout=5000)
-    if filter_str != '' and unique_keys != []:
-        raise ValueError("Provide either filter string or list of keys")
-    elif filter_str == '' and unique_keys == []:
-        query = f"SELECT * FROM {table_name}"
-    elif filter_str != "":
-        query = f"SELECT * FROM {table_name} {filter_str}"
-    else:
-        unique_keys = [f" '{k}'" for k in unique_keys]
-        query = f"SELECT * FROM {table_name} WHERE unique_key in ({','.join(unique_keys)})"
-
-    df = pd.read_sql_query(query, connection_obj)
-
-    connection_obj.commit()
-    connection_obj.close()
+    with sqlite3.connect(db_file, timeout=5000) as con:
+        if filter_str != '' and unique_keys != []:
+            raise ValueError("Provide either filter string or list of keys")
+        elif filter_str == '' and unique_keys == []:
+            query = f"SELECT * FROM {table_name}"
+        elif filter_str != "":
+            query = f"SELECT * FROM {table_name} {filter_str}"
+        else:
+            unique_keys = [f" '{k}'" for k in unique_keys]
+            query = f"SELECT * FROM {table_name} WHERE unique_key in ({','.join(unique_keys)})"
+        df = pd.read_sql_query(query, con)
 
     convert_loaded_df(df, n_nodes, char_mapping)
 

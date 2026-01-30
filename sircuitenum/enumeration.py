@@ -551,7 +551,7 @@ def _gen_ham_class_row(args):
 
 def add_hamiltonian_classes(db_file: str, n_nodes: int,
                               n_workers: int = 4, resume: bool = False,
-                              eq_params=False, save_every=10):
+                              eq_params=False, save_every=10000):
     """
     Constructs a variable transformation and identifies the hamiltonian
     class for each circuit in the database
@@ -590,8 +590,14 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
                     sql_str += f"ADD {col}"
                     cur.execute(sql_str)
                     con.commit()
+            tables = utils.list_all_tables(db_file)
+            if temp_table in tables:
+                cur.execute(f"DROP TABLE IF EXISTS {temp_table}")
+                con.commit()
 
-            # Make temp table to store results
+        # Make temp table to store results if it's not already there
+        tables = utils.list_all_tables(db_file)
+        if temp_table not in tables:
             cur.execute(f"CREATE TEMP TABLE {temp_table} AS SELECT * FROM {table_name} WHERE 0")
                
         # If we're resuming filter out those without H_class made
