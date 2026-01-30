@@ -326,7 +326,8 @@ def generate_graphs_node(db_file: str, n_nodes: int,
 
 def trim_graph_node(db_file: str, n_nodes: int,
                     base: int = None,
-                    n_workers: int = 1, save_every: int = 20) -> None:
+                    n_workers: int = 1, save_every: int = 20,
+                    resume: bool = False) -> None:
     """
     Mark circuits in the database based on Josephson junctions, series linear components, 
     and non-isomorphism.
@@ -349,6 +350,9 @@ def trim_graph_node(db_file: str, n_nodes: int,
         ``J, C, L, JL, CL, JC, JCL``.
     n_workers : int, optional
         The number of workers to use for processing. Defaults to ``1``.
+    resume : bool, optional
+        If True, resume from a previous run by only processing edge_counts
+        that haven't been processed yet. Defaults to ``False``.
     """
     if base is None:
         base = len(utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
@@ -365,11 +369,42 @@ def trim_graph_node(db_file: str, n_nodes: int,
     # Sets within these slices
     print("Trimming graphs with no jj's, linear elements in series",
           "and reducing isomorphic graphs...")
+    
+    table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
+    temp_table = f"TEMP_TRIM_{n_nodes}_NODES"
+    
     with sqlite3.connect(db_file) as con:
         cur = con.cursor()
-        table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
+        
+        tables = utils.list_all_tables(db_file)
+        
+        if not resume:
+            # Drop temp table if it exists and start fresh
+            if temp_table in tables:
+                cur.execute(f"DROP TABLE IF EXISTS {temp_table}")
+                con.commit()
+            
+            # Create temp table with same schema
+            cur.execute(f"CREATE TABLE {temp_table} AS SELECT * FROM {table_name} WHERE 0")
+            con.commit()
+        else:
+            # If resuming but temp table doesn't exist, create it
+            if temp_table not in tables:
+                cur.execute(f"CREATE TABLE {temp_table} AS SELECT * FROM {table_name} WHERE 0")
+                con.commit()
+        
+        # Get all edge_counts from main table
         sql_query = f"SELECT DISTINCT edge_counts FROM {table_name}"
-        counts_to_consider = [x[0] for x in cur.execute(sql_query).fetchall()]
+        counts_main = set(x[0] for x in cur.execute(sql_query).fetchall())
+        
+        # Get edge_counts already processed in temp table
+        if resume:
+            sql_query = f"SELECT DISTINCT edge_counts FROM {temp_table}"
+            counts_done = set(x[0] for x in cur.execute(sql_query).fetchall())
+            counts_to_consider = list(counts_main - counts_done)
+            print(f"Resuming: {len(counts_done)} edge_counts done, {len(counts_to_consider)} remaining")
+        else:
+            counts_to_consider = list(counts_main)
 
     args = []
     for counts_str in counts_to_consider:
@@ -399,7 +434,7 @@ def trim_graph_node(db_file: str, n_nodes: int,
                 count += 1
                 if count % save_every == 0 or count == n_to_do:
                     combined_df = pd.concat(df_update)
-                    utils.update_db_from_df(db_file, combined_df, to_update, str_cols=str_cols, parallel_safe=False)
+                    utils.write_df(db_file, combined_df, n_nodes, overwrite=False, table_name=temp_table)
                     df_update = []
     else:
         for arg_set in tqdm(args):
@@ -408,9 +443,24 @@ def trim_graph_node(db_file: str, n_nodes: int,
             count += 1
             if count % save_every == 0 or count == n_to_do:
                 combined_df = pd.concat(df_update)
-                utils.update_db_from_df(db_file, combined_df, to_update, str_cols=str_cols, parallel_safe=False)
+                utils.write_df(db_file, combined_df, n_nodes, overwrite=False, table_name=temp_table)
                 df_update = []
-
+    # Move temp table to main table
+    with sqlite3.connect(db_file) as con:
+        cur = con.cursor()
+        # Insert rows from main table that aren't in temp table
+        cur.execute(f"""
+            INSERT INTO {temp_table}
+            SELECT m.* FROM {table_name} m
+            LEFT JOIN {temp_table} t ON m.unique_key = t.unique_key
+            WHERE t.unique_key IS NULL
+        """)
+        con.commit()
+        # Delete old table
+        # Rename temp table to main table
+        cur.execute(f"DROP TABLE IF EXISTS {table_name}")
+        cur.execute(f"ALTER TABLE {temp_table} RENAME TO {table_name}")
+        con.commit()
 
 def _reduce_individual_set(args: tuple):
     """
@@ -496,6 +546,7 @@ def _gen_ham_class_row(args):
     # Choose the transformation
     ## Different Circuit Paramter values
     entry = df.iloc[0]
+    var_types = {}
     if eq_params:
         circuit, edges = entry.circuit, entry.edges
     else:
@@ -551,7 +602,7 @@ def _gen_ham_class_row(args):
 
 def add_hamiltonian_classes(db_file: str, n_nodes: int,
                               n_workers: int = 4, resume: bool = False,
-                              eq_params=False, save_every=10000):
+                              eq_params=False, save_every=1000):
     """
     Constructs a variable transformation and identifies the hamiltonian
     class for each circuit in the database
@@ -598,7 +649,16 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
         # Make temp table to store results if it's not already there
         tables = utils.list_all_tables(db_file)
         if temp_table not in tables:
-            cur.execute(f"CREATE TEMP TABLE {temp_table} AS SELECT * FROM {table_name} WHERE 0")
+            if resume:
+                if eq_params:
+                    cur.execute(f"CREATE TABLE {temp_table} AS SELECT * FROM {table_name} WHERE\
+                                H_class_sym NOT LIKE 'UNDEFINED' AND H_class_sym IS NOT NULL")
+                else:
+                    cur.execute(f"CREATE TABLE {temp_table} AS SELECT * FROM {table_name} WHERE\
+                            H_class NOT LIKE 'UNDEFINED' AND H_class IS NOT NULL")
+            else:
+                cur.execute(f"CREATE TABLE {temp_table} AS SELECT * FROM {table_name} WHERE 0")
+            con.commit()
                
         # If we're resuming filter out those without H_class made
         sql_query = f"SELECT DISTINCT unique_key\
@@ -610,9 +670,11 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
             sql_query = f"SELECT DISTINCT unique_key\
                         FROM {temp_table}\
                         WHERE in_non_iso_set LIKE 1\
-                        AND filter LIKE 1"
+                        AND filter LIKE 1\
+                        AND {'H_class_sym' if eq_params else 'H_class'} NOT LIKE 'UNDEFINED'"
             unique_keys_temp = set(x[0] for x in cur.execute(sql_query).fetchall())
             unique_keys = unique_keys - unique_keys_temp
+
     
     # Filter out those already done if resuming
     # Randmize order because difficult ones tend to be near each other
@@ -633,11 +695,7 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
                 df_update.append(entry)
                 if count % save_every == 0 or count == n_to_do:
                     combined_df = pd.concat(df_update)
-                    print("Saving data at count", count, "out of", n_to_do)
-                    t0 = time.time()
                     utils.write_df(db_file, combined_df, temp_table, overwrite=False, table_name=temp_table)
-                    tf = time.time()
-                    print("Save took", tf - t0, "seconds")
                     df_update = []
     else:
         for arg_set in tqdm(args, total=n_to_do):
@@ -705,7 +763,7 @@ def generate_and_trim(n_nodes: int, db_file: str = "circuits.db",
             str(n_nodes) + " node circuits.")
         print("Now Trimming.")
         trim_graph_node(db_file=db_file, n_nodes=n_nodes, base=base,
-                        n_workers=n_workers)
+                        n_workers=n_workers, resume=resume)
         print("Finished trimming " + str(n_nodes) + " node circuits.")
 
     if (not resume) or H_started:

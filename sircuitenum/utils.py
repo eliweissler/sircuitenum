@@ -793,7 +793,8 @@ def get_circuit_data(file: str, unique_key: str, char_mapping: dict = None):
 def get_circuit_data_batch(db_file: str, n_nodes: int,
                            char_mapping: dict = None,
                            filter_str: str = '',
-                           unique_keys:list[str] = []) -> pd.DataFrame:
+                           unique_keys:list[str] = [],
+                           table_name: str = '') -> pd.DataFrame:
     """
     Retrieve all circuits from the database for a specified number of nodes, 
     with optional filtering criteria.
@@ -818,7 +819,8 @@ def get_circuit_data_batch(db_file: str, n_nodes: int,
 
     if char_mapping is None:
         char_mapping = ENUM_PARAMS["CHAR_TO_COMBINATION"]
-    table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
+    if table_name == '':
+        table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
     with sqlite3.connect(db_file, timeout=5000) as con:
         if filter_str != '' and unique_keys != []:
             raise ValueError("Provide either filter string or list of keys")
