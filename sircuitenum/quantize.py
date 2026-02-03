@@ -670,20 +670,28 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
                 new_terms.append(sign*terms[idx])
             perms.append(new_terms)
         return perms
-    if apriori_sol is None:
-        all_sols = find_rational_vars_integer_results(integer_constraints,
-                                            nonzero_constraints, [], var_list,
-                                            heuristic_upper=True,
-                                            symmetry_map=_symmetry_perms)
-    else:
-        all_sols = find_rational_vars_integer_results(integer_constraints,
-                                            nonzero_constraints, [], var_list,
-                                            apriori_sol=apriori_sol-fixed_cost,
-                                            heuristic_upper=False,
-                                            symmetry_map=_symmetry_perms)
-        # Can't beat apriori solution
-        if all_sols == []:
-            return []
+    
+    # Try to find solutions with increasing search space
+    for max_result_range in [5, 20, 50]:
+        if apriori_sol is None:
+            all_sols = find_rational_vars_integer_results(integer_constraints,
+                                                nonzero_constraints, [], var_list,
+                                                heuristic_upper=True,
+                                                symmetry_map=_symmetry_perms,
+                                                max_result_range=max_result_range)
+        else:
+            all_sols = find_rational_vars_integer_results(integer_constraints,
+                                                nonzero_constraints, [], var_list,
+                                                apriori_sol=apriori_sol-fixed_cost,
+                                                heuristic_upper=False,
+                                                symmetry_map=_symmetry_perms,
+                                                max_result_range=max_result_range)
+        if all_sols:
+            break
+
+    # Can't beat apriori solution
+    if all_sols == []:
+        return []
 
     # Identify best solution by wJ^T canonicalization
     # Minimize L1 norm, with tiebreaker being max term
@@ -2050,14 +2058,14 @@ if __name__ == "__main__":
     # circuit = [('C_1', 'L_1'), ('L_2',), ('L_3',), ('C_2',), ('L_4',), ('C_3', 'L_5'), ('L_6',), ('J_1',)]
     # edges = [(0, 2), (0, 3), (0, 4), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
 
-    # circuit = [('L_1',), ('L_2',), ('L_3',), ('C_1', 'L_4'), ('J_1', 'L_5'), ('C_2', 'J_2', 'L_6'), ('J_3', 'L_7'), ('C_3', 'J_4', 'L_8'), ('C_4', 'J_5', 'L_9'), ('J_6', 'L_10')]
-    # edges = [(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+    circuit = [('L_1',), ('L_2',), ('L_3',), ('C_1', 'L_4'), ('J_1', 'L_5'), ('C_2', 'J_2', 'L_6'), ('J_3', 'L_7'), ('C_3', 'J_4', 'L_8'), ('C_4', 'J_5', 'L_9'), ('J_6', 'L_10')]
+    edges = [(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
 
     # circuit = [('J', 'L'), ('J', 'L'), ('C', 'J', 'L'), ('J', 'L'), ('C', 'J', 'L'), ('C', 'J', 'L')]
     # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
-    circuit = [('J',), ('J', 'L'), ('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'L')]
-    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    # circuit = [('J',), ('J', 'L'), ('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'L')]
+    # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
     # circuit = [('J',), ('J', 'L'), ('J', 'L')]
     # edges = [(0, 1), (0, 2), (1, 2)]

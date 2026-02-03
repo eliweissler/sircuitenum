@@ -17,7 +17,7 @@ from sircuitenum.singular_interface import _eq_as_numer_denom
 
 
 def find_rational_vars_integer_results(integer_constraints, nonzero_constraints, zero_constraints,
-                                       variables, max_result_range=100, timeout_ms=int(1e05),
+                                       variables, max_result_range=5, timeout_ms=int(1e05),
                                        heuristic_upper=True, apriori_sol=None,
                                        symmetry_map=lambda x: [x, [-i for i in x]],
                                        enumerate_sols=True):
@@ -239,7 +239,7 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
 
 
 def _calc_min_cost(integer_constraints, nonzero_constraints, zero_constraints,
-                    variables, max_result_range=4, timeout_ms=200):
+                    variables, max_result_range=5, timeout_ms=200):
     """
     Calculate a lower bound on the L1 cost and initialize the Z3 solver.
 
@@ -512,7 +512,7 @@ def _enumerate_solutions(solver_with_state, tracked_exprs, z3_vars, max_solution
     return results
 
 
-def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constraints, variables, max_result_range=4, timeout_ms=int(1e03)):
+def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constraints, variables, max_result_range=5, timeout_ms=int(1e03)):
     """
     Find a heuristic upper bound on the optimal cost by maximizing zero variables.
 
