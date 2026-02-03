@@ -14,11 +14,10 @@ from z3 import unknown, Optimize, Or, IsInt, set_param, Abs
 from z3 import Tactic, Then
 
 from sircuitenum.singular_interface import _eq_as_numer_denom
-from sircuitenum.equationset import maximally_compatible_sol
 
 
 def find_rational_vars_integer_results(integer_constraints, nonzero_constraints, zero_constraints,
-                                       variables, max_result_range=4, timeout_ms=int(1e05),
+                                       variables, max_result_range=10, timeout_ms=int(1e05),
                                        heuristic_upper=True, apriori_sol=None,
                                        symmetry_map=lambda x: [x, [-i for i in x]],
                                        enumerate_sols=True):
@@ -331,8 +330,6 @@ def _calc_min_cost(integer_constraints, nonzero_constraints, zero_constraints,
             z = _sympy_to_z3(sym.simplify(num/den), z3_vars)
             if not isinstance(z, int):
                 solv.add(IsInt(z))
-                solv.add(z >= -max_result_range)
-                solv.add(z <= max_result_range)
                 integer_expr[(num, den)] = z
             cost_terms.append(z)
         # Rational constraint: N/D
@@ -388,10 +385,17 @@ def _calc_min_cost(integer_constraints, nonzero_constraints, zero_constraints,
             # It is solvable, or timed out
             if result != unsat:
                 break
-            min_val += 1
+            if val < max_result_range:
+                min_val += 1
         min_possible_cost += min_val
         cost_term_dict[term] = min_val
     solv.add(cost == total_cost)
+
+    # Add bounds on cost
+    for z in integer_expr.values():
+        solv.add(z >= -max_result_range)
+        solv.add(z <= max_result_range)
+
 
     # Verify
     solv.push()
