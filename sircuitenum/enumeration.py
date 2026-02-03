@@ -8,6 +8,8 @@ import itertools
 import functools
 import traceback
 import contextlib
+import random
+import time
 from pathlib import Path
 from typing import Union
 from multiprocessing import Pool
@@ -296,6 +298,7 @@ def generate_graphs_node(db_file: str, n_nodes: int,
         table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
         connection_obj = sqlite3.connect(db_file)
         cursor_obj = connection_obj.cursor()
+        cursor_obj.execute("PRAGMA journal_mode = WAL")
         sql_str = f"CREATE TABLE {table_name} (circuit, graph_index int, edge_counts, \
             unique_key, n_nodes int, base int, no_series int, \
             filter int, in_non_iso_set int, \
@@ -323,7 +326,7 @@ def generate_graphs_node(db_file: str, n_nodes: int,
 
 def trim_graph_node(db_file: str, n_nodes: int,
                     base: int = None,
-                    n_workers: int = 1) -> None:
+                    n_workers: int = 1, save_every: int = 20) -> None:
     """
     Mark circuits in the database based on Josephson junctions, series linear components, 
     and non-isomorphism.
@@ -380,19 +383,33 @@ def trim_graph_node(db_file: str, n_nodes: int,
                 filter_str = f"WHERE edge_counts = '{counts_str}'\
                                AND graph_index = {graph_index}"
                 args.append((filter_str, db_file, n_nodes,
-                             utils.ENUM_PARAMS["CHAR_TO_COMBINATION"]))
+                             utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], False))
 
     # Shuffle to spread out longer cases for more accurate time
     # estimates and better parallel performance
     np.random.shuffle(args)
+    n_to_do = len(args)
+    df_update = []
+    count = 0
     if n_workers > 1:
-        pool = Pool(processes=n_workers)
-        for _ in tqdm(pool.imap_unordered(_reduce_individual_set, args),
-                      total=sum(1 for _ in args)):
-            pass
+        with Pool(processes=n_workers) as pool:
+            for entry, to_update, str_cols in tqdm(pool.imap_unordered(_reduce_individual_set, args),
+                        total=n_to_do):
+                df_update.append(entry)
+                count += 1
+                if count % save_every == 0 or count == n_to_do:
+                    combined_df = pd.concat(df_update)
+                    utils.update_db_from_df(db_file, combined_df, to_update, str_cols=str_cols, parallel_safe=False)
+                    df_update = []
     else:
         for arg_set in tqdm(args):
-            _reduce_individual_set(arg_set)
+            entry, to_update, str_cols = _reduce_individual_set(arg_set)
+            df_update.append(entry)
+            count += 1
+            if count % save_every == 0 or count == n_to_do:
+                combined_df = pd.concat(df_update)
+                utils.update_db_from_df(db_file, combined_df, to_update, str_cols=str_cols, parallel_safe=False)
+                df_update = []
 
 
 def _reduce_individual_set(args: tuple):
@@ -416,6 +433,7 @@ def _reduce_individual_set(args: tuple):
     db_file = args[1]
     n_nodes = args[2]
     mapping = args[3]
+    update = args[4]
 
     df = utils.get_circuit_data_batch(db_file, n_nodes,
                                       char_mapping=mapping,
@@ -444,7 +462,11 @@ def _reduce_individual_set(args: tuple):
     to_update = ["no_series", "filter",
                  "in_non_iso_set", "equiv_circuit"]
     str_cols = ["equiv_circuit"]
-    utils.update_db_from_df(db_file, df, to_update, str_cols)
+
+    if update:
+        utils.update_db_from_df(db_file, df, to_update, str_cols, parallel_safe=True)
+    else:
+        return df, to_update, str_cols
 
 
 def _gen_ham_class_row(args):
@@ -469,7 +491,6 @@ def _gen_ham_class_row(args):
                                       filter_str=filter_str)
 
     if df.shape[0] > 1:
-        breakpoint()
         raise ValueError("Multiple Circuits on Unique Key")
     
     # Choose the transformation
@@ -528,13 +549,13 @@ def _gen_ham_class_row(args):
 
     # Update value in database
     if update:
-        utils.update_db_from_df(db_file, df, to_update, str_cols=str_cols)
+        utils.update_db_from_df(db_file, df, to_update, str_cols=str_cols, parallel_safe=True)
     return df, to_update, str_cols
 
 
 def add_hamiltonian_classes(db_file: str, n_nodes: int,
                               n_workers: int = 4, resume: bool = False,
-                              eq_params=False, save_every=100):
+                              eq_params=False, save_every=10000):
     """
     Constructs a variable transformation and identifies the hamiltonian
     class for each circuit in the database
@@ -561,6 +582,7 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
         # Add new columns if not resuming
         cur = con.cursor()
         table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
+        temp_table = f"TEMP_CIRCUITS_{n_nodes}_NODES"
         if not resume:
             columns = utils.list_all_columns(db_file, table_name)
             new_cols = ["n_compact", "n_extended", "n_harmonic",
@@ -572,37 +594,55 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
                     sql_str += f"ADD {col}"
                     cur.execute(sql_str)
                     con.commit()
+            tables = utils.list_all_tables(db_file)
+            if temp_table in tables:
+                cur.execute(f"DROP TABLE IF EXISTS {temp_table}")
+                con.commit()
+
+        # Make temp table to store results if it's not already there
+        tables = utils.list_all_tables(db_file)
+        if temp_table not in tables:
+            cur.execute(f"CREATE TEMP TABLE {temp_table} AS SELECT * FROM {table_name} WHERE 0")
                
         # If we're resuming filter out those without H_class made
         sql_query = f"SELECT DISTINCT unique_key\
                     FROM {table_name}\
                     WHERE in_non_iso_set LIKE 1\
                     AND filter LIKE 1"
+        unique_keys = set(x[0] for x in cur.execute(sql_query).fetchall())
         if resume:
-            if eq_params:
-                sql_query += " AND (H_class_sym is null OR H_class_sym = 'UNDEFINED')"
-            else:
-                sql_query += " AND (H_class is null OR H_class = 'UNDEFINED')"
-        unique_keys = [x[0] for x in cur.execute(sql_query).fetchall()]
-    n_to_do = len(unique_keys)
+            sql_query = f"SELECT DISTINCT unique_key\
+                        FROM {temp_table}\
+                        WHERE in_non_iso_set LIKE 1\
+                        AND filter LIKE 1"
+            unique_keys_temp = set(x[0] for x in cur.execute(sql_query).fetchall())
+            unique_keys = unique_keys - unique_keys_temp
+    
+    # Filter out those already done if resuming
     # Randmize order because difficult ones tend to be near each other
     # This will give more accurate time estimates and spread workers better
-    np.random.shuffle(unique_keys)
+    unique_keys = list(unique_keys)
+    random.shuffle(unique_keys)
+    n_to_do = len(unique_keys)
 
     # Go through all the circuits and update rows with info
     args = zip(unique_keys, itertools.repeat(db_file, n_to_do), itertools.repeat(eq_params, n_to_do), itertools.repeat(False, n_to_do))
     df_update = []
     count = 0
     if n_workers > 1:
-        pool = Pool(processes=n_workers, initializer=initialize_singular)
-        for entry, to_update, str_cols in tqdm(pool.imap_unordered(_gen_ham_class_row, args),
-                          total=n_to_do):
-            count += 1
-            df_update.append(entry)
-            if count % save_every == 0 or count == n_to_do:
-                combined_df = pd.concat(df_update)
-                utils.update_db_from_df(db_file, combined_df, to_update, str_cols=str_cols)
-                df_update = []
+        with Pool(processes=n_workers, initializer=initialize_singular) as pool:
+            for entry, to_update, str_cols in tqdm(pool.imap_unordered(_gen_ham_class_row, args),
+                            total=n_to_do):
+                count += 1
+                df_update.append(entry)
+                if count % save_every == 0 or count == n_to_do:
+                    combined_df = pd.concat(df_update)
+                    print("Saving data at count", count, "out of", n_to_do)
+                    t0 = time.time()
+                    utils.write_df(db_file, combined_df, temp_table, overwrite=False, table_name=temp_table)
+                    tf = time.time()
+                    print("Save took", tf - t0, "seconds")
+                    df_update = []
     else:
         for arg_set in tqdm(args, total=n_to_do):
             entry, to_update, str_cols = _gen_ham_class_row((arg_set[0], arg_set[1], arg_set[2], arg_set[3]))
@@ -610,8 +650,25 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
             df_update.append(entry)
             if count % save_every == 0 or count == n_to_do:
                 combined_df = pd.concat(df_update)
-                utils.update_db_from_df(db_file, combined_df, to_update, str_cols=str_cols)
+                utils.write_df(db_file, combined_df, temp_table, overwrite=False, table_name=temp_table)
                 df_update = []
+
+    # Move temp table to main table
+    with sqlite3.connect(db_file) as con:
+        cur = con.cursor()
+        # Insert rows from main table that aren't in temp table
+        cur.execute(f"""
+            INSERT INTO {temp_table}
+            SELECT m.* FROM {table_name} m
+            LEFT JOIN {temp_table} t ON m.unique_key = t.unique_key
+            WHERE t.unique_key IS NULL
+        """)
+        con.commit()
+        # Delete old table
+        # Rename temp table to main table
+        cur.execute(f"DROP TABLE IF EXISTS {table_name}")
+        cur.execute(f"ALTER TABLE {temp_table} RENAME TO {table_name}")
+        con.commit()
 
 
 
