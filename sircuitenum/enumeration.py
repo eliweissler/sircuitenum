@@ -553,13 +553,17 @@ def _gen_ham_class_row(args):
         circuit, edges = utils.add_elem_number(entry.circuit), entry.edges
     try:
         Z, var_types, h_class = quantize.choose_Z(circuit, edges)
-        wJT_key = h_class.split("_")[1].split("-")[-1]
+        wJT_key = ",".join(str(x) for x in h_class[4]).replace("-", "n")
+        h_class_str = "_".join([h_class[0],"-".join([h_class[1], 
+                                str(h_class[2]), str(h_class[3]), wJT_key]),
+                                str(h_class[5]),
+                                h_class[6], h_class[7]])
     except TimeoutError as timeout:
         print("[TIMEOUT]")
         print(traceback.format_exc())
         print("circuit =", circuit)
         print("edges =", edges)
-        h_class = "UNDEFINED"
+        h_class_str = "UNDEFINED"
         wJT_key = "UNDEFINED"
     except KeyboardInterrupt as kbi:
         raise kbi
@@ -571,7 +575,7 @@ def _gen_ham_class_row(args):
         print("circuit =", circuit)
         print("edges =", edges)
         print("-------------------------------------------")
-        h_class = "UNDEFINED"
+        h_class_str = "UNDEFINED"
         wJT_key = "UNDEFINED"
 
 
@@ -579,12 +583,12 @@ def _gen_ham_class_row(args):
     if eq_params:
         to_update = ["H_class_sym", "wJT_sym"]
         df.at[uid, "wJT_sym"] = wJT_key
-        df.at[uid, "H_class_sym"] = h_class
+        df.at[uid, "H_class_sym"] = h_class_str
         str_cols=["H_class_sym","wJT_sym"]
     else:
         to_update = ["n_compact", "n_extended", "n_harmonic",
                 "n_free", "n_frozen", "n_sigma", "H_class", "wJT"]
-        df.at[uid, "H_class"] = h_class
+        df.at[uid, "H_class"] = h_class_str
         df.at[uid, "wJT"] = wJT_key
         df.at[uid, "n_compact"] = len(var_types.get("compact", []))
         df.at[uid, "n_extended"] = len(var_types.get("extended", []))

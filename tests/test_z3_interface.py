@@ -482,9 +482,24 @@ def test_symmetry_map_blocks_equivalent_solutions():
     assert len(results_with_sym) <= len(results_no_sym)
     assert len(results_with_sym) >= len(results_no_sym) // 2
 
+def test_min_cost_out_of_bounds():
+
+    Z20, Z21, Z22 = sym.symbols('Z20 Z21 Z22')
+    integer_constraints = [-5*Z22, -Z21, -2*Z22, Z20, -Z22, -Z21, 3*Z22, Z20, 4*Z22]
+    nonzero_constraints = [-5*Z20*Z21*Z22/4]
+    variables = [Z20, Z21, Z22]
+    max_result_range = 4
+    min_cost, _, _,_,_ = _calc_min_cost(integer_constraints, nonzero_constraints,[],
+                                        variables, max_result_range)
+    assert min_cost == 18
+    max_result_range = 5
+    min_cost, _, _,_,_ = _calc_min_cost(integer_constraints, nonzero_constraints,[],
+                                        variables, max_result_range)
+    assert min_cost == 19
 
 if __name__ == "__main__":
     # test_as_long_error()
     # test_basic_rational_constraints(vars2())
     # test_calc_min_cost()
-    test_rational_vars_zero()
+    # test_rational_vars_zero()
+    test_min_cost_out_of_bounds()

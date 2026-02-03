@@ -31,9 +31,6 @@ NODE_PHASE = "ϕ"
 EXT_CHARGE = "n_g"
 EXT_PHASE = "_{ext}"
 
-# Possible integer values
-WJ_VALS = [0,1,-1,2,-2,3,-3,4,-4]
-
 
 def _independent_from(A, B):
     """
@@ -432,6 +429,7 @@ def _sort_wT(wT: Union[sym.Matrix, np.ndarray]):
 def _maximize_wT(wT):
     """
     Need to sort before sending in for accurate row accounting
+    Assumes all integer entries in wT
 
     Args:
         wT (_type_): _description_
@@ -464,11 +462,13 @@ def _maximize_wT(wT):
     # All different permutations of the swappable rows
     perms = list(itertools.product(*[itertools.permutations(rows, len(rows)) for rows in swap_rows]))
 
+    # For tuple comparison
+    # (0,1) < (1,0)
+    # compares first element, then second, etc.
+    # and stops at first difference
     best_w = None
     best_val = -np.inf
-    best_key = ""
-
-    wJ_zero = len(WJ_VALS)//2
+    best_key = None
 
     # Choice of row swaps
     # Which columns to invert
@@ -486,7 +486,7 @@ def _maximize_wT(wT):
                     row_order = list(itertools.chain.from_iterable(row_perm))
                     wT_perm = wT_mod[row_order, :].astype(int)
                     # Flattened matrix in base n -- for canonical ordering
-                    key = "".join((wT_perm + wJ_zero).flatten().astype(str))
+                    key = tuple(int(x) for x in wT_perm.flatten())
                     if val > best_val or (val == best_val and key > best_key):
                         best_val = val
                         best_key = key
@@ -563,7 +563,7 @@ def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
     return sym.nsimplify(Z.subs(subs), rational=True)
 
 def _fixed_cost_plus_integer_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
-                                 var_types: dict, wJ: sym.Matrix, vals=WJ_VALS, nonzero=[]):
+                                 var_types: dict, wJ: sym.Matrix, nonzero=[]):
     n_nl = len(var_types.get("compact", [])) + len(var_types.get("extended", []))
 
     # Variables to substitute concrete values in for
@@ -605,9 +605,9 @@ def _fixed_cost_plus_integer_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list
 
 
 def _find_Z_min_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
-                     var_types: dict, wJ: sym.Matrix, vals=WJ_VALS, nonzero=[]):
+                     var_types: dict, wJ: sym.Matrix, nonzero=[]):
     fixed_cost, integer_constraints, nonzero_constraints, var_list, _ = _fixed_cost_plus_integer_cost(Z, var_list,
-                                                                                               var_types, wJ, vals, nonzero)
+                                                                                               var_types, wJ, nonzero)
     if integer_constraints == []:
         return fixed_cost
     variable_cost = _calc_min_cost(integer_constraints,nonzero_constraints,[],var_list)[0]
@@ -615,7 +615,7 @@ def _find_Z_min_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
     
 
 def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
-                     var_types: dict, wJ: sym.Matrix, vals=WJ_VALS, nonzero=[],
+                     var_types: dict, wJ: sym.Matrix, nonzero=[],
                      apriori_sol=None):
     
     # If no variables, just return
@@ -642,7 +642,7 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
         return _find_Z_instance_deterministic(Z, var_list, max_tries=100, nonzero=nonzero)
 
     fixed_cost, integer_constraints, nonzero_constraints, var_list, nz_idx = _fixed_cost_plus_integer_cost(Z, var_list,
-                                                                                var_types, wJ, vals, nonzero)
+                                                                                var_types, wJ, nonzero)
     # Encode symmetry map of row swaps, column sign flips, and row sign flips
     n_terms = len(nz_idx)
     max_row = max(i for (i,j) in nz_idx)
@@ -670,34 +670,41 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
                 new_terms.append(sign*terms[idx])
             perms.append(new_terms)
         return perms
-    if apriori_sol is None:
-        all_sols = find_rational_vars_integer_results(integer_constraints,
-                                            nonzero_constraints, [], var_list,
-                                            heuristic_upper=True,
-                                            symmetry_map=_symmetry_perms)
-    else:
-        all_sols = find_rational_vars_integer_results(integer_constraints,
-                                            nonzero_constraints, [], var_list,
-                                            apriori_sol=apriori_sol-fixed_cost,
-                                            heuristic_upper=False,
-                                            symmetry_map=_symmetry_perms)
-        # Can't beat apriori solution
-        if all_sols == []:
-            return []
+    
+    # Try to find solutions with increasing search space
+    for max_result_range in [5, 20, 50]:
+        if apriori_sol is None:
+            all_sols = find_rational_vars_integer_results(integer_constraints,
+                                                nonzero_constraints, [], var_list,
+                                                heuristic_upper=True,
+                                                symmetry_map=_symmetry_perms,
+                                                max_result_range=max_result_range)
+        else:
+            all_sols = find_rational_vars_integer_results(integer_constraints,
+                                                nonzero_constraints, [], var_list,
+                                                apriori_sol=apriori_sol-fixed_cost,
+                                                heuristic_upper=False,
+                                                symmetry_map=_symmetry_perms,
+                                                max_result_range=max_result_range)
+        if all_sols:
+            break
+
+    # Can't beat apriori solution
+    if all_sols == []:
+        return []
 
     # Identify best solution by wJ^T canonicalization
     # Minimize L1 norm, with tiebreaker being max term
-    WJ_zero = len(WJ_VALS)//2
-    min_key = ""
+    min_key = tuple()
     best_s = None
     for sol in all_sols:
         s = sol["variables"]
         wJT_subs = sym.simplify(wJT_trans.subs(s))
         _, wMax, _ = _maximize_wT(wJT_subs[:, :n_nl])
-        n_val = sum(abs(int(x)-WJ_zero) for x in wMax)
-        max_n_val = max(abs(int(x)-WJ_zero) for x in wMax)
-        key = str(n_val) + "-" + str(max_n_val) + "-" + wMax
-        if key < min_key or min_key == "":
+        n_val = sum(abs(int(x)) for x in wMax)
+        max_n_val = max(abs(int(x)) for x in wMax)
+        key = (n_val, max_n_val, wMax)
+        if key < min_key or min_key == tuple():
             min_key = key
             best_s = s
     if best_s is None:
@@ -847,8 +854,7 @@ def decoupling_transformation(X:sym.Matrix, n_d:Union[int, list[int]]):
     return Z2
 
 
-def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True,
-           ordering_matters:bool=True, extra_nl:bool=False):
+def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True, extra_nl:bool=False):
     """
     Produces a hash that represents in the specified basis
 
@@ -903,7 +909,7 @@ def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True,
     # Recall that P^-1 = P^T for permutation matrices
     # For wJ^T, we have
     # wJt2^T = wJ^T * (Z*P) = (wJ^T*Z) * P
-    if try_perms and ordering_matters:
+    if try_perms:
         perms = _var_col_perms(var_types, dyn_only=True)
         perms = [p[:n_dyn] for p in perms]
     else:
@@ -911,26 +917,20 @@ def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True,
 
     lowest_hash = ""
     lowest_perm = tuple(range(n_nodes))
-    WJ_zero = len(WJ_VALS)//2
     for perm in perms:
         
-        L_key = _nonzero_entries_str(lTrans[perm, perm])
-        C_key =  _nonzero_entries_str(cTransInv[perm, perm])
-        w_key = _nonzero_entries_str(incidence_to_square(wJtTrans[:, perm].transpose(), EJ))
+        L_key = (_nonzero_entries_str(lTrans[perm, perm]),)
+        C_key =  (_nonzero_entries_str(cTransInv[perm, perm]),)
+        w_key = (_nonzero_entries_str(incidence_to_square(wJtTrans[:, perm].transpose(), EJ)),)
         if extra_nl:
             wT_tilde, wT_key_full, _ = _maximize_wT(_sort_wT(wJtTrans[:, perm][:, :n_nl]))
-            n_val = sum(abs(int(x)-WJ_zero) for x in wT_key_full)
-            max_n_val = max(abs(int(x)-WJ_zero) for x in wT_key_full)
-            w_key += "-" + str(n_val) + "-" + str(max_n_val) + "-" + wT_key_full
+            n_val = sum(abs(x) for x in wT_key_full)
+            max_n_val = max(abs(x) for x in wT_key_full)
+            w_key += (n_val, max_n_val, wT_key_full)
 
-        # If ordering doesn't matter
-        if not ordering_matters:
-            w_key = w_key[:w_key.find("-")]
-            C_key = C_key[:C_key.find("-")]
-            L_key = L_key[:L_key.find("-")]
 
         # Make the hash string
-        Z_hash = "_".join([mode_str, w_key, str(int(L_key[0])+int(C_key[0])), L_key, C_key])
+        Z_hash = (mode_str,) + w_key + (int(L_key[0][0])+int(C_key[0][0]),) + L_key + C_key
         if lowest_hash == "" or Z_hash < lowest_hash:
             lowest_hash = Z_hash
             lowest_perm = perm + tuple(range(n_dyn, n_nodes))
@@ -944,7 +944,7 @@ def incidence_to_square(w, vals):
         mat += vals[j]*w[:, j]*w[:, j].transpose()
     return mat
 
-def gen_cap_mat(circuit, edges, ground_node: list[int] = []):
+def gen_cap_mat(circuit, edges, ground_node: list[int] = [], equal_total_C: bool = False):
     """
     Generates a capacitance matrix using Sympy for the given circuit.
     Energy C = Q_vec @ inv_cap @ Q_vec
@@ -969,8 +969,20 @@ def gen_cap_mat(circuit, edges, ground_node: list[int] = []):
     wJ, cj_vals = gen_w(circuit, edges, "J", return_params=True, ground_node=ground_node,
                         param_func=lambda e: "C_J" + e.replace("J", ""))
     if var_counts["C"] > 0 and var_counts["J"] > 0:
-        wC_total = sym.Matrix.hstack(wC, wJ)
-        c_vals_total = c_vals + cj_vals
+        if equal_total_C:
+            c_vals_total = []
+            wC_total = []
+            for i in range(len(c_vals)):
+                c_vals_total.append(c_vals[i])
+                wC_total.append(wC[:, i])
+            for i in range(len(cj_vals)):
+                if wJ[:, i] not in wC_total:
+                    c_vals_total.append(cj_vals[i])
+                    wC_total.append(wJ[:, i])
+            wC_total = sym.Matrix.hstack(*wC_total)
+        else:
+            wC_total = sym.Matrix.hstack(wC, wJ)
+            c_vals_total = c_vals + cj_vals
     elif var_counts["C"] > 0:
         wC_total = wC
         c_vals_total = c_vals
@@ -1390,7 +1402,7 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
 
 
 def choose_Z(circuit: list, edges: list, ground_node: list = [],
-             return_instance: bool = True) -> tuple[sym.Matrix, dict[str, list[int]], str]:
+             return_instance: bool = True, equal_total_C: bool = False) -> tuple[sym.Matrix, dict[str, list[int]], str]:
     """
     Chooses a transformation phi_node = Z*phi_new that separates
     the circuit into compact, extended, harmonic, free, frozen, and cyclic modes.
@@ -1420,7 +1432,7 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
     n_nodes = utils.get_num_nodes(edges) - len(ground_node)
      
     # Prep: Generate capacitance matrix, susceptance matrix, and incidence matrix
-    cMat = gen_cap_mat(circuit, edges, ground_node=ground_node)
+    cMat = gen_cap_mat(circuit, edges, ground_node=ground_node, equal_total_C=equal_total_C)
     lMat = gen_ind_mat(circuit, edges, ground_node=ground_node)
     if utils.count_elems_mapped(circuit)["J"] > 0:
         wJ, EJ = gen_w(utils.add_elem_number(circuit), edges, w_elem="J", return_params=True)
@@ -1473,7 +1485,7 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
     # If there are multiple Z with the same lowest hash
     # then see if they separate with equal L/C values
     Z_final = []
-    hash_final = ""
+    hash_final = tuple()
     for Z in lowest_Z:
         Z_equal = sym.simplify(_sub_equal_LC(Z))
         var_list = [x for x in Z.free_symbols if "Z" in str(x)]
@@ -1486,18 +1498,21 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         lTrans = sym.simplify(Z_hash.transpose()*lMat*Z_hash)
         wJtTrans = sym.simplify(wJ.transpose()*Z_hash)
         val, _ = H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types=var_types)
-        if val < hash_final or hash_final == "":
+        if val < hash_final or hash_final == tuple():
             hash_final = val
             Z_final = [Z]
         elif val == hash_final:
             Z_final.append(Z)
     
+    print(f"Chosen Z transformations have H_hash = {hash_final} with {len(Z_final)} equivalent transformations.")
+    print(Z_final)
+    print(wJ.transpose()*Z_final[0])
     # Get a specific instance of the transformation
     if return_instance:
         # Nonzero terms -- det is already done in find_Z_instance
         # so collect all the denominators
         Z_final_instance = []
-        hash_final_instance = ""
+        hash_final_instance = tuple()
 
         min_costs = []
         for Zf in Z_final:
@@ -1530,10 +1545,10 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             wJtTrans = sym.simplify(wJ.transpose()*ans)
 
             hash_val, _ = H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types=var_types, extra_nl=True)
-            if hash_val < hash_final_instance or hash_final_instance == "":
+            if hash_val < hash_final_instance or hash_final_instance == tuple():
                 hash_final_instance = hash_val
                 Z_final_instance = [ans]
-                best_cost = int(hash_val.split("_")[1].split("-")[2])
+                best_cost = hash_val[2]
             elif hash_val == hash_final_instance:
                 Z_final_instance.append(ans)
 
@@ -2043,11 +2058,14 @@ if __name__ == "__main__":
     # circuit = [('C_1', 'L_1'), ('L_2',), ('L_3',), ('C_2',), ('L_4',), ('C_3', 'L_5'), ('L_6',), ('J_1',)]
     # edges = [(0, 2), (0, 3), (0, 4), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
 
-    # circuit = [('L_1',), ('L_2',), ('L_3',), ('C_1', 'L_4'), ('J_1', 'L_5'), ('C_2', 'J_2', 'L_6'), ('J_3', 'L_7'), ('C_3', 'J_4', 'L_8'), ('C_4', 'J_5', 'L_9'), ('J_6', 'L_10')]
-    # edges = [(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+    circuit = [('L_1',), ('L_2',), ('L_3',), ('C_1', 'L_4'), ('J_1', 'L_5'), ('C_2', 'J_2', 'L_6'), ('J_3', 'L_7'), ('C_3', 'J_4', 'L_8'), ('C_4', 'J_5', 'L_9'), ('J_6', 'L_10')]
+    edges = [(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
 
-    circuit = [('J', 'L'), ('J', 'L'), ('C', 'J', 'L'), ('J', 'L'), ('C', 'J', 'L'), ('C', 'J', 'L')]
-    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    # circuit = [('J', 'L'), ('J', 'L'), ('C', 'J', 'L'), ('J', 'L'), ('C', 'J', 'L'), ('C', 'J', 'L')]
+    # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+
+    # circuit = [('J',), ('J', 'L'), ('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'L')]
+    # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
     # circuit = [('J',), ('J', 'L'), ('J', 'L')]
     # edges = [(0, 1), (0, 2), (1, 2)]
