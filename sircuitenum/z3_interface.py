@@ -17,7 +17,7 @@ from sircuitenum.singular_interface import _eq_as_numer_denom
 
 
 def find_rational_vars_integer_results(integer_constraints, nonzero_constraints, zero_constraints,
-                                       variables, max_result_range=10, timeout_ms=int(1e05),
+                                       variables, max_result_range=100, timeout_ms=int(1e05),
                                        heuristic_upper=True, apriori_sol=None,
                                        symmetry_map=lambda x: [x, [-i for i in x]],
                                        enumerate_sols=True):
