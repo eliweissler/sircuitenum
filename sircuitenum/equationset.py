@@ -28,7 +28,7 @@ UNSOLVABLE_CACHE = set()  # sets of equations with no solutions
 
 def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr] = [],
                              nonzero_constraints: list[sym.Expr] = [],
-                             rational_only = False, stop_at_first=False) -> Tuple[list, list]:
+                             rational_only = False, stop_at_first=False, debug=False) -> Tuple[list, list]:
     """
     Given a list of list of systems of equations, identifies the largest set of compatible
     systems of equations that can be solved simultaneously. Returns the indices of the selected
@@ -89,7 +89,10 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
     for i in range(len(terms)):
         compat = True
         try:
-            compat = is_compatible(terms[i] + nz_term, check_fraction=False, timeout=1)
+            if is_compatible(terms[i], check_fraction=False, timeout=1):
+                compat = is_compatible(terms[i] + nz_term, check_fraction=False, timeout=1)
+            else:
+                compat = False
         except TimeoutError:
             compat = True
         is_solvable.append(compat)
@@ -108,7 +111,10 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
         # Check compatibility -- Okay to time out here we want a quick check
         # and sometimes pairwise checks can be slower than larger sets
         try:
-            compat = is_compatible(combined_terms + nz_term, check_fraction=False, timeout=1)
+            if is_compatible(combined_terms, check_fraction=False, timeout=1):
+                compat = is_compatible(combined_terms + nz_term, check_fraction=False, timeout=1)
+            else:
+                compat = False
         except TimeoutError:
             compat = True
         if not compat:
@@ -134,27 +140,30 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
                 continue
             
             # Check compatibility of combined terms
-            combined_eqs = list(itertools.chain.from_iterable(terms[k] for k in keys)) + nz_term
-            if is_compatible(combined_eqs, check_fraction=False):
+            combined_eqs = list(itertools.chain.from_iterable(terms[k] for k in keys))
+            if debug:
+                print("Checking compatibility of combined eqs:", keys)
+            if is_compatible(combined_eqs + nz_term, check_fraction=False):
                 # print("Solving combined eq", combined_eqs)
                 # Solve combined equations
                 sols = []
-                branches = solve_with_singular(combined_eqs, check_fraction=False, rational_only=rational_only)
-                for sol in extract_mappings(branches, real_only=True):
-                    # Sub out nzvar if present
-                    if nz_var in sol:
-                        nz_var_val = sol.pop(nz_var)
-                        sol = {k: v.subs(nz_var, nz_var_val) for k, v in sol.items()}
-                    # Check nonzero conditions
-                    if any(sym.simplify(d.subs(sol)) == 0 for d in nonzero):
-                        continue
-                    sols.append(sol)
-                if len(sols) > 0:
-                    all_sols.append(sols)
-                    sol_keys.append(keys)
-                    sol_found = True
-                    if stop_at_first:
-                        break
+                branches = solve_with_singular(combined_eqs + nz_term, check_fraction=False, rational_only=True, debug=debug)
+                if branches:
+                    for sol in extract_mappings(branches, real_only=True):
+                        # Sub out nzvar if present
+                        if nz_var in sol:
+                            nz_var_val = sol.pop(nz_var)
+                            sol = {k: v.subs(nz_var, nz_var_val) for k, v in sol.items()}
+                        # Check nonzero conditions
+                        if any(sym.simplify(d.subs(sol)) == 0 for d in nonzero):
+                            continue
+                        sols.append(sol)
+                    if len(sols) > 0:
+                        all_sols.append(sols)
+                        sol_keys.append(keys)
+                        sol_found = True
+                        if stop_at_first:
+                            break
         if sol_found:
             return sol_keys, all_sols
     

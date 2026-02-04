@@ -238,7 +238,7 @@ def _cached_compatible(cmd: str, timeout: Optional[float] = None) -> bool:
 
 
 def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvability=True,
-                        check_fraction: bool = True, rational_only: bool = False) -> List[Dict[str, Any]]:
+                        check_fraction: bool = True, rational_only: bool = False, debug: bool = False) -> List[Dict[str, Any]]:
     """
     Solves a system of SymPy equations using the Groebner Cover algorithm via Singular.
 
@@ -298,12 +298,14 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
     
     # Quick compatibility check
     if not equations or not all_symbols:
+        print("Trivially no branches (no equations or no variables).")
         return []  # No equations or no variables means no branches
     # Convert equations to SymPy expressions if needed
     if isinstance(equations[0], sym.Equality):
         equations = [eq.lhs - eq.rhs for eq in equations]
     if check_solvability:
         if not is_compatible(equations):
+            print("System is incompatible, no solutions.")
             return []
     
     # Determine Fixed vs Potential variables
@@ -326,13 +328,16 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
         str_eqs = str_eqs.replace(orig, dummy_map[orig])
 
     # Run Singular
-    singular_call = f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}");'
+    singular_call = f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}", {int(rational_only)}, {int(debug)});'
+    if debug:
+        print("singular call", singular_call)
     raw_output = _cached_solve(singular_call)
 
-    
     # 1. Parse Raw Output
     all_var_names = list(dummy_map.values())
     raw_branches = parse_singular_output(raw_output, all_var_names, inv_dummy_map=inv_dummy_map)
+    if debug:
+        print(f"Singular returned {len(raw_branches)} raw branches.")
     final_branches = []
     # 2. Resolve Each Branch (Logic moved "inside solve")
     for raw_br in raw_branches:
@@ -343,15 +348,21 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
         resolved_list = resolve_branch_logic(raw_br, equations, rational_only=rational_only)
         
         final_branches.extend(resolved_list)
+    if debug:
+        print(f"After resolution, {len(final_branches)} total branches.")
     # 3. Final Validity Check
     valid_branches = []
     for br in final_branches:
         if (check_branch_validity(br, equations) and 
         all(_robust_substitute(denom, br['mapping']) != 0 for denom in denoms)):
             valid_branches.append(br)
-    
+    if debug:
+        print(f"After validity checking, {len(valid_branches)} valid branches.")
     # 4. Filter Redundant Branches
     valid_branches = filter_redundant_branches(valid_branches)
+    
+    if debug:
+        print(f"After redundancy filtering, {len(valid_branches)} unique branches.")
 
     return valid_branches
 
@@ -687,6 +698,8 @@ def resolve_branch_logic(branch_data: dict, original_equations: list, rational_o
 
 
 def make_dummy_map(var_list: List[sym.Symbol]):
+    # Sort variables by name to ensure consistent mapping
+    var_list = sorted(var_list, key=lambda x: str(x))
     dummy_map = {}
     inv_dummy_map = {}
     # Identify any variables that are single lowercase letters
@@ -884,7 +897,11 @@ class SafeSingular:
         # Auto-restart if dead
         if self.process is None:
             self.start()
+        # print("Executing Singular Command:", cmd)
         out = self._execute_raw(cmd, timeout)
+        # print("done.\n", out)
+        if "error" in out.lower():
+            raise RuntimeError(f"Singular Error:\n{out}")
         return out
     
     def _execute_raw(self, cmd, timeout):
