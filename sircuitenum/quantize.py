@@ -616,7 +616,7 @@ def _find_Z_min_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
 
 def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
                      var_types: dict, wJ: sym.Matrix, nonzero=[],
-                     apriori_sol=None):
+                     apriori_sol=None, debug=False):
     
     # If no variables, just return
     if len(Z.free_symbols) == 0:
@@ -673,20 +673,25 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
     
     # Try to find solutions with increasing search space
     for max_result_range in [5, 20, 50]:
+        if debug:
+            print("Trying max result range:", max_result_range)
+            print("for transformation", Z)
         if apriori_sol is None:
             all_sols = find_rational_vars_integer_results(integer_constraints,
                                                 nonzero_constraints, [], var_list,
                                                 heuristic_upper=True,
                                                 symmetry_map=_symmetry_perms,
-                                                max_result_range=max_result_range)
+                                                max_result_range=max_result_range,
+                                                debug=debug)
         else:
             all_sols = find_rational_vars_integer_results(integer_constraints,
                                                 nonzero_constraints, [], var_list,
                                                 apriori_sol=apriori_sol-fixed_cost,
                                                 heuristic_upper=False,
                                                 symmetry_map=_symmetry_perms,
-                                                max_result_range=max_result_range)
-        if all_sols:
+                                                max_result_range=max_result_range,
+                                                debug=debug)
+        if all_sols or apriori_sol is not None:
             break
 
     # Can't beat apriori solution
@@ -1301,6 +1306,8 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     prefix = kwargs.get("prefix", "Z")
     param_symbols = kwargs.get("param_symbols", ["C", "L", "J"])
 
+    debug = kwargs.get("debug", False)
+
     # Record mode types
     comp = var_types.get("compact", [])
     n_comp = len(comp)
@@ -1372,7 +1379,7 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     # Flatten the list of possible substitutions
     all_keys, all_subs = maximally_compatible_sol(coupling,
                             nonzero_constraints=[_det_fast(Z_poly), Z_common_denom],
-                            rational_only=True, stop_at_first=True)
+                            rational_only=True, stop_at_first=True, debug=debug)
     # Cannot decouple anything
     if not all_keys:
         if return_tiebreaker:
@@ -1402,7 +1409,8 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
 
 
 def choose_Z(circuit: list, edges: list, ground_node: list = [],
-             return_instance: bool = True, equal_total_C: bool = False) -> tuple[sym.Matrix, dict[str, list[int]], str]:
+             return_instance: bool = True, equal_total_C: bool = False,
+             debug=False) -> tuple[sym.Matrix, dict[str, list[int]], str]:
     """
     Chooses a transformation phi_node = Z*phi_new that separates
     the circuit into compact, extended, harmonic, free, frozen, and cyclic modes.
@@ -1461,13 +1469,13 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             raise ValueError("Invalid Transformation (Not Invertible)")
         # 2a: Decouple nonlinear degrees of freedom
         if elem_counts["J"] > 0:
-            Z2_a = secondary_decouple(var_types,[Z.transpose()*jMat*Z], [False])
+            Z2_a = secondary_decouple(var_types,[Z.transpose()*jMat*Z], [False], debug=debug)
         else:
             Z2_a = [None]
         # 2b: Decouple linear degrees of freedom
         for Z_in in Z2_a:
             Z2_b, vals = secondary_decouple(var_types, [Z.transpose()*lMat*Z, Z.transpose()*cMat*Z],
-                                      [False, True], Z_in=Z_in, return_tiebreaker=True)
+                                      [False, True], Z_in=Z_in, return_tiebreaker=True, debug=debug)
             for Z2_bi, val in zip(Z2_b, vals):
                 Z_tot = Z*Z2_bi
                 if val < lowest_hash or lowest_hash == "":
@@ -1503,7 +1511,10 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             Z_final = [Z]
         elif val == hash_final:
             Z_final.append(Z)
-
+    if debug:
+        print(f"Chosen Z transformations have H_hash = {hash_final} with {len(Z_final)} equivalent transformations.")
+        print(Z_final)
+        print(wJ.transpose()*Z_final[0])
     # Get a specific instance of the transformation
     if return_instance:
         # Nonzero terms -- det is already done in find_Z_instance
@@ -1518,6 +1529,8 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         best_cost = None
 
         for Zf, min_cost in zip(Z_final, min_costs):
+            if debug:
+                print("Searching for instance of Z transformation...", min_cost, best_cost)
             # Don't bother trying if we already know the cost can't be beat
             if not best_cost is None:
                 if best_cost < min_cost:
@@ -1527,7 +1540,8 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             # Include apriori solution to speed up search
             ans = _find_Z_instance(Zf, var_list, var_types=var_types,
                                     wJ=wJ, nonzero=extract_denom(Zf),
-                                    apriori_sol=best_cost)
+                                    apriori_sol=best_cost,
+                                    debug=debug)
             # Can't beat best cost
             if ans == []:
                 continue
@@ -2055,14 +2069,17 @@ if __name__ == "__main__":
     # circuit = [('C_1', 'L_1'), ('L_2',), ('L_3',), ('C_2',), ('L_4',), ('C_3', 'L_5'), ('L_6',), ('J_1',)]
     # edges = [(0, 2), (0, 3), (0, 4), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
 
-    circuit = [('L_1',), ('L_2',), ('L_3',), ('C_1', 'L_4'), ('J_1', 'L_5'), ('C_2', 'J_2', 'L_6'), ('J_3', 'L_7'), ('C_3', 'J_4', 'L_8'), ('C_4', 'J_5', 'L_9'), ('J_6', 'L_10')]
-    edges = [(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+    # circuit = [('L_1',), ('L_2',), ('L_3',), ('C_1', 'L_4'), ('J_1', 'L_5'), ('C_2', 'J_2', 'L_6'), ('J_3', 'L_7'), ('C_3', 'J_4', 'L_8'), ('C_4', 'J_5', 'L_9'), ('J_6', 'L_10')]
+    # edges = [(0, 1), (0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
 
     # circuit = [('J', 'L'), ('J', 'L'), ('C', 'J', 'L'), ('J', 'L'), ('C', 'J', 'L'), ('C', 'J', 'L')]
     # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
     # circuit = [('J',), ('J', 'L'), ('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'L')]
     # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+
+    circuit = [('J',), ('J',), ('J', 'L'), ('J', 'L'), ('J', 'L'), ('C', 'J', 'L')]
+    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
     # circuit = [('J',), ('J', 'L'), ('J', 'L')]
     # edges = [(0, 1), (0, 2), (1, 2)]
@@ -2076,7 +2093,7 @@ if __name__ == "__main__":
     for i in tqdm(range(1)):
         t0 = time.time()
         # Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
-        Z, var_types, val = choose_Z(circuit, edges)
+        Z, var_types, val = choose_Z(circuit, edges, debug=True, return_instance=True)
         cTrans = Z[0].transpose()*cMat*Z[0]
         lTrans = Z[0].transpose()*lMat*Z[0]
         wJTrans = gen_w(circuit, edges, w_elem="J").transpose()*Z[0]

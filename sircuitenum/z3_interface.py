@@ -17,10 +17,10 @@ from sircuitenum.singular_interface import _eq_as_numer_denom
 
 
 def find_rational_vars_integer_results(integer_constraints, nonzero_constraints, zero_constraints,
-                                       variables, max_result_range=5, timeout_ms=int(1e05),
+                                       variables, max_result_range=5, timeout_ms=int(1e06),
                                        heuristic_upper=True, apriori_sol=None,
                                        symmetry_map=lambda x: [x, [-i for i in x]],
-                                       enumerate_sols=True):
+                                       enumerate_sols=True, debug=True):
     """
     Find rational variable assignments such that integer constraints evaluate to integers
     with minimal L1 norm.
@@ -111,8 +111,12 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
         if apriori_sol < lower_bound:
             return []
         try:
+            if debug:
+                print(f"  > Using apriori solution cost = {apriori_sol} to limit search.")
             solv.add(cost <= apriori_sol)
             check_result = solv.check()
+            if debug:
+                print(f"    > Check result: {check_result}")
             # Nothing can achieve the apriori lower bound
             if check_result == unsat:
                 return []
@@ -128,8 +132,12 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
     # Check for whether the lower bound is achievable, if it is then we're done
     solv.push()
     try:
+        if debug:
+            print(f"  > Checking if lower bound cost = {lower_bound} is achievable...")
         solv.add(cost == lower_bound)
         check_result = solv.check()
+        if debug:
+            print(f"    > Check result: {check_result}")
         if check_result == sat:
             if enumerate_sols:
                 return _enumerate_solutions(solv, cost_terms, z3_vars,
@@ -200,6 +208,8 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
 
     for target_cost in target_costs:
 
+        print(f"  > Trying Cost = {target_cost}...")
+
         # Push a temporary context to check "Can Cost == k?"
         solv.push()
         solv.add(cost == target_cost)
@@ -231,6 +241,10 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
             raise TimeoutError(f"  > Z3 gave up! Reason: {solv.reason_unknown()}")
         
         solv.pop()
+
+        if not apriori_sol is None and target_cost >= apriori_sol:
+            # We've already established nothing can beat apriori_sol
+            break
 
 
     return []
