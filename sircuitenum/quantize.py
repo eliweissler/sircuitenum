@@ -1503,10 +1503,7 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             Z_final = [Z]
         elif val == hash_final:
             Z_final.append(Z)
-    
-    print(f"Chosen Z transformations have H_hash = {hash_final} with {len(Z_final)} equivalent transformations.")
-    print(Z_final)
-    print(wJ.transpose()*Z_final[0])
+
     # Get a specific instance of the transformation
     if return_instance:
         # Nonzero terms -- det is already done in find_Z_instance
