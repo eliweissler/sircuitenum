@@ -606,7 +606,7 @@ def _gen_ham_class_row(args):
 
 def add_hamiltonian_classes(db_file: str, n_nodes: int,
                               n_workers: int = 4, resume: bool = False,
-                              eq_params=False, save_every=1000):
+                              eq_params=False, save_every=1):
     """
     Constructs a variable transformation and identifies the hamiltonian
     class for each circuit in the database
@@ -652,6 +652,7 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
 
         # Make temp table to store results if it's not already there
         tables = utils.list_all_tables(db_file)
+        H_class_col = 'H_class_sym' if eq_params else 'H_class'
         if temp_table not in tables:
             if resume:
                 if eq_params:
@@ -675,9 +676,16 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
                         FROM {temp_table}\
                         WHERE in_non_iso_set LIKE 1\
                         AND filter LIKE 1\
-                        AND {'H_class_sym' if eq_params else 'H_class'} NOT LIKE 'UNDEFINED'"
+                        AND {H_class_col} NOT LIKE 'UNDEFINED'"
             unique_keys_temp = set(x[0] for x in cur.execute(sql_query).fetchall())
             unique_keys = unique_keys - unique_keys_temp
+    
+            # Identify any that are already done in main table
+            sql_query = f"SELECT DISTINCT unique_key\
+                        FROM {table_name} WHERE\
+                            {H_class_col} NOT LIKE 'UNDEFINED' AND {H_class_col} IS NOT NULL"
+            already_done = set(x[0] for x in cur.execute(sql_query).fetchall())
+            unique_keys = unique_keys - already_done
 
     
     # Filter out those already done if resuming

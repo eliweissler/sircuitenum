@@ -20,7 +20,7 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
                                        variables, max_result_range=5, timeout_ms=int(1e06),
                                        heuristic_upper=True, apriori_sol=None,
                                        symmetry_map=lambda x: [x, [-i for i in x]],
-                                       enumerate_sols=True, debug=True):
+                                       enumerate_sols=True, debug=False):
     """
     Find rational variable assignments such that integer constraints evaluate to integers
     with minimal L1 norm.
@@ -208,7 +208,8 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
 
     for target_cost in target_costs:
 
-        print(f"  > Trying Cost = {target_cost}...")
+        if debug:
+            print(f"  > Trying Cost = {target_cost}...")
 
         # Push a temporary context to check "Can Cost == k?"
         solv.push()

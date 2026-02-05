@@ -672,7 +672,7 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
         return perms
     
     # Try to find solutions with increasing search space
-    for max_result_range in [5, 20, 50]:
+    for max_result_range in [4, 10]:
         if debug:
             print("Trying max result range:", max_result_range)
             print("for transformation", Z)
