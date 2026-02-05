@@ -144,7 +144,7 @@ def solve_0D_backsub(sympy_eqs, sympy_vars, sympy_params=None, rational_only=Fal
     return final_results
 
 
-def is_compatible(equations: Iterable[Union[sym.Expr, sym.Equality]], check_fraction: bool = True, timeout=None) -> bool:
+def is_compatible(equations: Iterable[Union[sym.Expr, sym.Equality]], check_fraction: bool = True, timeout=None, debug: bool = False) -> bool:
     """
     Checks if a system of SymPy equations is mathematically consistent (has at least one solution).
 
@@ -226,11 +226,11 @@ def is_compatible(equations: Iterable[Union[sym.Expr, sym.Equality]], check_frac
     # 2. Then define the ideal and call the proc
     cmd = f"setring SUPER_RING; check_solvability(ideal({str_eqs}));"
     
-    return _cached_compatible(cmd, timeout)
+    return _cached_compatible(cmd, timeout, debug=debug)
 
 
 @functools.cache
-def _cached_compatible(cmd: str, timeout: Optional[float] = None) -> bool:
+def _cached_compatible(cmd: str, timeout: Optional[float] = None, debug: bool = False) -> bool:
     if WORKER_SINGULAR is None:
         initialize_singular()
     cleaned = clean_singular_string(WORKER_SINGULAR.eval(cmd, timeout))
@@ -304,7 +304,7 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
     if isinstance(equations[0], sym.Equality):
         equations = [eq.lhs - eq.rhs for eq in equations]
     if check_solvability:
-        if not is_compatible(equations):
+        if not is_compatible(equations, debug=debug):
             print("System is incompatible, no solutions.")
             return []
     
@@ -331,7 +331,7 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
     singular_call = f'solve_cover("{str_fixed_params}", "{str_potential_vars}", "{str_eqs}", {int(rational_only)}, {int(debug)});'
     if debug:
         print("singular call", singular_call)
-    raw_output = _cached_solve(singular_call)
+    raw_output = _cached_solve(singular_call, debug=debug)
 
     # 1. Parse Raw Output
     all_var_names = list(dummy_map.values())
@@ -363,14 +363,15 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
     
     if debug:
         print(f"After redundancy filtering, {len(valid_branches)} unique branches.")
+        print("first branch", valid_branches[0]["mapping"] if valid_branches else "N/A")
 
     return valid_branches
 
 @functools.cache
-def _cached_solve(singular_call: str):
+def _cached_solve(singular_call: str, debug: bool = False) -> str:
     if WORKER_SINGULAR is None:
         initialize_singular()
-    out = WORKER_SINGULAR.eval(singular_call)
+    out = WORKER_SINGULAR.eval(singular_call, debug=debug)
     return out
 
 def extract_mappings(branches: List[Dict[str, Any]], real_only: bool = False) -> List[Dict[str, Any]]:
@@ -702,9 +703,12 @@ def make_dummy_map(var_list: List[sym.Symbol]):
     var_list = sorted(var_list, key=lambda x: str(x))
     dummy_map = {}
     inv_dummy_map = {}
-    # Identify any variables that are single lowercase letters
+    # Identify any variables that are single lowercase letters or uppercase letters
     for s in var_list:
         if re.fullmatch(r'[a-z]', str(s)):
+            dummy_map[str(s)] = str(s)
+            inv_dummy_map[str(s)] = str(s)
+        elif re.fullmatch(r'[A-Z]', str(s)):
             dummy_map[str(s)] = str(s)
             inv_dummy_map[str(s)] = str(s)
     # Dummy substitutions to avoid Singular parsing issues
@@ -713,10 +717,15 @@ def make_dummy_map(var_list: List[sym.Symbol]):
         if str(s) in dummy_map:
             continue  # Already assigned
         # skip e
-        if chr(ord_val) in ['e', 'i']:
+        if chr(ord_val) in ['e', 'i', 'E', 'I']:
             ord_val += 1
         if ord_val > 122:  # ASCII 'z'
-            raise ValueError("Too many variables for dummy substitution (max 24)")
+            ord_val = 65  # ASCII 'A'
+        if ord_val == 91:  # One past 'Z'
+            print("ERROR: Too many variables for dummy substitution")
+            print(len(var_list), "variables provided.\n", var_list)
+            print(dummy_map)
+            raise ValueError("Too many variables for dummy substitution (max 48)")
         dummy_map[str(s)] = chr(ord_val)
         inv_dummy_map[chr(ord_val)] = str(s)
         ord_val += 1
@@ -855,7 +864,7 @@ def initialize_singular():
     lib_path = Path(__file__).with_name("poly_solver.sing")
     startup_code = ""
     startup_code += f'LIB "{str(lib_path)}";\n'
-    startup_code += "ring SUPER_RING = 0, (a,b,c,d,f,g,h,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z), dp;\n"
+    startup_code += "ring SUPER_RING = 0, (a,b,c,d,f,g,h,j,k,l,m,n,o,p,q,r,s,t,u,v,w,x,y,z,A,B,C,D,F,G,H,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z), dp;\n"
     # startup_code += "option(prot);"
     global WORKER_SINGULAR
     WORKER_SINGULAR = SafeSingular(startup_code=startup_code, binary_path=SINGULAR_PATH, timeout=100)
@@ -890,16 +899,18 @@ class SafeSingular:
                 self.kill()
                 raise
 
-    def eval(self, cmd, timeout=None):
+    def eval(self, cmd, timeout=None, debug=False):
         """
         Public method: Ensures process exists, then runs command.
         """
         # Auto-restart if dead
         if self.process is None:
             self.start()
-        # print("Executing Singular Command:", cmd)
+        # if debug:
+            # print("Executing Singular Command:", cmd)
         out = self._execute_raw(cmd, timeout)
-        # print("done.\n", out)
+        # if debug:
+            # print("done.\n", out)
         if "error" in out.lower():
             raise RuntimeError(f"Singular Error:\n{out}")
         return out

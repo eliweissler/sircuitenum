@@ -527,7 +527,8 @@ def _enumerate_solutions(solver_with_state, tracked_exprs, z3_vars, max_solution
     return results
 
 
-def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constraints, variables, max_result_range=5, timeout_ms=int(1e03)):
+def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constraints, variables, max_result_range=5,
+                           timeout_ms=int(1e03), return_first_only=False, debug=False):
     """
     Find a heuristic upper bound on the optimal cost by maximizing zero variables.
 
@@ -584,7 +585,7 @@ def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constr
     best_val = len(integer_constraints)*max_result_range
     res = []
     unique_subs = set()
-    for nz_term in sorted(nz_terms, key=lambda x: len(x.free_symbols)):
+    for nz_term in sorted(nz_terms, key=lambda x: (len(x.free_symbols), str(x))):
         is_nonzero = [nz_term]
         if isinstance(nz_denom, sym.Expr):
             is_nonzero.append(nz_denom)
@@ -610,7 +611,7 @@ def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constr
                                                         variables=new_variables,
                                                     max_result_range=max_result_range,
                                                     timeout_ms=timeout_ms, heuristic_upper=False,
-                                                    apriori_sol=best_val, enumerate_sols=False)
+                                                    apriori_sol=best_val, enumerate_sols=False, debug=debug)
         if this_res:
             val = sum(abs(x) for x in this_res[0]["results"])
             if val <= best_val:
@@ -623,6 +624,8 @@ def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constr
             elif val == best_val:
                 # Explicitly add the zero substitutions to the results
                 res.extend(this_res_proc)
+            if return_first_only and res:
+                break
     
     return best_val, res
 

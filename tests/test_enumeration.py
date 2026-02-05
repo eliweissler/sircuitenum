@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 import pytest 
 
-
+import networkx as nx
 import sympy as sy
 import numpy as np
 import pandas as pd
@@ -56,6 +56,8 @@ def cleanup_temp_files():
     # Teardown - clean after test
     for f in [TEMP_FILE, TEMP_FILE2]:
         cleanup_db(f)
+    
+    utils.LOADED_BASEGRAPHS = {}
 
 def cleanup_db(filename):
     for suffix in ["", "-wal", "-shm"]:
@@ -617,9 +619,44 @@ def test_qps_enum():
     cleanup_db(TEMP_FILE)
 
 
+def test_planar_regular_enum_max_elem():
+
+
+    n = 6
+    enum.generate_graphs_node(TEMP_FILE, n_nodes=n, base=3, regular=True, planar=True, max_elem={("J",):1, 
+                                                                                                 ("L",):2})
+    enum.trim_graph_node(TEMP_FILE, n_nodes=n, base=3, n_workers=4, find_equiv=False)
+    df = utils.get_circuit_data_batch(TEMP_FILE, n_nodes=n)
+    for i, row in df.iterrows():
+        for elem, max_count in {("J",):1, ("L",):2}.items():
+            count = sum(1 for c in row['circuit'] if c == elem)
+            assert count <= max_count
+        G = utils.get_basegraphs(n)[utils.edges_to_graph_index(row['edges'])]
+        assert nx.is_planar(G)
+        assert nx.is_regular(G)
+    assert df.shape[0] == 1380
+
+    n = 6
+    enum.generate_graphs_node(TEMP_FILE, n_nodes=n, base=3, regular=True, planar=True, max_elem={("J",):(3,3), ("L",):(3,3),
+                                                                                                 ("C",):(3,3)})
+    enum.trim_graph_node(TEMP_FILE, n_nodes=n, base=3, n_workers=1, find_equiv=False)
+    df = utils.get_circuit_data_batch(TEMP_FILE, n_nodes=n)
+    for i, row in df.iterrows():
+        for elem, max_count in {("J",):(3,3), ("L",):(3,3), ("C",):(3,3)}.items():
+            count = sum(1 for c in row['circuit'] if c == elem)
+            if isinstance(max_count, tuple):
+                assert max_count[0] <= count <= max_count[1]
+            else:
+                assert count <= max_count
+        G = utils.get_basegraphs(n)[utils.edges_to_graph_index(row['edges'])]
+        assert nx.is_planar(G)
+        assert nx.is_regular(G)
+    assert df.shape[0] == 1680
+
+
 if __name__ == "__main__":
     # test_num_possible_circuits()
-    # test_generate_for_specific_graph()
+    test_generate_for_specific_graph()
     # test_delete_table()
     # test_find_uniuqe_ground_placements()
     # test_expand_ground_node()
@@ -631,6 +668,7 @@ if __name__ == "__main__":
     # test_trim_graph_node()
     # test__gen_ham_class_row()
     # test_add_hamiltonian_classes()
-    test_generate_all_circuits()
+    # test_generate_all_circuits()
     # test_qps_enum()
+    # test_planar_regular_enum_max_elem()
 

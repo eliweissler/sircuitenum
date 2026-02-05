@@ -71,7 +71,8 @@ def num_possible_circuits(base: int, n_nodes: int, quiet: bool = True) -> int:
 def generate_for_specific_graph(base: int, graph: nx.Graph,
                                 graph_index: int,
                                 cursor_obj=None,
-                                return_vals: bool = False):
+                                return_vals: bool = False,
+                                max_elem: dict = {}):
     """Generates all circuits derived from a given graph
 
     Args:
@@ -95,16 +96,35 @@ def generate_for_specific_graph(base: int, graph: nx.Graph,
     n_edges = len(edges)
     if return_vals:
         data = []
+
+    choices = utils.ENUM_PARAMS["CHAR_LIST"][:base]
     
     num_configs = base**n_edges
-    for i, circuit in enumerate(itertools.product(utils.ENUM_PARAMS["CHAR_LIST"][:base], repeat=n_edges)):
-        c_dict = utils.circuit_entry_dict(circuit, graph_index, n_nodes, i, base)
-        # Commit for the last one in the set
-        if cursor_obj is not None:
-            utils.write_circuit(cursor_obj, c_dict,
-                                to_commit=i == (num_configs-1))
-        if return_vals:
-            data.append(c_dict)
+    save_every = max(1, num_configs // 1000)
+    for i, circuit in tqdm(enumerate(itertools.product(choices, repeat=n_edges)), total=num_configs):
+        to_continue = True
+        counts = {}
+        for elem in circuit:
+            counts[elem] = counts.get(elem, 0) + 1
+        for elem, max_count in max_elem.items():
+            if isinstance(max_count, tuple):
+                min_val, max_val = max_count
+            else:
+                min_val, max_val = 0, max_count
+            count = counts.get(utils.ENUM_PARAMS["COMBINATION_TO_CHAR"][elem], 0)
+            if count < min_val or count > max_val:
+                to_continue = False
+                break
+        if to_continue:
+            c_dict = utils.circuit_entry_dict(circuit, graph_index, n_nodes, i, base)
+            if cursor_obj is not None:
+                utils.write_circuit(cursor_obj, c_dict,
+                                    to_commit= i % save_every == 0)
+            if return_vals:
+                data.append(c_dict)
+    # Final commit
+    if cursor_obj is not None:
+        cursor_obj.connection.commit()
 
     if return_vals:
         return pd.DataFrame(data)
@@ -263,7 +283,9 @@ def find_equiv_cir_series(db_file: str, circuit: list, edges: list) -> str:
 
 
 def generate_graphs_node(db_file: str, n_nodes: int,
-                         base: int, return_vals: bool = False) -> Union[pd.DataFrame, None]:
+                         base: int, return_vals: bool = False,
+                         planar: bool = False, regular: bool = False,
+                         max_elem: dict = {}) -> Union[pd.DataFrame, None]:
     """
     Generate circuits for all graphs with a given number of nodes and store them in an SQL database.
 
@@ -309,13 +331,14 @@ def generate_graphs_node(db_file: str, n_nodes: int,
     else:
         cursor_obj = None
 
-    all_graphs = utils.get_basegraphs(n_nodes)
+    all_graphs = utils.get_basegraphs(n_nodes, planar=planar, regular=regular)
     data = []
     for graph_index, G in tqdm(enumerate(all_graphs), total=len(all_graphs)):
         data.append(generate_for_specific_graph(base, G,
                                                 graph_index,
                                                 cursor_obj,
-                                                return_vals))
+                                                return_vals, 
+                                                max_elem=max_elem))
 
     if cursor_obj is not None:
         connection_obj.close()
@@ -326,8 +349,8 @@ def generate_graphs_node(db_file: str, n_nodes: int,
 
 def trim_graph_node(db_file: str, n_nodes: int,
                     base: int = None,
-                    n_workers: int = 1, save_every: int = 100,
-                    resume: bool = False) -> None:
+                    n_workers: int = 1, save_every: int = 20,
+                    find_equiv: bool = True) -> None:
     """
     Mark circuits in the database based on Josephson junctions, series linear components, 
     and non-isomorphism.
@@ -418,7 +441,7 @@ def trim_graph_node(db_file: str, n_nodes: int,
                 filter_str = f"WHERE edge_counts = '{counts_str}'\
                                AND graph_index = {graph_index}"
                 args.append((filter_str, db_file, n_nodes,
-                             utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], False))
+                             utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], False, find_equiv))
 
     # Shuffle to spread out longer cases for more accurate time
     # estimates and better parallel performance
@@ -484,6 +507,7 @@ def _reduce_individual_set(args: tuple):
     n_nodes = args[2]
     mapping = args[3]
     update = args[4]
+    find_equiv = args[5] if len(args) > 5 else True
 
     df = utils.get_circuit_data_batch(db_file, n_nodes,
                                       char_mapping=mapping,
@@ -503,10 +527,11 @@ def _reduce_individual_set(args: tuple):
     for i in range(df.shape[0]):
         if yes_series[i]:
             row = df.iloc[i]
-            equiv_cir[i] = find_equiv_cir_series(db_file,
-                                                 row['circuit'],
-                                                 row['edges']
-                                                 )
+            if find_equiv:
+                equiv_cir[i] = find_equiv_cir_series(db_file,
+                                                    row['circuit'],
+                                                    row['edges']
+                                                    )
 
     # Update the table
     to_update = ["no_series", "filter",
@@ -740,7 +765,9 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
 
 def generate_and_trim(n_nodes: int, db_file: str = "circuits.db",
                       base: int = None,
-                      n_workers: int = 1, resume: bool = False):
+                      n_workers: int = 1, resume: bool = False,
+                      planar: bool = False, regular: bool = False,
+                      max_elem: dict = {}) -> bool:
     """ Generates circuits for all graphs for a given number of nodes
         Then trims identical circuits from database.
         Stores circuits in sql database
@@ -770,12 +797,13 @@ def generate_and_trim(n_nodes: int, db_file: str = "circuits.db",
     if (not resume) or (not H_started):
         print("----------------------------------------")
         print('Starting generating ' + str(n_nodes) + ' node circuits.')
-        generate_graphs_node(db_file, n_nodes, base)
+        generate_graphs_node(db_file, n_nodes, base, planar=planar, regular=regular, max_elem=max_elem)
         print("Circuits Generated for " +
             str(n_nodes) + " node circuits.")
         print("Now Trimming.")
+        find_equiv = not(planar or regular)
         trim_graph_node(db_file=db_file, n_nodes=n_nodes, base=base,
-                        n_workers=n_workers, resume=resume)
+                        n_workers=n_workers, find_equiv=find_equiv)
         print("Finished trimming " + str(n_nodes) + " node circuits.")
 
     if (not resume) or H_started:
@@ -797,7 +825,10 @@ def generate_all_circuits(db_file: str = "circuits.db",
                         base: int = None,
                         n_workers: int = 1,
                         resume: bool = False,
-                        quiet: bool = True) -> None:
+                        quiet: bool = True,
+                        planar: bool = False,
+                        regular: bool = False,
+                        max_elem: dict = {}) -> None:
     """
     Generate all circuits with node counts between `n_nodes_start` and `n_nodes_stop`.  
 
@@ -817,6 +848,14 @@ def generate_all_circuits(db_file: str = "circuits.db",
         ``J, C, L, JL, CL, JC, JCL``.
     n_workers : int, optional
         The number of workers to use for circuit generation. Defaults to ``1``.
+    resume : bool, optional
+        If ``True``, resumes a previously interrupted enumeration. Defaults to ``False``.
+    quiet : bool, optional
+        If ``False``, prints progress information to the console. Defaults to ``True``.
+    planar : bool, optional
+        If ``True``, only generates planar circuits. Defaults to ``False``.
+    regular : bool, optional
+        If ``True``, only generates circuits from regular graphs. Defaults to ``False``.
     """
     if base is None:
         base = len(utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
@@ -852,9 +891,11 @@ def generate_all_circuits(db_file: str = "circuits.db",
         if not quiet:
             tqdm.__init__ = functools.partialmethod(tqdm.__init__, disable=False)
             generate_and_trim(n, db_file=db_file, base=base,
-                              n_workers=n_workers, resume=resume)
+                              n_workers=n_workers, resume=resume,
+                              planar=planar, regular=regular, max_elem=max_elem)
         else:
             with contextlib.redirect_stdout(None):
                 tqdm.__init__ = functools.partialmethod(tqdm.__init__, disable=True)
                 generate_and_trim(n, db_file=db_file, base=base,
-                              n_workers=n_workers, resume=resume)
+                              n_workers=n_workers, resume=resume,
+                              planar=planar, regular=regular, max_elem=max_elem)

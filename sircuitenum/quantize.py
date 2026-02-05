@@ -363,7 +363,7 @@ def _nonzero_entries_str(X: Union[sym.Matrix, np.ndarray],
     return bin_str 
 
 
-def _remove_permutation_equivalent_transformations(Z_list, perms):
+def _remove_permutation_equivalent_transformations(Z_list, perms=[]):
     """Filter transformations that are column permutations or sign-flips of each other. Considers
     subsets of columns based on variable types. Substitutes dummy variables to allow for equality
     checks even when symbolic variables differ.
@@ -384,6 +384,10 @@ def _remove_permutation_equivalent_transformations(Z_list, perms):
     tuple[list[sym.Matrix], list[str]]
         Filtered lists of transformation matrices and their nonzero strings.
     """
+    # If perms is empty, consider all permutations of columns
+    if not perms:
+        perms = list(itertools.permutations(range(Z_list[0].shape[1])))
+
     unique_Z = []
     idx_keep = []
     for k, Z_k in enumerate(Z_list):
@@ -541,26 +545,43 @@ def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
     rational values guaranteeing (if possible) a nonzero det.
     """
     
+
+
     
     ordered = sorted([v for v in Z.free_symbols if v in var_list], key=str)
     if not ordered:
         return Z
-    subs = {v: sym.Rational(i+1, len(ordered)+1) for i, v in enumerate(ordered)}
-    det_symbolic = sym.simplify(_det_fast(Z))
-    det = det_symbolic.subs({})
-    tries = 0
-    while det.is_zero or any(sym.simplify(d.subs(subs))== 0 for d in nonzero):
-        # Try and perturb the values a bit
-        for v in subs:
-            subs[v] += sym.Rational(1, len(ordered)+1)
-        det = sym.simplify(det_symbolic.subs(subs))
-        tries += 1
-        if tries > max_tries:
-            # Give up
-            raise ValueError("Could not find non-singular instance")
-    if return_mapping:
-        return sym.nsimplify(Z.subs(subs), rational=True), subs
-    return sym.nsimplify(Z.subs(subs), rational=True)
+    
+    # Identify a valid assignment that yields a non-singular Z
+    nonzero = list(set(x for x in [sym.simplify(x) for x in nonzero + [_det_fast(Z)]] if len(x.free_symbols) > 0))
+    _, res = _heuristic_upper_bound(ordered, nonzero, [], var_list, debug=False)
+    all_Z = []
+    for subs in res:
+        all_Z.append(Z.subs(subs["variables"]))
+    # Choose the transformation that maximizes the row stacked Z
+    # purely arbitrarily to break ties and behave deterministically
+    return max(all_Z, key=lambda Z: tuple(x for x in tuple(Z)))
+
+    # subs = {v: sym.Rational(i+1, len(ordered)+1) for i, v in enumerate(ordered)}
+    # det_symbolic = sym.simplify(_det_fast(Z))
+    # det = det_symbolic.subs({})
+    # tries = 0
+    # while det.is_zero or any(sym.simplify(d.subs(subs))== 0 for d in nonzero):
+    #     # Try and perturb the values a bit
+    #     for v in subs:
+    #         subs[v] += sym.Rational(1, len(ordered)+1) # sym.nsimplify(np.random.random(), rational=True)#
+    #     det = sym.simplify(det_symbolic.subs(subs))
+    #     tries += 1
+    #     if tries > max_tries:
+    #         # Give up
+
+    #         # if len(all_Z) == 1:
+    #         #     return all_Z[0]
+    #         # else:
+    #         # raise ValueError("Could not find non-singular instance")
+    # if return_mapping:
+    #     return sym.nsimplify(Z.subs(subs), rational=True), subs
+    # return sym.nsimplify(Z.subs(subs), rational=True)
 
 def _fixed_cost_plus_integer_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
                                  var_types: dict, wJ: sym.Matrix, nonzero=[]):
@@ -1434,6 +1455,9 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         tuple[sym.Matrix, dict[str, list[int]], str]: _description_
     """
 
+    if debug:
+        print("Choosing Z Transformation for Circuit:", circuit, "with edges:", edges, "and ground nodes:", ground_node)
+
     # Relabel nodes from 0
     edges, node_map = utils.renumber_nodes(edges, return_map=True)
     ground_node = [node_map[n] for n in ground_node]
@@ -1456,10 +1480,22 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
     n_nl = len(var_types["compact"] + var_types["extended"])
     if n_dyn == 0:
         raise ValueError("No Dynamical Modes in Circuit -- Cannot Choose Z Transformation")
+    
+    if debug:
+        print("Identified variable types:", var_types)
+        print("Initial Z0 transformation:")
+        sym.pprint(Z0)
+        print("Initial Inverse Z0 transformation:")
+        sym.pprint(Z0.inv())
 
     # Step 1: Enumerate different choices of compact variable
     wJT_trans = sym.simplify(wJ.transpose()*Z0)
     Z1 = [Z0*Z for Z in compact_alignment_transformation(wJT_trans, len(var_types["compact"]))]
+    if debug:
+        print(f"Generated {len(Z1)} possible compact variable alignments.")
+        for i, Z in enumerate(Z1):
+            print(f"Compact alignment {i+1}:")
+            sym.pprint(Z)
 
     # Step 2: Minimize intermode coupling
     lowest_hash = ""
@@ -1483,6 +1519,12 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
                     lowest_hash = val
                 elif val == lowest_hash:
                     lowest_Z += [Z_tot]
+    
+    if debug:
+        print(f"Found {len(lowest_Z)} transformations with lowest hash {lowest_hash}.")
+        for i, Z in enumerate(lowest_Z):
+            print(f"Lowest hash transformation {i+1}:")
+            sym.pprint(Z)
 
     # Filter out any bonkers transformations and sort by string length
     str_len = [len(str(Z)) for Z in lowest_Z]
@@ -1513,8 +1555,9 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             Z_final.append(Z)
     if debug:
         print(f"Chosen Z transformations have H_hash = {hash_final} with {len(Z_final)} equivalent transformations.")
-        print(Z_final)
-        print(wJ.transpose()*Z_final[0])
+        for Zf in Z_final:
+            sym.pprint(Zf)
+            sym.pprint(wJ.transpose()*Zf)
     # Get a specific instance of the transformation
     if return_instance:
         # Nonzero terms -- det is already done in find_Z_instance
@@ -1531,6 +1574,8 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         for Zf, min_cost in zip(Z_final, min_costs):
             if debug:
                 print("Searching for instance of Z transformation...", min_cost, best_cost)
+                print("Z form:")
+                sym.pprint(Zf)
             # Don't bother trying if we already know the cost can't be beat
             if not best_cost is None:
                 if best_cost < min_cost:
@@ -1571,6 +1616,11 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
     _, idx = _remove_permutation_equivalent_transformations(Z_final, perms=col_perms)
     Z_final = [Z_final[i] for i in idx]
 
+    if debug:
+        print(f"Final chosen Z transformations have H_hash = {hash_final} with {len(Z_final)} unique transformations.")
+        for Zf in Z_final:
+            sym.pprint(Zf)
+            sym.pprint(wJ.transpose()*Zf)
 
     return Z_final, var_types, hash_final
 
@@ -2078,14 +2128,38 @@ if __name__ == "__main__":
     # circuit = [('J',), ('J', 'L'), ('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'L')]
     # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
-    circuit = [('J',), ('J',), ('J', 'L'), ('J', 'L'), ('J', 'L'), ('C', 'J', 'L')]
-    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    # circuit = [('J',), ('J',), ('J', 'L'), ('J', 'L'), ('J', 'L'), ('C', 'J', 'L')]
+    # edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
+    # circuit = [("J",), ("J",), ("J",),
+    #            ("C",), ("C",), ("C",),
+    #            ("L",), ("L",), ("L",)]
+    # edges =   [(1,2), (3,4), (5,6),
+    #            (1,6), (2,4), (3,5),
+    #            (1,3), (2,5), (4,6)]
+    # circuit = [("J",), ("J",), ("J",),
+    #            ("C",), ("C",), ("C",),
+    #            ("L",), ("L",), ("L",), ("L",)]
+    # edges =   [(1,2), (3,4), (5,6),
+    #            (1,4), (3,6), (2,5),
+    #            (1,3), (3,5), (2,6), (4,6)]
+    # edges = [(i-1, j-1) for (i,j) in edges]
+
+    # circuit = [('J',), ('J',), ('J',), ('J',),('J',),("J",),("J"),
+    #            ('C',), ('C',), ('C',), ('C',),('C',),("C",),("C",),
+    #            ('L',), ('L',), ('L',), ('L',),('L',),("L",),("L",)]
+    # edges =   [(1,2), (3,4), (5,6), (7,8), (9,10), (11,12), (13,14),
+    #            (1,10), (2,7), (3,12), (4,9), (5,14), (6,11), (8,13),
+    #            (2,3), (4,5), (6,7), (8,9), (10,11), (12,13), (14,1)]
+    # edges =   [(i-1, j-1) for (i,j) in edges]
     # circuit = [('J',), ('J', 'L'), ('J', 'L')]
     # edges = [(0, 1), (0, 2), (1, 2)]
     # circuit = utils.add_elem_number(circuit)
 
-    # draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="fixed")
+    circuit = [('C_1', 'L_1'), ('L_2',), ('C_2', 'L_3'), ('C_3', 'J_1'), ('C_4',), ('C_5', 'L_4'), ('C_6', 'L_5'), ('C_7', 'L_6')]
+    edges = [(0, 2), (0, 3), (0, 4), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+
+    draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="fixed")
     cMat = gen_cap_mat(circuit, edges)
     lMat = gen_ind_mat(circuit, edges)
     times = []
@@ -2105,9 +2179,18 @@ if __name__ == "__main__":
     # breakpoint()
     print("Z Transformation:\n")
     print(Z)
-    print("C Transformed:\n", sym.simplify(cTrans))
-    print("L Transformed:\n", sym.simplify(lTrans))
-    print("wJ Transformed:\n", sym.simplify(wJTrans))
+    print("Variable Types:\n", var_types)
+    n_dyn = Z[0].shape[1] - (len(var_types.get("free", [])) +
+                            len(var_types.get("frozen", [])) +
+                            len(var_types.get("sigma", [])))
+    print("Number of Dynamical Modes:", n_dyn)
+    print("C Transformed:")
+    cInvTrans = sym.simplify(cTrans[:n_dyn, :n_dyn].inv())
+    sym.pprint(cInvTrans)
+    print("L Transformed:")
+    sym.pprint(sym.simplify(lTrans))
+    print("wJ Transformed:")
+    sym.pprint(sym.simplify(wJTrans))
 
     # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
     # for n in range(4, 5):

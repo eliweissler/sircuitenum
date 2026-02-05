@@ -1173,8 +1173,9 @@ def test_secondary_decouple():
                 "sigma": [2]}
     Z2 = quantize.secondary_decouple(var_types, [Z0.transpose()*lMat*Z0, Z0.transpose()*cMat*Z0], [False, True])[0]
     Z_comp = quantize._find_Z_instance_deterministic(Z2, Z2.free_symbols)
+    Z_ans = sym.nsimplify(sym.Matrix([[2, 0, 0],[1, 1, 0],[0, 0, -1]]), rational=True)
     assert quantize._equal_up_to_column_swaps_and_shift_and_sign(Z_comp,
-                                                                 sym.simplify(sym.Matrix([[2/3, 0, 0],[1/3, 2/3, 0],[0, 0, 1]]), rational=True),
+                                                                 Z_ans,
                                                                  shifts=[sym.ones(3,1)])
     Z = sym.simplify(Z0*Z_comp)
     cInvTrans = (Z.transpose()*cMat*Z)[:-1, :-1].inv()
@@ -1223,14 +1224,14 @@ def test_choose_Z():
     assert var_types["compact"] == [0, 1]
     assert var_types["sigma"] == [2]
     for Zi in  [sym.nsimplify(sym.Matrix([[2/3, 1/3, 1/3],
-                                        [-1/3, -2/3, 1/3],
-                                        [-1/3, 1/3, 1/3]]), rational=True),
+                                         [-1/3, -2/3, 1/3],
+                                         [-1/3, 1/3, 1/3]]), rational=True),
                     sym.nsimplify(sym.Matrix([[2/3, 1/3, 1/3],
-                                        [-1/3, 1/3, 1/3],
-                                        [-1/3, -2/3, 1/3]]), rational=True),
+                                              [-1/3, 1/3, 1/3],
+                                              [-1/3, -2/3, 1/3]]), rational=True),
                     sym.nsimplify(sym.Matrix([[1/3, 1/3, 1/3],
-                                        [1/3, -2/3, 1/3],
-                                        [-2/3, 1/3, 1/3]]), rational=True)]:
+                                              [1/3, -2/3, 1/3],
+                                              [-2/3, 1/3, 1/3]]), rational=True)]:
         assert len(quantize._find_equiv_mats(Zi, Z)) > 0
     assert new_to_old(val).replace("_","").replace("-","") == "200_1-1_1_0-0_1-1".replace("_","").replace("-","")
 
@@ -1613,7 +1614,7 @@ def main():
     # test__find_equiv_cols()
     # test__nonzero_entries_str()
     # test__maximize_wT()
-    test_H_hash()
+    # test_H_hash()
     # test__find_Z_instance_deterministic()
     # test__fully_compatible_set()
     # test__unique_products()
@@ -1627,11 +1628,11 @@ def main():
     # test__vec_space_overlap()
     # test__independent_from()
 
-    # test_secondary_decouple()
+    test_secondary_decouple()
 
     # test_H_hash()
     # test__find_Z_instance()
-    # test_choose_Z()
+    test_choose_Z()
     # test__find_Z_min_cost()
 
     # test__wT_key()
