@@ -165,21 +165,34 @@ def convert_loaded_df(df: pd.DataFrame, n_nodes: int, char_mapping: dict = None)
                      for c in df.circuit.values]
 
 
-def get_basegraphs(n_nodes: int):
+def get_basegraphs(n_nodes: int, planar: bool = False, regular: bool = False):
     """
     Loads the base graphs for a specific number of nodes
 
     Args:
         n_nodes (int): number of nodes in the graph
+        planar (bool): if True, only load planar graphs
+        regular (bool): if True, only load regular graphs
     """
-    if int(n_nodes) > 6:
-        raise ValueError("Only basegraphs up to 6 nodes are included. See https://users.cecs.anu.edu.au/~bdm/data/graphs.html for larger sets of graphs.")
+    # Return if it has already been loaded
+    if str(n_nodes) in LOADED_BASEGRAPHS:
+        return LOADED_BASEGRAPHS[str(n_nodes)]
+    if int(n_nodes) > 6 and (not planar) and (not regular):
+        raise ValueError("Only basegraphs up to 6 nodes are included in generality. See https://users.cecs.anu.edu.au/~bdm/data/graphs.html for larger sets of graphs, or select planar/regular.")
+    elif n_nodes == 10 and not regular:
+        raise ValueError("Only regular graphs are included for 10 nodes. See https://users.cecs.anu.edu.au/~bdm/data/graphs.html for larger sets of graphs, or select regular.")
     # Load it if it hasn't been loaded
     if str(n_nodes) not in LOADED_BASEGRAPHS:
-        f = Path(DOWNLOAD_PATH, 'sircuitenum', 'graphs', f"graph{n_nodes}c.g6")
+        fname =  f"graph{n_nodes}c"
+        if planar:
+            fname = "planar_" + fname
+        if regular:
+            fname = fname + "_regular"
+        fname = fname + ".g6"
+        f = Path(DOWNLOAD_PATH, 'sircuitenum', 'graphs', fname)
         all_graphs = nx.read_graph6(f)
         # Fix two vertex case so it always returns a list
-        if n_nodes == 2:
+        if n_nodes == 2 or isinstance(all_graphs, nx.Graph):
             all_graphs = [all_graphs]
         LOADED_BASEGRAPHS[str(n_nodes)] = all_graphs
 

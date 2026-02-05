@@ -486,8 +486,14 @@ def draw_circuit_diagram(circuit: list, edges: list,
         pos = nx.spring_layout(G)
     elif layout == 'fixed':
         pos = G_POS[G.number_of_nodes()][graph_index]
+    elif layout == 'polygon':
+        pos = {}
+        n_nodes = utils.get_num_nodes(edges)
+        for n in range(n_nodes+1):
+            angle = 2*n*np.pi/n_nodes
+            pos[n] = np.array((np.cos(angle), np.sin(angle)))
     else:
-        pos = layout
+        pos = {k: np.array(v) for k,v in layout.items()}
     
     # Scale
     scaled_pos = {}

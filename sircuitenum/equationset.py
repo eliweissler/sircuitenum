@@ -89,8 +89,8 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
     for i in range(len(terms)):
         compat = True
         try:
-            if is_compatible(terms[i], check_fraction=False, timeout=1):
-                compat = is_compatible(terms[i] + nz_term, check_fraction=False, timeout=1)
+            if is_compatible(terms[i], check_fraction=False, timeout=1, debug=debug):
+                compat = is_compatible(terms[i] + nz_term, check_fraction=False, timeout=1, debug=debug)
             else:
                 compat = False
         except TimeoutError:
@@ -111,8 +111,8 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
         # Check compatibility -- Okay to time out here we want a quick check
         # and sometimes pairwise checks can be slower than larger sets
         try:
-            if is_compatible(combined_terms, check_fraction=False, timeout=1):
-                compat = is_compatible(combined_terms + nz_term, check_fraction=False, timeout=1)
+            if is_compatible(combined_terms, check_fraction=False, timeout=1, debug=debug):
+                compat = is_compatible(combined_terms + nz_term, check_fraction=False, timeout=1, debug=debug)
             else:
                 compat = False
         except TimeoutError:
@@ -130,24 +130,29 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
     for nz in range(n_terms, 0, -1):
         sol_found = False
         for keys in itertools.combinations(range(n_terms), nz):
+            if debug:
+                print("Checking compatibility of combined eqs:", keys)
             # Check if all individual terms are solvable
             if not all(is_solvable[k] for k in keys):
+                if debug:
+                    print("Skipping incompatible individual term", [k for k in keys if not is_solvable[k]])
                 continue
 
             # Check if a subset of the keys are incompatible
             # by checking the conflict graph
             if G.subgraph(keys).number_of_edges() > 0:
+                if debug:
+                    print("Skipping incompatible subset of terms")
                 continue
             
             # Check compatibility of combined terms
             combined_eqs = list(itertools.chain.from_iterable(terms[k] for k in keys))
-            if debug:
-                print("Checking compatibility of combined eqs:", keys)
-            if is_compatible(combined_eqs + nz_term, check_fraction=False):
-                # print("Solving combined eq", combined_eqs)
+            if is_compatible(combined_eqs + nz_term, check_fraction=False, debug=debug):
                 # Solve combined equations
                 sols = []
                 branches = solve_with_singular(combined_eqs + nz_term, check_fraction=False, rational_only=True, debug=debug)
+                if debug:
+                    print("found", len(branches), "branches")
                 if branches:
                     for sol in extract_mappings(branches, real_only=True):
                         # Sub out nzvar if present
