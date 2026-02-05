@@ -350,7 +350,7 @@ def generate_graphs_node(db_file: str, n_nodes: int,
 def trim_graph_node(db_file: str, n_nodes: int,
                     base: int = None,
                     n_workers: int = 1, save_every: int = 20,
-                    find_equiv: bool = True) -> None:
+                    find_equiv: bool = True, resume: bool = False) -> None:
     """
     Mark circuits in the database based on Josephson junctions, series linear components, 
     and non-isomorphism.

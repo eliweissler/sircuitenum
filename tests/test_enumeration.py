@@ -653,16 +653,20 @@ def test_planar_regular_enum_max_elem():
         assert nx.is_regular(G)
     assert df.shape[0] == 1680
 
+    utils.set_enum_params()  # reset enum params
+    cleanup_db(TEMP_FILE)
+    utils.LOADED_BASEGRAPHS = {}
+
 
 if __name__ == "__main__":
     # test_num_possible_circuits()
-    test_generate_for_specific_graph()
+    # test_generate_for_specific_graph()
     # test_delete_table()
     # test_find_uniuqe_ground_placements()
     # test_expand_ground_node()
     # test_has_dangling_edges()
     # test_remove_dangling_edges()
-    # test_find_equiv_cir_series()
+    test_find_equiv_cir_series()
     # test_generate_graphs_node()
     # test__reduce_individual_set()
     # test_trim_graph_node()
