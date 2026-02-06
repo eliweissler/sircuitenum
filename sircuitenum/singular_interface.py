@@ -841,6 +841,8 @@ def _eq_as_numer_denom(eq: Union[sym.Eq, sym.Expr]):
     """
     if isinstance(eq, sym.Eq):
         eq = (eq.lhs - eq.rhs)
+    elif not isinstance(eq, sym.Expr):
+        eq = sym.sympify(eq)
     # Combine fractions -- quick
     numer, denom = eq.as_numer_denom()
     if numer.as_numer_denom()[1] != 1 and denom.as_numer_denom()[1] != 1:

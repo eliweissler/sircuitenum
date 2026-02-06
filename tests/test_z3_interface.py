@@ -370,7 +370,7 @@ def test_heuristic_does_not_modify_input_constraints():
     Z01, Z10 = sym.symbols('Z01 Z10')
     
     integer_constraints = [Z01, Z10]
-    nonzero_constraints = [3, -Z01*Z10/3]
+    nonzero_constraints = [sym.sympify(3), -Z01*Z10/3]
     original_nonzero = nonzero_constraints.copy()
     
     _heuristic_upper_bound(
