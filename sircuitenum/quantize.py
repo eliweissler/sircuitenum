@@ -554,6 +554,7 @@ def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
     
     # Identify a valid assignment that yields a non-singular Z
     nonzero = list(set(x for x in [sym.simplify(x) for x in nonzero + [_det_fast(Z)]] if len(x.free_symbols) > 0))
+    print("nonzero:", nonzero)
     _, res = _heuristic_upper_bound(ordered, nonzero, [], var_list, debug=False)
     all_Z = []
     for subs in res:
@@ -2156,8 +2157,11 @@ if __name__ == "__main__":
     # edges = [(0, 1), (0, 2), (1, 2)]
     # circuit = utils.add_elem_number(circuit)
 
-    circuit = [('C_1', 'L_1'), ('L_2',), ('C_2', 'L_3'), ('C_3', 'J_1'), ('C_4',), ('C_5', 'L_4'), ('C_6', 'L_5'), ('C_7', 'L_6')]
-    edges = [(0, 2), (0, 3), (0, 4), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+    # circuit = [('C_1', 'L_1'), ('L_2',), ('C_2', 'L_3'), ('C_3', 'J_1'), ('C_4',), ('C_5', 'L_4'), ('C_6', 'L_5'), ('C_7', 'L_6')]
+    # edges = [(0, 2), (0, 3), (0, 4), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
+
+    circuit = [('C', 'L'), ('C', 'J', 'L'), ('C', 'L')]
+    edges = [(0, 2), (0, 3), (1, 3)]
 
     draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="fixed")
     cMat = gen_cap_mat(circuit, edges)

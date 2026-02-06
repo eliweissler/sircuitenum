@@ -572,7 +572,15 @@ def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constr
 
     # Heuristic solver for upper bound -- assume maximal number of variables are zero
     nz_prod = sym.sympify(1)
+    # We want to consider the nonzero constraints together,
+    # so we take their product and consider the factors of that.
+    nonzero_constraints_no_frac = []
     for nz in nonzero_constraints:
+        nz_numer, nz_denom = _eq_as_numer_denom(nz)
+        nonzero_constraints_no_frac.append(nz_numer)
+        if len(nz_denom.free_symbols) > 0:
+            nonzero_constraints_no_frac.append(nz_denom)
+    for nz in nonzero_constraints_no_frac:
         nz_prod *= nz
     nz_numer, nz_denom = _eq_as_numer_denom(nz_prod)
     nz_numer = sym.expand(nz_numer)
@@ -585,6 +593,9 @@ def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constr
     best_val = len(integer_constraints)*max_result_range
     res = []
     unique_subs = set()
+    if debug:
+        print(f"  > Heuristic upper bound search over {len(nz_terms)} nonzero terms...")
+        print(f"    > Nonzero terms: {nz_terms}", nz_numer, nz_denom, nz_prod)
     for nz_term in sorted(nz_terms, key=lambda x: (len(x.free_symbols), str(x))):
         is_nonzero = [nz_term]
         if isinstance(nz_denom, sym.Expr):
