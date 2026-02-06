@@ -560,7 +560,7 @@ def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
         all_Z.append(Z.subs(subs["variables"]))
     # Choose the transformation that maximizes the row stacked Z
     # purely arbitrarily to break ties and behave deterministically
-    return max(all_Z, key=lambda Z: tuple(x for x in tuple(Z)))
+    return max(all_Z, key=lambda Z: tuple(str(x) for x in tuple(Z)))
 
 
 def _fixed_cost_plus_integer_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
@@ -2139,10 +2139,23 @@ if __name__ == "__main__":
     # circuit = [('C_1', 'L_1'), ('L_2',), ('C_2', 'L_3'), ('C_3', 'J_1'), ('C_4',), ('C_5', 'L_4'), ('C_6', 'L_5'), ('C_7', 'L_6')]
     # edges = [(0, 2), (0, 3), (0, 4), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4)]
 
-    circuit = [('C', 'L'), ('C', 'J', 'L'), ('C', 'L')]
-    edges = [(0, 2), (0, 3), (1, 3)]
+    # circuit = [('C', 'L'), ('C', 'J', 'L'), ('C', 'L')]
+    # edges = [(0, 2), (0, 3), (1, 3)]
 
-    draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="fixed")
+    # Kite + Fluxonium
+    # circuit = [("C",), ("J",), ("J",), ("J",), ("L"), ("L"), ("L",)]
+    # edges = [(0, 4), (3,4), (2,4), (0,1), (2,3), (2,4), (0,1)]
+    # circuit = utils.add_elem_number(circuit)
+
+    # Kite
+    # circuit = [("C",), ("J", ), ("J",), ("L",), ("L",)]
+    # edges = [(0, 3), (1,3), (2,3), (0,1), (0,2)]
+    # circuit = utils.add_elem_number(circuit)
+    
+    circuit = [('C_1',), ('C_2',), ('C_3',), ('C_4', 'L_1'), ('C_5', 'J_1'), ('C_6', 'L_2'), ('C_7', 'L_3')]
+    edges = [(0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 4)]
+
+    draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="spring")
     cMat = gen_cap_mat(circuit, edges)
     lMat = gen_ind_mat(circuit, edges)
     times = []
