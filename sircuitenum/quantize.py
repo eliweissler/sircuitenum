@@ -554,7 +554,6 @@ def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
     
     # Identify a valid assignment that yields a non-singular Z
     nonzero = list(set(x for x in [sym.simplify(x) for x in nonzero + [_det_fast(Z)]] if len(x.free_symbols) > 0))
-    print("nonzero:", nonzero)
     _, res = _heuristic_upper_bound(ordered, nonzero, [], var_list, debug=False)
     all_Z = []
     for subs in res:
@@ -563,26 +562,6 @@ def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
     # purely arbitrarily to break ties and behave deterministically
     return max(all_Z, key=lambda Z: tuple(x for x in tuple(Z)))
 
-    # subs = {v: sym.Rational(i+1, len(ordered)+1) for i, v in enumerate(ordered)}
-    # det_symbolic = sym.simplify(_det_fast(Z))
-    # det = det_symbolic.subs({})
-    # tries = 0
-    # while det.is_zero or any(sym.simplify(d.subs(subs))== 0 for d in nonzero):
-    #     # Try and perturb the values a bit
-    #     for v in subs:
-    #         subs[v] += sym.Rational(1, len(ordered)+1) # sym.nsimplify(np.random.random(), rational=True)#
-    #     det = sym.simplify(det_symbolic.subs(subs))
-    #     tries += 1
-    #     if tries > max_tries:
-    #         # Give up
-
-    #         # if len(all_Z) == 1:
-    #         #     return all_Z[0]
-    #         # else:
-    #         # raise ValueError("Could not find non-singular instance")
-    # if return_mapping:
-    #     return sym.nsimplify(Z.subs(subs), rational=True), subs
-    # return sym.nsimplify(Z.subs(subs), rational=True)
 
 def _fixed_cost_plus_integer_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
                                  var_types: dict, wJ: sym.Matrix, nonzero=[]):
