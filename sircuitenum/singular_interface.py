@@ -255,7 +255,7 @@ def _cached_compatible(cmd: str, timeout: Optional[float] = None, debug: bool = 
 
 def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvability=True,
                         check_fraction: bool = True, rational_only: bool = False, debug: bool = False,
-                        all_sols: bool = True, branch_timeout=1) -> List[Dict[str, Any]]:
+                        get_all_sols: bool = True, branch_timeout=1) -> List[Dict[str, Any]]:
     """
     Solves a system of SymPy equations using the Groebner Cover algorithm via Singular.
 
@@ -370,7 +370,7 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
         final_branches.extend(resolved_list)
 
         # If we only want one solution, take the first resolved branch
-        if not all_sols and len(final_branches) > 0:
+        if (not get_all_sols) and (len(final_branches) > 0):
             if (check_branch_validity(final_branches[0], equations) and 
             all(_robust_substitute(denom, final_branches[0]['mapping']) != 0 for denom in denoms)):
                 break 

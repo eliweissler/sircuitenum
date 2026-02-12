@@ -1445,6 +1445,23 @@ def test_choose_Z():
     assert len(set(vals)) == 1
 
 
+    # Verify all solutions is returning
+    circuit = [('J',), ('J',), ('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'J', 'L')]
+    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
+    Z, var_types, val = quantize.choose_Z(circuit, edges, debug=True, return_instance=True,
+                                     minimize_nl=True)
+    assert len(Z) == 1
+    assert var_types == {'compact': [], 'extended': [0, 1, 2], 'harmonic': [], 'free': [], 'frozen': [], 'sigma': [3]}
+    assert val == ('030', '3-111', 10, 1, (1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1), 2, '0-000', '2-011')
+    assert quantize._equal_up_to_column_shift_and_sign(
+                    sym.nsimplify(sym.Matrix([
+                                        [-1/4, -3/4, -1/2, 1/4],
+                                        [ 3/4,  1/4,  1/2, 1/4],
+                                        [-1/4,  1/4,  1/2, 1/4],
+                                        [-1/4,  1/4, -1/2, 1/4]]), rational=True), Z[0])
+    
+
+
 def test_gen_junc_pot():
 
     # Transmon

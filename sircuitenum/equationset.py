@@ -30,7 +30,7 @@ UNSOLVABLE_CACHE = set()  # sets of equations with no solutions
 def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr] = [],
                              nonzero_constraints: list[sym.Expr] = [],
                              rational_only = False, stop_at_first=False, debug=False,
-                             all_sols = True) -> Tuple[list, list]:
+                             get_all_sols = True) -> Tuple[list, list]:
     """
     Given a list of list of systems of equations, identifies the largest set of compatible
     systems of equations that can be solved simultaneously. Returns the indices of the selected
@@ -153,7 +153,7 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
                 # Solve combined equations
                 sols = []
                 branches = solve_with_singular(combined_eqs + nz_term, check_fraction=False,
-                                               rational_only=True, debug=debug, all_sols=all_sols)
+                                               rational_only=True, debug=debug, get_all_sols=get_all_sols)
                 if debug:
                     print("found", len(branches), "branches")
                 if branches:

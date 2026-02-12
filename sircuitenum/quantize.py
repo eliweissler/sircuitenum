@@ -1380,7 +1380,7 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     # Flatten the list of possible substitutions
     all_keys, all_subs = maximally_compatible_sol(coupling,
                             nonzero_constraints=[_det_fast(Z_poly), Z_common_denom],
-                            rational_only=True, stop_at_first=True, debug=debug, all_sols=True)
+                            rational_only=True, stop_at_first=True, debug=debug, get_all_sols=True)
     # Cannot decouple anything
     if not all_keys:
         if return_tiebreaker:
@@ -2205,8 +2205,8 @@ if __name__ == "__main__":
     #                      label=True, label_loc=label_loc, scale=5.0)
 
 
-    circuit = [('C_1', 'L_1'), ('C_2',), ('J_1',), ('C_3',)]
-    edges = [(0, 2), (0, 3), (1, 3), (2, 3)]
+    circuit = [('J',), ('J',), ('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'J', 'L')]
+    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
     cMat = gen_cap_mat(circuit, edges)
     lMat = gen_ind_mat(circuit, edges)
@@ -2216,7 +2216,7 @@ if __name__ == "__main__":
         t0 = time.time()
         # Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
         Z, var_types, val = choose_Z(circuit, edges, debug=True, return_instance=True,
-                                     minimize_nl=False)
+                                     minimize_nl=True)
         cTrans = Z[0].transpose()*cMat*Z[0]
         lTrans = Z[0].transpose()*lMat*Z[0]
         wJTrans = gen_w(circuit, edges, w_elem="J").transpose()*Z[0]
