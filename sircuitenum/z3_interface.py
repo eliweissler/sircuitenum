@@ -622,7 +622,7 @@ def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constr
         if any(c.has(sym.core.numbers.ComplexInfinity) or c.has(sym.core.numbers.Infinity) for c in new_constraints+new_zero_constraints+new_nonzero_constraints):
             continue
 
-        new_variables = sorted(set(itertools.chain.from_iterable(c.free_symbols for c in new_constraints+zero_constraints+list(nz_terms))), key=str)
+        new_variables = sorted(set(itertools.chain.from_iterable(c.free_symbols for c in new_constraints+new_nonzero_constraints+new_zero_constraints)), key=str)
         this_res = find_rational_vars_integer_results(new_constraints, nonzero_constraints=new_nonzero_constraints,
                                                         zero_constraints=new_zero_constraints,
                                                         variables=new_variables,
