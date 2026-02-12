@@ -399,7 +399,8 @@ def draw_all_qubits(file: str, n_nodes: int, out_dir: str,
 def draw_circuit_diagram(circuit: list, edges: list,
                          out: str = "",
                          scale: float = 4.0, layout: Union[str, dict] = 'fixed',
-                         spread: float = 2/5, graph_index: int = None) -> None:
+                         spread: float = 2/5, graph_index: int = None,
+                         label=False, label_loc={}) -> None:
     """
     Draw the circuit diagram using `schemdraw`.
 
@@ -447,7 +448,9 @@ def draw_circuit_diagram(circuit: list, edges: list,
     >>>     scale=1.5
     >>> )
     """
-    edges = utils.renumber_nodes(edges)
+
+    if not isinstance(layout, dict):
+        edges = utils.renumber_nodes(edges)
 
     elem_dict = {
         'C': {'default_unit': 'GHz', 'default_value': 0.2},
@@ -514,8 +517,11 @@ def draw_circuit_diagram(circuit: list, edges: list,
     with schemdraw.Drawing() as d:
         for n0 in G.nodes():
             # Draw a dot at every node
-            d.add(DotCustom(radius=0.1, fill="#FFFFFF", color="#000000",
-                            lw=1).at(scaled_pos[n0]))
+            node_dot = DotCustom(radius=0.1, fill="#FFFFFF", color="#000000",
+                            lw=1).at(scaled_pos[n0])
+            if label:
+                node_dot.label(str(n0), label_loc.get(n0, "top").lower())
+            d.add(node_dot)
             # d.add(schemdraw.segments.SegmentCircle(scaled_pos[n0],
             #                                        radius=0.2,
             #                                        color="#000000",

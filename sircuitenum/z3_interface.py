@@ -526,6 +526,42 @@ def _enumerate_solutions(solver_with_state, tracked_exprs, z3_vars, max_solution
 
     return results
 
+def _zero_subs_for_nonzero(nonzero_constraints, variables, n_terms=1):
+    """
+    Generate substitutions that set all variables not involved in the given nonzero constraints to zero. 
+    """
+
+    # Heuristic solver for upper bound -- assume maximal number of variables are zero
+    nz_prod = sym.sympify(1)
+    # We want to consider the nonzero constraints together,
+    # so we take their product and consider the factors of that.
+    nonzero_constraints_no_frac = []
+    for nz in nonzero_constraints:
+        nz_numer, nz_denom = _eq_as_numer_denom(nz)
+        nonzero_constraints_no_frac.append(nz_numer)
+        if len(nz_denom.free_symbols) > 0:
+            nonzero_constraints_no_frac.append(nz_denom)
+    for nz in nonzero_constraints_no_frac:
+        nz_prod *= nz
+    nz_numer, nz_denom = _eq_as_numer_denom(nz_prod)
+    nz_numer = sym.expand(nz_numer)
+    if isinstance(nz_numer, sym.Add):
+        nz_terms = nz_numer.args
+    else:
+        nz_terms = [nz_numer]
+    unique_subs = set()
+    unique_subs_dict = []
+    for nz_terms in itertools.combinations(sorted(nz_terms, key=lambda x: (len(x.free_symbols), str(x))), n_terms):
+        zero_subs = {}
+        for var in variables:
+            if all(var not in nz_term.free_symbols for nz_term in nz_terms):
+                zero_subs[var] = 0
+        unique_subs_key = tuple(sorted(zero_subs.items(), key=lambda x: str(x[0])))
+        if unique_subs_key in unique_subs or nz_denom.subs(zero_subs) == 0:
+            continue
+        unique_subs.add(unique_subs_key)
+        unique_subs_dict.append(zero_subs)
+    return unique_subs_dict, nz_terms
 
 def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constraints, variables, max_result_range=5,
                            timeout_ms=int(1e03), return_first_only=False, debug=False):
@@ -569,55 +605,25 @@ def _heuristic_upper_bound(integer_constraints, nonzero_constraints, zero_constr
     :raises TimeoutError: If solver times out on a sub-problem (propagated from
         recursive call to :func:`find_rational_vars_integer_results`).
     """
-
-    # Heuristic solver for upper bound -- assume maximal number of variables are zero
-    nz_prod = sym.sympify(1)
-    # We want to consider the nonzero constraints together,
-    # so we take their product and consider the factors of that.
-    nonzero_constraints_no_frac = []
-    for nz in nonzero_constraints:
-        nz_numer, nz_denom = _eq_as_numer_denom(nz)
-        nonzero_constraints_no_frac.append(nz_numer)
-        if len(nz_denom.free_symbols) > 0:
-            nonzero_constraints_no_frac.append(nz_denom)
-    for nz in nonzero_constraints_no_frac:
-        nz_prod *= nz
-    nz_numer, nz_denom = _eq_as_numer_denom(nz_prod)
-    nz_numer = sym.expand(nz_numer)
-    if isinstance(nz_numer, sym.Add):
-        nz_terms = nz_numer.args
-    else:
-        nz_terms = [nz_numer]
-    if isinstance(nz_denom, sym.Expr):
-        nonzero_constraints = list(nonzero_constraints) + [nz_denom]
+    all_zero_subs, nz_terms = _zero_subs_for_nonzero(nonzero_constraints, variables)
     best_val = len(integer_constraints)*max_result_range
     res = []
-    unique_subs = set()
     if debug:
         print(f"  > Heuristic upper bound search over {len(nz_terms)} nonzero terms...")
-        print(f"    > Nonzero terms: {nz_terms}", nz_numer, nz_denom, nz_prod)
-    for nz_term in sorted(nz_terms, key=lambda x: (len(x.free_symbols), str(x))):
-        is_nonzero = [nz_term]
-        if isinstance(nz_denom, sym.Expr):
-            is_nonzero.append(nz_denom)
-        zero_subs = {}
-        for var in variables:
-            if var not in nz_term.free_symbols:
-                zero_subs[var] = 0
-        unique_subs_key = tuple(sorted(zero_subs.items(), key=lambda x: str(x[0])))
-        if unique_subs_key in unique_subs:
-            continue
-        unique_subs.add(unique_subs_key)
+        print(f"    > Nonzero terms: {nz_terms}")
+
+    for zero_subs in all_zero_subs:
 
         new_constraints = [c.subs(zero_subs) for c in integer_constraints if c.subs(zero_subs) != 0]
+        new_nonzero_constraints = [c.subs(zero_subs) for c in nonzero_constraints if c.subs(zero_subs) != 0]
         new_zero_constraints = [c.subs(zero_subs) for c in zero_constraints if c.subs(zero_subs) != 0]
 
         # Make sure to only include variables that remain finite
-        if any(c.has(sym.core.numbers.ComplexInfinity) or c.has(sym.core.numbers.Infinity) for c in new_constraints+new_zero_constraints):
+        if any(c.has(sym.core.numbers.ComplexInfinity) or c.has(sym.core.numbers.Infinity) for c in new_constraints+new_zero_constraints+new_nonzero_constraints):
             continue
 
         new_variables = sorted(set(itertools.chain.from_iterable(c.free_symbols for c in new_constraints+zero_constraints+list(nz_terms))), key=str)
-        this_res = find_rational_vars_integer_results(new_constraints, nonzero_constraints=is_nonzero,
+        this_res = find_rational_vars_integer_results(new_constraints, nonzero_constraints=new_nonzero_constraints,
                                                         zero_constraints=new_zero_constraints,
                                                         variables=new_variables,
                                                     max_result_range=max_result_range,

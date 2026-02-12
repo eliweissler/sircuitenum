@@ -17,6 +17,7 @@ from sympy.core.mul import Mul
 import networkx as nx
 
 from sircuitenum.singular_interface import solve_with_singular, extract_mappings, is_compatible, _eq_as_numer_denom
+from sircuitenum.z3_interface import _zero_subs_for_nonzero
 
 
 # Cache of solved equations
@@ -28,7 +29,8 @@ UNSOLVABLE_CACHE = set()  # sets of equations with no solutions
 
 def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr] = [],
                              nonzero_constraints: list[sym.Expr] = [],
-                             rational_only = False, stop_at_first=False, debug=False) -> Tuple[list, list]:
+                             rational_only = False, stop_at_first=False, debug=False,
+                             all_sols = True) -> Tuple[list, list]:
     """
     Given a list of list of systems of equations, identifies the largest set of compatible
     systems of equations that can be solved simultaneously. Returns the indices of the selected
@@ -150,7 +152,8 @@ def maximally_compatible_sol(terms: list[list[sym.Expr]], nonzero: list[sym.Expr
             if is_compatible(combined_eqs + nz_term, check_fraction=False, debug=debug):
                 # Solve combined equations
                 sols = []
-                branches = solve_with_singular(combined_eqs + nz_term, check_fraction=False, rational_only=True, debug=debug)
+                branches = solve_with_singular(combined_eqs + nz_term, check_fraction=False,
+                                               rational_only=True, debug=debug, all_sols=all_sols)
                 if debug:
                     print("found", len(branches), "branches")
                 if branches:

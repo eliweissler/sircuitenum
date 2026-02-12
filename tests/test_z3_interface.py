@@ -255,7 +255,7 @@ def test_rational_vars_zero():
     integer_constraints = [Z00 - Z10, Z01 - Z11, Z02 - Z12, Z00 - Z20, Z01 - Z21, Z02 - Z22, Z00, Z01, Z02, Z10 - Z20, Z11 - Z21, Z12 - Z22, Z10, Z11, Z12, Z20, Z21, Z22]
 
     res = find_rational_vars_integer_results(integer_constraints, [is_nonzero],
-                                             [], variables=vars)
+                                             [], variables=vars, debug=True)
 
     assert sum(abs(x) for x in res[0]["results"]) == 9
 
@@ -370,7 +370,7 @@ def test_heuristic_does_not_modify_input_constraints():
     Z01, Z10 = sym.symbols('Z01 Z10')
     
     integer_constraints = [Z01, Z10]
-    nonzero_constraints = [3, -Z01*Z10/3]
+    nonzero_constraints = [sym.sympify(3), -Z01*Z10/3]
     original_nonzero = nonzero_constraints.copy()
     
     _heuristic_upper_bound(
@@ -502,4 +502,7 @@ if __name__ == "__main__":
     # test_basic_rational_constraints(vars2())
     # test_calc_min_cost()
     # test_rational_vars_zero()
-    test_min_cost_out_of_bounds()
+    # test_min_cost_out_of_bounds()
+
+    # test_rational_vars_zero()
+    test_heuristic_does_not_modify_input_constraints()

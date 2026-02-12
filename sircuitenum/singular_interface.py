@@ -33,6 +33,7 @@ WORKER_SINGULAR = None
 
 # Sircuitenum
 from sircuitenum.rational_check import has_at_least_one_clean_root, get_clean_roots, _has_rational_coeffs
+from sircuitenum import utils
 
 
 
@@ -68,11 +69,20 @@ def get_sage_groebner_basis(sympy_eqs, sympy_vars):
     return sympy_basis
 
 
-def solve_0D_backsub(sympy_eqs, sympy_vars, sympy_params=None, rational_only=False):
+def solve_0D_backsub(sympy_eqs, sympy_vars, sympy_params=None, rational_only=False, debug=False) -> List[Dict[str, Any]]:
     """
     Finds ALL rational solutions for a system with parameters.
     Includes a final substitution pass to ensure all variables are fully numeric.
     """
+    if debug:
+        print("Solving 0D system via back-substitution:")
+        print("Equations:")
+        for eq in sympy_eqs:
+            print("-----\n", eq)
+        print("Variables:", sympy_vars)
+        print("Parameters:", sympy_params)
+        print("Rational Only:", rational_only)
+
     if sympy_params is None: sympy_params = []
 
     # Get triangular groebner basis using sage
@@ -86,6 +96,12 @@ def solve_0D_backsub(sympy_eqs, sympy_vars, sympy_params=None, rational_only=Fal
     sympy_vars =[v for v in sympy_vars if any(v in eq.free_symbols for eq in gb)]
     if len(sympy_vars) == 0:
         raise ValueError(f"Unconstrained variables: {sympy_vars}")
+    
+    if debug:
+        print("Groebner Basis (Triangular Form):")
+        for eq in gb:
+            print("-----\n", eq)
+        print("variables after filtering:", sympy_vars)
 
     # Backsubstitute, with branching for multiple roots
     solve_order = sympy_vars[::-1]
@@ -238,7 +254,8 @@ def _cached_compatible(cmd: str, timeout: Optional[float] = None, debug: bool = 
 
 
 def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvability=True,
-                        check_fraction: bool = True, rational_only: bool = False, debug: bool = False) -> List[Dict[str, Any]]:
+                        check_fraction: bool = True, rational_only: bool = False, debug: bool = False,
+                        all_sols: bool = True, branch_timeout=1) -> List[Dict[str, Any]]:
     """
     Solves a system of SymPy equations using the Groebner Cover algorithm via Singular.
 
@@ -340,14 +357,24 @@ def solve_with_singular(equations: list[sym.Expr], solve_vars=None, check_solvab
         print(f"Singular returned {len(raw_branches)} raw branches.")
     final_branches = []
     # 2. Resolve Each Branch (Logic moved "inside solve")
+    # Sort branches by number of constraints (heuristic: more constraints = more likely to be easily resolved)
+    raw_branches.sort(key=lambda b: -len(b['constraints']))
     for raw_br in raw_branches:
         
         if raw_br['basis'] == [1]: continue # Inconsistent
 
         # Resolve (Handles recursion, filtering, refinement)
-        resolved_list = resolve_branch_logic(raw_br, equations, rational_only=rational_only)
+        resolved_list = resolve_branch_logic(raw_br, equations, rational_only=rational_only,
+                                             branch_timeout=branch_timeout, debug=debug)
         
         final_branches.extend(resolved_list)
+
+        # If we only want one solution, take the first resolved branch
+        if not all_sols and len(final_branches) > 0:
+            if (check_branch_validity(final_branches[0], equations) and 
+            all(_robust_substitute(denom, final_branches[0]['mapping']) != 0 for denom in denoms)):
+                break 
+
     if debug:
         print(f"After resolution, {len(final_branches)} total branches.")
     # 3. Final Validity Check
@@ -554,7 +581,7 @@ def parse_singular_output(raw_output: str,
     return parsed_raw_branches
 
 
-def resolve_branch_logic(branch_data: dict, original_equations: list, rational_only=False) -> List[Dict]:
+def resolve_branch_logic(branch_data: dict, original_equations: list, rational_only=False, branch_timeout=1, debug=False) -> List[Dict]:
     """
     Takes a raw branch dict, handles ghost constraints, solves sub-systems
     (finitely or recursively), and merges the results into fully resolved branches.
@@ -601,8 +628,13 @@ def resolve_branch_logic(branch_data: dict, original_equations: list, rational_o
         vars_to_solve = [v for v in branch_data['params'] 
                          if any(v in eq.free_symbols for eq in eqs_to_solve)]
         
-        raw_sols = solve_0D_backsub(eqs_to_solve, vars_to_solve,
-                                    rational_only=rational_only)
+
+        # Convert s to m for timeout
+        raw_sols = utils.run_with_timeout(solve_0D_backsub,
+                            (eqs_to_solve, vars_to_solve, None, rational_only, debug), timeout=branch_timeout/60)
+        if raw_sols is None:
+            print(f"Warning: Constraint solving timed out after {branch_timeout} seconds. Skipping this branch.")
+            return []
         
         # NONNULL FILTER
         nonnull_exprs = branch_data.get('nonnull', [])
@@ -626,7 +658,7 @@ def resolve_branch_logic(branch_data: dict, original_equations: list, rational_o
         # This returns a list of full branch dictionaries.
         # We pass 'params' as the variables to solve for.
         param_branches = solve_with_singular(active_constraints, solve_vars=branch_data['params'], 
-                                             check_fraction=False, rational_only=rational_only)
+                                             check_fraction=False, rational_only=rational_only, debug=debug)
 
     # ---------------------------------------------------------------------
     # 3. SOLVE DEPENDENT VARIABLES (Triangular)
@@ -640,8 +672,11 @@ def resolve_branch_logic(branch_data: dict, original_equations: list, rational_o
     else:
         # B. Finite Case
         if branch_data['num_solutions'] != -1:
-            raw_dep_sols = solve_0D_backsub(dep_eqs, dep_vars, branch_data["params"],
-                                            rational_only=rational_only)
+            raw_dep_sols = utils.run_with_timeout(solve_0D_backsub,
+                                (dep_eqs, dep_vars, branch_data["params"], rational_only, debug), timeout=branch_timeout/60)
+            if raw_dep_sols is None:
+                print(f"Warning: Dependent variable solving timed out after {branch_timeout} seconds. Skipping this branch.")
+                return []
             for sol in raw_dep_sols:
                 dep_branches.append({
                     'mapping': sol,
@@ -653,7 +688,7 @@ def resolve_branch_logic(branch_data: dict, original_equations: list, rational_o
         else:
             # Recursively solve the dependent system.
             dep_branches = solve_with_singular(dep_eqs, solve_vars=dep_vars, check_fraction=False,
-                                               rational_only=rational_only)
+                                               rational_only=rational_only, debug=debug)
 
     # ---------------------------------------------------------------------
     # 4. COMBINE and MERGE BRANCHES
@@ -841,6 +876,8 @@ def _eq_as_numer_denom(eq: Union[sym.Eq, sym.Expr]):
     """
     if isinstance(eq, sym.Eq):
         eq = (eq.lhs - eq.rhs)
+    if isinstance(eq, int) or isinstance(eq, float):
+        eq = sym.sympify(eq)
     # Combine fractions -- quick
     numer, denom = eq.as_numer_denom()
     if numer.as_numer_denom()[1] != 1 and denom.as_numer_denom()[1] != 1:

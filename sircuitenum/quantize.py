@@ -1219,6 +1219,7 @@ def var_trans_basis_incidence_mat(wC: sym.Matrix, wL: sym.Matrix, wJ: sym.Matrix
                 Z_inv[i, j] = 1
         Z = sym.ImmutableDenseMatrix(Z_inv.inv())
 
+
     return Z, var_types
 
 def _generate_block_transformation(var_types: dict[str, list[int]], trans_blocks: list[list[int]], prefix="Z",
@@ -1376,11 +1377,10 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     Z_common_denom = sym.lcm([elem.as_numer_denom()[1] for elem in Z[:] if elem != 0])
     Z_poly = sym.cancel(Z*Z_common_denom)
 
-
     # Flatten the list of possible substitutions
     all_keys, all_subs = maximally_compatible_sol(coupling,
                             nonzero_constraints=[_det_fast(Z_poly), Z_common_denom],
-                            rational_only=True, stop_at_first=True, debug=debug)
+                            rational_only=True, stop_at_first=True, debug=debug, all_sols=True)
     # Cannot decouple anything
     if not all_keys:
         if return_tiebreaker:
@@ -1411,7 +1411,7 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
 
 def choose_Z(circuit: list, edges: list, ground_node: list = [],
              return_instance: bool = True, equal_total_C: bool = False,
-             debug=False) -> tuple[sym.Matrix, dict[str, list[int]], str]:
+             debug=False, minimize_nl=True, order=["L", "C"]) -> tuple[sym.Matrix, dict[str, list[int]], str]:
     """
     Chooses a transformation phi_node = Z*phi_new that separates
     the circuit into compact, extended, harmonic, free, frozen, and cyclic modes.
@@ -1484,14 +1484,26 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         if sym.simplify(_det_fast(Z)) == 0:
             raise ValueError("Invalid Transformation (Not Invertible)")
         # 2a: Decouple nonlinear degrees of freedom
-        if elem_counts["J"] > 0:
+        if elem_counts["J"] > 0 and minimize_nl:
             Z2_a = secondary_decouple(var_types,[Z.transpose()*jMat*Z], [False], debug=debug)
         else:
             Z2_a = [None]
         # 2b: Decouple linear degrees of freedom
         for Z_in in Z2_a:
-            Z2_b, vals = secondary_decouple(var_types, [Z.transpose()*lMat*Z, Z.transpose()*cMat*Z],
-                                      [False, True], Z_in=Z_in, return_tiebreaker=True, debug=debug)
+            lin_coupling_terms = []
+            to_invert = []
+            for elem in order:
+                if elem not in ["L", "C"]:
+                    raise ValueError("Order must be a list containing 'L' and 'C' in some order")
+                elif elem == "L":
+                    lin_coupling_terms.append(Z.transpose()*lMat*Z)
+                    to_invert.append(False)
+                elif elem == "C":
+                    lin_coupling_terms.append(Z.transpose()*cMat*Z)
+                    to_invert.append(True)
+            Z2_b, vals = secondary_decouple(var_types, lin_coupling_terms,
+                                            to_invert, Z_in=Z_in,
+                                            return_tiebreaker=True, debug=debug)
             for Z2_bi, val in zip(Z2_b, vals):
                 Z_tot = Z*Z2_bi
                 if val < lowest_hash or lowest_hash == "":
@@ -2152,10 +2164,46 @@ if __name__ == "__main__":
     # edges = [(0, 3), (1,3), (2,3), (0,1), (0,2)]
     # circuit = utils.add_elem_number(circuit)
     
-    circuit = [('C_1',), ('C_2',), ('C_3',), ('C_4', 'L_1'), ('C_5', 'J_1'), ('C_6', 'L_2'), ('C_7', 'L_3')]
-    edges = [(0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 4)]
+    # circuit = [('C_1',), ('C_2',), ('C_3',), ('C_4', 'L_1'), ('C_5', 'J_1'), ('C_6', 'L_2'), ('C_7', 'L_3')]
+    # edges = [(0, 2), (0, 3), (0, 4), (1, 2), (1, 3), (1, 4), (2, 4)]
 
-    draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout="spring")
+    # Single Fluxonium
+    # circuit = [("C", "L", "J")]
+    # edges = [(1, 2)]
+
+    # Transmon and resonator
+    # circuit = [("C12", "J12"), ("C12", "L12"), ("C13",), ("C24",)]
+    # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
+
+    # Zero pi
+    # circuit = [("J",), ("J",), ("L23",), ("L14",), ("C13",), ("C24",)]
+    # edges = [(1, 2), (3, 4), (2, 3), (1, 4), (1, 3), (2, 4)]
+
+    # circuit = utils.add_elem_number(circuit)
+
+    n = 4
+    circuit = [("C",)]
+    edges = [(1, 2*(n+1))]
+    # circuit = []
+    # edges = []
+    pos = {1: (0, 0), 2*(n+1): (0, 2)}
+    offset = 1/(2*n)
+    label_loc = {}
+    label_loc[1] = "bottom"
+    label_loc[2*(n+1)] = "top"
+    for i in range(1, n+1):
+        n1, n2 = 2*i, 2*i+1
+        # circuit += [("L","C1"), ("J",), ("L","C1")]
+        circuit += [("L",), ("J",), ("L",)]
+        edges += [(1, n1), (n1, n2), (n2, 2*(n+1))]
+        pos[n1] = (offset + (i-1-n/2)/n, 2/3)
+        pos[n2] = (offset + (i-1-n/2)/n, 4/3)
+        label_loc[n2] = "left"
+        label_loc[n1] = "left"
+    order = ["L", "C"]
+
+    draw_circuit_diagram(circuit, edges, out="test_circuit.png", layout=pos,
+                         label=True, label_loc=label_loc, scale=5.0)
     cMat = gen_cap_mat(circuit, edges)
     lMat = gen_ind_mat(circuit, edges)
     times = []
@@ -2163,7 +2211,8 @@ if __name__ == "__main__":
     for i in tqdm(range(1)):
         t0 = time.time()
         # Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
-        Z, var_types, val = choose_Z(circuit, edges, debug=True, return_instance=True)
+        Z, var_types, val = choose_Z(circuit, edges, debug=True, return_instance=True,
+                                     minimize_nl=False, order=order)
         cTrans = Z[0].transpose()*cMat*Z[0]
         lTrans = Z[0].transpose()*lMat*Z[0]
         wJTrans = gen_w(circuit, edges, w_elem="J").transpose()*Z[0]
@@ -2174,7 +2223,11 @@ if __name__ == "__main__":
     print("Mean:", np.mean(times), "+/-", np.std(times))
     # breakpoint()
     print("Z Transformation:\n")
-    print(Z)
+    for i in range(len(Z)):
+        sym.pprint(Z[i])
+    print("Z Inverse:\n")
+    for i in range(len(Z)):
+        sym.pprint(sym.simplify(Z[i].inv()))
     print("Variable Types:\n", var_types)
     n_dyn = Z[0].shape[1] - (len(var_types.get("free", [])) +
                             len(var_types.get("frozen", [])) +

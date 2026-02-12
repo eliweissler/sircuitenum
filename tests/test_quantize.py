@@ -1628,6 +1628,7 @@ def main():
     # test__vec_space_overlap()
     # test__independent_from()
 
+    test__find_Z_deterministic()
     test_secondary_decouple()
 
     # test_H_hash()
