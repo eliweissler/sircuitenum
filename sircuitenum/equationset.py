@@ -248,8 +248,6 @@ def sol_indep_of_vars(expr: Union[sym.Eq, sym.Expr], solve_vars, nonzero=[],
     
     coeffs, denom = eq_indep_of_vars(expr, solve_vars)
     sols = extract_mappings(solve_with_singular(coeffs, solve_vars), real_only=real_only)
-    # breakpoint()
-    # print("Found sols:", sols)
 
     # Make sure none of the nonzero conditions are violated
     sols = [s for s in sols if all(sym.simplify(d.subs(s)) != 0 for d in nonzero)]

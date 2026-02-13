@@ -315,7 +315,6 @@ def test_extract_denom():
         assert entry in denom
 
 
-
 if __name__ == "__main__":
     # test = TestMaximallyCompatibleSol()
     # test.test_01_fractions_raise_error()

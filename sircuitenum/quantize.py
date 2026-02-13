@@ -799,10 +799,7 @@ def decouple_column(v:sym.Matrix, nd_mat:sym.Matrix, mat:sym.Matrix):
     # Decouple each nondynamical mode individually
     i = nd_mat.shape[1]
     while i >= 1:
-        try:
-            Z1 = Z1*_decoupling_transformation(sym.simplify((Z1).transpose()*mat*(Z1)), n_d=i)
-        except:
-            breakpoint()   
+        Z1 = Z1*_decoupling_transformation(sym.simplify((Z1).transpose()*mat*(Z1)), n_d=i)
         i -= 1
     return sym.simplify(Z1[:, 0])
     
@@ -1376,11 +1373,11 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     # C is invertible, we only need to keep det(Z)/LCM nonzero
     Z_common_denom = sym.lcm([elem.as_numer_denom()[1] for elem in Z[:] if elem != 0])
     Z_poly = sym.cancel(Z*Z_common_denom)
-
     # Flatten the list of possible substitutions
     all_keys, all_subs = maximally_compatible_sol(coupling,
                             nonzero_constraints=[_det_fast(Z_poly), Z_common_denom],
-                            rational_only=True, stop_at_first=True, debug=debug, get_all_sols=True)
+                            rational_only=True, stop_at_first=kwargs.get("stop_at_first", True),
+                            debug=debug, get_all_sols=True)
     # Cannot decouple anything
     if not all_keys:
         if return_tiebreaker:
@@ -2176,8 +2173,10 @@ if __name__ == "__main__":
     # edges = [(1, 2), (3, 4), (1, 3), (2, 4)]
 
     # Zero pi
-    # circuit = [("J",), ("J",), ("L23",), ("L14",), ("C13",), ("C24",)]
-    # edges = [(1, 2), (3, 4), (2, 3), (1, 4), (1, 3), (2, 4)]
+    # circuit = [("J12",), ("J34",), ("L23",), ("L14",), ("C13",), ("C24",)]
+    circuit = [("J1",), ("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
+    # circuit = utils.add_elem_number(circuit)
+    edges = [(1, 2), (3, 4), (2, 3), (1, 4), (1, 3), (2, 4)]
 
     # circuit = utils.add_elem_number(circuit)
 
@@ -2205,8 +2204,6 @@ if __name__ == "__main__":
     #                      label=True, label_loc=label_loc, scale=5.0)
 
 
-    circuit = [('J',), ('J',), ('J', 'L'), ('J', 'L'), ('C', 'J'), ('C', 'J', 'L')]
-    edges = [(0, 1), (0, 2), (0, 3), (1, 2), (1, 3), (2, 3)]
 
     cMat = gen_cap_mat(circuit, edges)
     lMat = gen_ind_mat(circuit, edges)
@@ -2225,7 +2222,6 @@ if __name__ == "__main__":
         times.append(tf-t0)
     print("Max", np.max(times), "Min:", np.min(times))
     print("Mean:", np.mean(times), "+/-", np.std(times))
-    # breakpoint()
     print("Z Transformation:\n")
     for i in range(len(Z)):
         sym.pprint(Z[i])
