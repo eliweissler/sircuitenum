@@ -554,6 +554,7 @@ def _find_Z_instance_deterministic(Z: sym.Matrix, var_list: list[sym.Symbol],
     
     # Identify a valid assignment that yields a non-singular Z
     nonzero = list(set(x for x in [sym.simplify(x) for x in nonzero + [_det_fast(Z)]] if len(x.free_symbols) > 0))
+    nonzero = [x for x in nonzero if any(v in x.free_symbols for v in ordered)]
     _, res = _heuristic_upper_bound(ordered, nonzero, [], var_list, debug=False)
     all_Z = []
     for subs in res:
@@ -925,7 +926,7 @@ def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True, extra_n
         L_key = (_nonzero_entries_str(lTrans[perm, perm]),)
         C_key =  (_nonzero_entries_str(cTransInv[perm, perm]),)
         w_key = (_nonzero_entries_str(incidence_to_square(wJtTrans[:, perm].transpose(), EJ)),)
-        if extra_nl:
+        if extra_nl and n_nl > 0:
             wT_tilde, wT_key_full, _ = _maximize_wT(_sort_wT(wJtTrans[:, perm][:, :n_nl]))
             n_val = sum(abs(x) for x in wT_key_full)
             max_n_val = max(abs(x) for x in wT_key_full)
@@ -1143,7 +1144,6 @@ def var_trans_basis_incidence_mat(wC: sym.Matrix, wL: sym.Matrix, wJ: sym.Matrix
         l_vals = sym.symbols(",".join([f"L{i+1}" for i in range(wL.shape[1])]), real=True)
         if isinstance(l_vals, sym.Symbol):
             l_vals = (l_vals,)
-        l_vals = [1/l for l in l_vals]
 
     # Define Nullspaces of incidence matrices
     N_wC = wC.transpose().nullspace()
@@ -1152,7 +1152,7 @@ def var_trans_basis_incidence_mat(wC: sym.Matrix, wL: sym.Matrix, wJ: sym.Matrix
 
     # Capacitance and susceptance matrices for decoupling
     cMat = incidence_to_square(wC, c_vals)
-    lMat = incidence_to_square(wL, l_vals)
+    lMat = incidence_to_square(wL, [1/l for l in l_vals]) if len(l_vals) > 0 else sym.zeros(n_nodes, n_nodes)
 
     # labels of mode types
     mode_types = []
@@ -1204,6 +1204,7 @@ def var_trans_basis_incidence_mat(wC: sym.Matrix, wL: sym.Matrix, wJ: sym.Matrix
     harm_vec = [decouple_column(v, nd_mat, cMat) for v in harm_vec]
     harm_vec = [decouple_column(v, nd_mat, lMat) for v in harm_vec]
 
+
     # Put into matrix form
     Z = sym.Matrix.hstack(*comp_vec, *ext_vec, *harm_vec, *free_vec, *froz_vec, *sig_vec)
 
@@ -1216,8 +1217,8 @@ def var_trans_basis_incidence_mat(wC: sym.Matrix, wL: sym.Matrix, wJ: sym.Matrix
                 Z_inv[i, j] = 1
         Z = sym.ImmutableDenseMatrix(Z_inv.inv())
 
-
     return Z, var_types
+
 
 def _generate_block_transformation(var_types: dict[str, list[int]], trans_blocks: list[list[int]], prefix="Z",
                                    return_full=True):
@@ -1346,15 +1347,18 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     zero_keys = []
     count = 0
 
-
     for trMat in to_decouple:
         for (i, j) in pairs:
             vars_in_eq = [v for v in var_list if v in trMat[i, j].free_symbols]
-            eqs, denom = eq_indep_of_vars(trMat[i, j], vars_in_eq)
-            if not eqs:
-                zero_keys.append(count)
+            ans = utils.run_with_timeout(eq_indep_of_vars, (trMat[i, j], vars_in_eq), timeout=1/60)
             count += 1
-            coupling.append(eqs)
+            if ans is None:
+                coupling.append([])
+            else:
+                eqs, denom = ans
+                if not eqs:
+                    zero_keys.append(count)
+                coupling.append(eqs)
 
     # Nothing to decouple
     if all(eq == [] for eq in coupling):
@@ -1373,6 +1377,8 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     # C is invertible, we only need to keep det(Z)/LCM nonzero
     Z_common_denom = sym.lcm([elem.as_numer_denom()[1] for elem in Z[:] if elem != 0])
     Z_poly = sym.cancel(Z*Z_common_denom)
+    if debug:
+        print("Calling maximally compatible sol with coupling:")
     # Flatten the list of possible substitutions
     all_keys, all_subs = maximally_compatible_sol(coupling,
                             nonzero_constraints=[_det_fast(Z_poly), Z_common_denom],
@@ -1485,6 +1491,7 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             Z2_a = secondary_decouple(var_types,[Z.transpose()*jMat*Z], [False], debug=debug)
         else:
             Z2_a = [None]
+
         # 2b: Decouple linear degrees of freedom
         for Z_in in Z2_a:
             lin_coupling_terms = []
@@ -1498,9 +1505,16 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
                 elif elem == "C":
                     lin_coupling_terms.append(Z.transpose()*cMat*Z)
                     to_invert.append(True)
+            if debug:
+                print("Decoupling linear coupling terms with secondary transformation...")
             Z2_b, vals = secondary_decouple(var_types, lin_coupling_terms,
                                             to_invert, Z_in=Z_in,
                                             return_tiebreaker=True, debug=debug)
+            if debug:
+                print(f"Found {len(Z2_b)} possible secondary transformations for linear decoupling.")
+                for i, Z2 in enumerate(Z2_b):
+                    print(f"Secondary transformation {i+1} with tiebreaker value {vals[i]}:")
+                    sym.pprint(Z2)
             for Z2_bi, val in zip(Z2_b, vals):
                 Z_tot = Z*Z2_bi
                 if val < lowest_hash or lowest_hash == "":
@@ -1514,7 +1528,6 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         for i, Z in enumerate(lowest_Z):
             print(f"Lowest hash transformation {i+1}:")
             sym.pprint(Z)
-
     # Filter out any bonkers transformations and sort by string length
     str_len = [len(str(Z)) for Z in lowest_Z]
     order = np.argsort(str_len)
@@ -1547,6 +1560,7 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         for Zf in Z_final:
             sym.pprint(Zf)
             sym.pprint(wJ.transpose()*Zf)
+
     # Get a specific instance of the transformation
     if return_instance:
         # Nonzero terms -- det is already done in find_Z_instance
@@ -1600,7 +1614,6 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         Z_final = Z_final_instance
         hash_final = hash_final_instance
 
-   
     col_perms = [x + tuple(range(n_dyn, Z0.shape[1])) for x in _var_col_perms(var_types, dyn_only=True)]
     _, idx = _remove_permutation_equivalent_transformations(Z_final, perms=col_perms)
     Z_final = [Z_final[i] for i in idx]
@@ -1891,9 +1904,13 @@ def symbolic_hamiltonian(circuit, edges, Cv=None, V=None, Z=None,
     """
     edges = utils.renumber_nodes(edges)
     n_nodes = utils.get_num_nodes(edges)
-    q_vec, th_vec = gen_variables(n_nodes, Z, var_types.get("compact", []))
     
+    # Obtain a transformation if none was given
+    if Z is None:
+        Z, var_types, _ = choose_Z(circuit, edges)
+        Z = Z[0]
 
+    q_vec, th_vec = gen_variables(n_nodes, Z, var_types.get("compact", []))
     cMat = gen_cap_mat(circuit, edges)
     lMat = gen_ind_mat(circuit, edges)
     wJT = gen_w(circuit, edges, w_elem="J").transpose()
@@ -1904,9 +1921,7 @@ def symbolic_hamiltonian(circuit, edges, Cv=None, V=None, Z=None,
     else:
         Qv = Cv*V
 
-    # Obtain a transformation if none was given
-    if Z is None:
-        Z, var_types, _ = choose_Z(circuit, edges)
+
     
     # Transform C, L and Qv
     cMat = sym.transpose(Z)*cMat*Z
@@ -1974,7 +1989,7 @@ def symbolic_hamiltonian(circuit, edges, Cv=None, V=None, Z=None,
     to_return = (H,)
 
     if return_H_class:
-        to_return = to_return + (utils._remove_coeff(H, list(combosQ)+combos),)
+        to_return = to_return + (_remove_coeff(H, list(combosQ)+combos),)
     if return_combos:
         to_return = to_return + (list(combosQ)+combos,)
     if return_mats:
@@ -2174,9 +2189,9 @@ if __name__ == "__main__":
 
     # Zero pi
     # circuit = [("J12",), ("J34",), ("L23",), ("L14",), ("C13",), ("C24",)]
-    circuit = [("J1",), ("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
+    # circuit = [("J1",), ("J2",), ("L1",), ("L2",), ("C1",), ("C2",)]
     # circuit = utils.add_elem_number(circuit)
-    edges = [(1, 2), (3, 4), (2, 3), (1, 4), (1, 3), (2, 4)]
+    # edges = [(1, 2), (3, 4), (2, 3), (1, 4), (1, 3), (2, 4)]
 
     # circuit = utils.add_elem_number(circuit)
 
@@ -2204,20 +2219,81 @@ if __name__ == "__main__":
     #                      label=True, label_loc=label_loc, scale=5.0)
 
 
+    # circuit  = [("J",), ("J",), ("J",)]
+    # circuit += [("J",)]
+    # edges = [(1, 2), (3, 4), (5, 6)]
+    # edges += [(7,8)]
+    # # circuit += [("L",), ("L",), ("L",), ("L",)]#, ("L",), ("L",), ("L",), ("L",)]
+    # # edges += [(1, 3), (2, 4), (3,5), (4,6)]#, (5,7), (6,8), (7,1), (8,2)]
+    # circuit += [("L",), ("L",), ("L",), ("L",), ("L",), ("L",)]
+    # # circuit += [("L",)]
+    # edges += [(1, 3), (2, 4), (4,6), (3,5), (5,7), (6,8)]
+    # # edges += [(2,8)]
+    # circuit += [("C",), ("C",), ("C",), ("C",), ("C",), ("C",)]
+    # edges += [(1, 4), (2, 3), (3, 6), (4, 5), (6, 1), (5, 2)]#, (4, 5)]#, (5,8), (6,7)]
+    # # circuit += [("C",), ("C",)]
+    # # circuit += [("C",)]
+    # # edges += [(1, 4), (2,5)]
+    # # edges += [(1,7)]
+    # # pos = {1: (0, 0), 2: (1, 0), 3: (0, -1), 4: (1, -1), 5: (0, -2), 6: (1, -2), 7: (-1, 0), 8: (-1, -1), 9: (-1, -2)}
+    # pos = {1: (0, 0), 2: (1, 0), 3: (0, -1), 4: (1, -1), 5: (0, -2), 6: (1, -2), 7: (0, -3), 8: (1, -3)}
+    # label_loc = {1: "left", 2:"right", 3: "left", 4: "right", 5: "left", 6: "right", 7: "left", 8: "right"}
+    
+    circuit = [("L", "C")]
+    edges = [(0, 1)]
+    circuit = [("L",), ("L",), ("L","C")]
+    edges = [(0, 1), (1, 2), (0, 2)]
+    circuit = utils.add_elem_number(circuit)
+    pos = {0: (0, 0), 1: (1, 0), 2: (1/np.sqrt(2), 1/np.sqrt(2))}
+
+    # circuit = [("L",), ("L",), ("L",), ("C",), ("C",), ("C",)]
+    # edges = [(0, 1), (1,2), (0,2), (2, 3), (0,3), (2,0)]
+    circuit = [("L",), ("C",), ("L",), ("C",)]
+    edges = [(0, 1), (1,2), (2, 3), (0,3)]
+    # circuit = [("L",), ("L",), ("C",), ("C",)]
+    # edges = [(0, 1), (1,2), (2, 3), (0,3)]
+    circuit = utils.add_elem_number(circuit)
+    pos = {0: (0, 0), 1: (1, 0), 2: (1, 1), 3: (0, 1)}
+
+    draw_circuit_diagram(circuit, edges, out="test_circuit.png", scale=5.0,
+                        layout=pos, label=True)
 
     cMat = gen_cap_mat(circuit, edges)
     lMat = gen_ind_mat(circuit, edges)
+    wC = gen_w(circuit, edges, w_elem="C")
+    wL = gen_w(circuit, edges, w_elem="L")
+    wJ = gen_w(circuit, edges, w_elem="J")
+    # light = _independent_from(_vec_space_overlap(wC.transpose().nullspace(), wJ.transpose().pinv()), 
+    #                           _vec_space_overlap(wL.transpose().nullspace(), wJ.transpose().pinv()))
+    # print("light", light)
+    # if len(light) < 3:
+    #     exit()
     times = []
     from tqdm import tqdm
     for i in tqdm(range(1)):
         t0 = time.time()
         # Z = secondary_decouple(Z0, var_types, cMat, lMat, True)
-        Z, var_types, val = choose_Z(circuit, edges, debug=True, return_instance=True,
-                                     minimize_nl=True)
+        Z, var_types, val = choose_Z(circuit, edges, debug=False, return_instance=True,
+                                     minimize_nl=False, order=["C", "L"])
+        # var_types = {'compact': [0], 'extended': [1, 2], 'harmonic': [], 'free': [], 'frozen': [3,4], 'sigma': [5]}
+        # var_types = {'compact': [0], 'extended': [1, 2], 'harmonic': [3, 4], 'free': [], 'frozen': [], 'sigma': [5]}
+        # var_types = {'compact': [0], 'extended': [1, 2, 3], 'harmonic': [], 'free': [], 'frozen': [4, 5, 6], 'sigma': [7]}
+        # Z = sym.MutableDenseMatrix(sym.nsimplify(sym.Matrix([
+        #                 [ 1/2,  1/2,    0,  1/2,  3/4, -1/4, -1/4, 1/8],
+        #                 [-1/2, -1/2,    0, -1/2,  3/4, -1/4, -1/4, 1/8],
+        #                 [ 1/2, -1/2, -1/2,    0, -1/4,  3/4, -1/4, 1/8],
+        #                 [-1/2,  1/2,  1/2,    0, -1/4,  3/4, -1/4, 1/8],
+        #                 [ 1/2, -1/2,  1/2,    0, -1/4, -1/4,  3/4, 1/8],
+        #                 [-1/2,  1/2, -1/2,    0, -1/4, -1/4,  3/4, 1/8],
+        #                 [ 1/2,  1/2,    0,  -1/2, -1/4, -1/4, -1/4, 1/8],
+        #                 [-1/2, -1/2,    0,  1/2, -1/4, -1/4, -1/4, 1/8]]), rational=True))
+        Z[0] = sym.MutableDenseMatrix(sym.nsimplify(Z[0], rational=True))
+        # Z[0][:,1] = light[0] + light[1]
+        # Z[0][:,2] = light[1] - light[0]
         cTrans = Z[0].transpose()*cMat*Z[0]
         lTrans = Z[0].transpose()*lMat*Z[0]
         wJTrans = gen_w(circuit, edges, w_elem="J").transpose()*Z[0]
-        print(val)
+        # print(val)
         tf = time.time()
         times.append(tf-t0)
     print("Max", np.max(times), "Min:", np.min(times))
@@ -2240,6 +2316,8 @@ if __name__ == "__main__":
     sym.pprint(sym.simplify(lTrans))
     print("wJ Transformed:")
     sym.pprint(sym.simplify(wJTrans))
+
+    # print("light", light)
 
     # db_path = "/Users/eweissler/Library/CloudStorage/OneDrive-UCB-O365/Circuit Enumeration/circuits_4_nodes_7_elems.db"
     # for n in range(4, 5):

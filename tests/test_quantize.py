@@ -1542,6 +1542,13 @@ def test_collect_H_terms():
     assert sym.latex(H, order="grlex") == ans
 
 def test_symbolic_hamiltonian():
+    
+    # Basic no Z provided -- test no error and agrees with Z provided
+    circuit, edges = ([('C', 'L'), ('J', 'L')], [(0, 2), (1, 2)])
+    ans1 = quantize.symbolic_hamiltonian(circuit, edges)
+    Z, var_types , _= quantize.choose_Z(circuit, edges, return_instance=True)
+    ans2 = quantize.symbolic_hamiltonian(circuit, edges, Z=Z[0], var_types=var_types)
+    assert sym.simplify(ans1 - ans2) == 0
 
     # Fluxonium
     edges = [(0, 1)]
@@ -1601,6 +1608,9 @@ def test_symbolic_hamiltonian():
 
 
 
+
+
+
 def main():
     
     # from sircuitenum import enum
@@ -1623,7 +1633,7 @@ def main():
     # test_decoupling_transformation()
     # test_decouple_column()
 
-    # test_symbolic_hamiltonian()
+    test_symbolic_hamiltonian()
     # test__var_col_perms()
 
     # test_unique_compact()
@@ -1645,12 +1655,12 @@ def main():
     # test__vec_space_overlap()
     # test__independent_from()
 
-    test__find_Z_deterministic()
-    test_secondary_decouple()
+    # test__find_Z_deterministic()
+    # test_secondary_decouple()
 
     # test_H_hash()
     # test__find_Z_instance()
-    test_choose_Z()
+    # test_choose_Z()
     # test__find_Z_min_cost()
 
     # test__wT_key()
