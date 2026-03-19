@@ -66,35 +66,35 @@ def test_single_edge_loop_knitting():
     assert e2 == edges
 
 
-def test_inductive_subgraph():
+def test_subgraph():
 
     # Go through test circuits
     edges, circuit = TEST_CIRCUITS[0][0], TEST_CIRCUITS[0][1]
-    e2 = pi.inductive_subgraph(circuit, edges, ind_elem=["J", "L"])
+    e2 = pi.subgraph(circuit, edges, elems=["J", "L"])
     assert e2 == [(0, 1)]
 
     edges, circuit = TEST_CIRCUITS[1][0], TEST_CIRCUITS[1][1]
-    e2 = pi.inductive_subgraph(circuit, edges, ind_elem=["J", "L"])
+    e2 = pi.subgraph(circuit, edges, elems=["J", "L"])
     assert e2 == [(0, 1)]
 
     edges, circuit = TEST_CIRCUITS[2][0], TEST_CIRCUITS[2][1]
-    e2 = pi.inductive_subgraph(circuit, edges, ind_elem=["J", "L"])
+    e2 = pi.subgraph(circuit, edges, elems=["J", "L"])
     assert e2 == [(0, 1)]
 
     edges, circuit = TEST_CIRCUITS[3][0], TEST_CIRCUITS[3][1]
-    e2 = pi.inductive_subgraph(circuit, edges, ind_elem=["J", "L"])
+    e2 = pi.subgraph(circuit, edges, elems=["J", "L"])
     assert e2 == [(0, 1), (1, 2), (2, 0)]
 
     edges, circuit = TEST_CIRCUITS[4][0], TEST_CIRCUITS[4][1]
-    e2 = pi.inductive_subgraph(circuit, edges, ind_elem=["J", "L"])
+    e2 = pi.subgraph(circuit, edges, elems=["J", "L"])
     assert e2 == [(1, 2), (2, 3), (2, 4), (3, 4)]
 
     edges, circuit = TEST_CIRCUITS[5][0], TEST_CIRCUITS[5][1]
-    e2 = pi.inductive_subgraph(circuit, edges, ind_elem=["J", "L"])
+    e2 = pi.subgraph(circuit, edges, elems=["J", "L"])
     assert e2 == [(0, 1), (1, 2), (2, 3), (3, 0), (0, 4), (1, 4), (3, 4)]
 
     edges, circuit = TEST_CIRCUITS[6][0], TEST_CIRCUITS[6][1]
-    e2 = pi.inductive_subgraph(circuit, edges, ind_elem=["J", "L"])
+    e2 = pi.subgraph(circuit, edges, elems=["J", "L"])
     assert e2 == []
 
 
@@ -191,19 +191,6 @@ def test_add_explicit_ground_node():
         assert params[(edge, elem)] == new_params[((edge[0]+1, edge[1]+1), elem)]
     for n in range(1, utils.get_num_nodes(edges)+1):
         assert new_params[((0, n), "C")] == (ecg, "GHz")
-
-
-def test_swap_nodes():
-
-    edges = [(0, 1)]
-    new_edges = pi.swap_nodes(edges, 0, 1)
-    assert new_edges == [(1, 0)]
-
-    
-    edges = [(0, 1), (1, 2), (2, 0)]
-    new_edges = pi.swap_nodes(edges, 2, 1)
-    assert new_edges == [(0, 2), (2, 1), (1, 0)]
-
 
 
 def test_to_SQcircuit():

@@ -6,6 +6,7 @@ import numpy as np
 import networkx as nx
 import pandas as pd
 from pathlib import Path
+import sympy as sym
 
 from sircuitenum import utils
 from test_qpackage_interface import TEST_CIRCUITS
@@ -98,6 +99,21 @@ def test_get_basegraphs():
     G2 = nx.Graph()
     G2.add_edges_from([(0, 1), (1, 2), (2, 3)])
     assert nx.is_isomorphic(G, G2)
+
+    # Test planar/regular
+    utils.LOADED_BASEGRAPHS = {}  # reset loaded graphs
+    for is_planar in [True, False]:
+        for is_regular in [True, False]:
+            for n in range(3,11):
+                utils.LOADED_BASEGRAPHS = {}  # reset loaded graphs
+                if (is_planar and n < 10) or is_regular or n <=6:
+                    graphs = utils.get_basegraphs(n, planar=is_planar, regular=is_regular)
+                for G in graphs:
+                    if is_planar:
+                        assert nx.is_planar(G)
+                    if is_regular:
+                        assert nx.is_regular(G)
+    utils.LOADED_BASEGRAPHS = {}  # reset loaded graphs
 
 
 def test_graph_index_to_edges():
@@ -819,8 +835,29 @@ def write_test_df(fname: str = TEMP_FILE, overwrite: bool = False):
 
     return df
 
+def test_swap_nodes():
+
+    edges = [(0, 1)]
+    new_edges = utils.swap_nodes(edges, 0, 1)
+    assert new_edges == [(1, 0)]
+
+    
+    edges = [(0, 1), (1, 2), (2, 0)]
+    new_edges = utils.swap_nodes(edges, 2, 1)
+    assert new_edges == [(0, 2), (2, 1), (1, 0)]
+
+
+def test_run_with_timeout():
+    func = sym.simplify
+    x,y = sym.symbols('x y')
+    assert utils.run_with_timeout(func, (x + y,)) == x + y
+    assert utils.run_with_timeout(func, (x + x,)) == 2*x
+    assert utils.run_with_timeout(func, (x + x,), timeout=0.00001) == x + x
+
 
 if __name__ == "__main__":
     # test_gen_param_dict()
     # test_circuit_degree()
-    test_find_circuit_in_db()
+    # test_find_circuit_in_db()
+    # test_run_with_timeout()
+    test_get_basegraphs()

@@ -2,7 +2,9 @@ import os
 import itertools
 import sqlite3
 from pathlib import Path
+import pytest 
 
+import networkx as nx
 import sympy as sy
 import numpy as np
 import pandas as pd
@@ -40,6 +42,31 @@ NON_SERIES_3 += [
 
 
 TEMP_FILE = "temp.db"
+TEMP_FILE2 = "temp2.db"
+
+@pytest.fixture(autouse=True)
+def cleanup_temp_files():
+    """Clean up temp database files before and after each test"""
+    # Setup - clean before test
+    for f in [TEMP_FILE, TEMP_FILE2]:
+        cleanup_db(f)
+    
+    yield  # Run the test
+    
+    # Teardown - clean after test
+    for f in [TEMP_FILE, TEMP_FILE2]:
+        cleanup_db(f)
+    
+    utils.LOADED_BASEGRAPHS = {}
+
+def cleanup_db(filename):
+    for suffix in ["", "-wal", "-shm"]:
+        f = Path(str(filename) + suffix)
+        if f.exists():
+            try:
+                os.remove(f)
+            except:
+                pass
 
 
 def test_num_possible_circuits():
@@ -97,7 +124,7 @@ def test_generate_for_specific_graph():
 def test_delete_table():
 
     if Path(TEMP_FILE).exists():
-        os.remove(TEMP_FILE)
+        cleanup_db(TEMP_FILE)
 
     # Generate 2 node circuits
     enum.generate_graphs_node(TEMP_FILE, 2, 7)
@@ -110,7 +137,7 @@ def test_delete_table():
     assert len(t1) == 1
     assert len(t2) == 0
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
 
 def test_find_uniuqe_ground_placements():
@@ -185,7 +212,7 @@ def test_remove_dangling_edges():
 def test_find_equiv_cir_series():
 
     if Path(TEMP_FILE).exists():
-        os.remove(TEMP_FILE)
+        cleanup_db(TEMP_FILE)
 
     # Generate all the 2/3 node circuits
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=1, quiet=False)
@@ -195,39 +222,39 @@ def test_find_equiv_cir_series():
     edges = [(0, 2), (2, 1), (0, 1)]
     circuit = [("L",), ("L",), ("L",)]
     uid = enum.find_equiv_cir_series(TEMP_FILE, circuit, edges)
-    c, e = red.remove_series_elems(circuit, edges)
+    c, e = red.linear_star_mesh(circuit, edges)
     c2, e2 = utils.get_circuit_data(TEMP_FILE, uid)
     assert red.isomorphic_circuit_in_set(c, e, [c2])
 
     edges = [(0, 2), (2, 1), (0, 1)]
     circuit = [("C",), ("L",), ("L",)]
     uid = enum.find_equiv_cir_series(TEMP_FILE, circuit, edges)
-    c, e = red.remove_series_elems(circuit, edges)
+    c, e = red.linear_star_mesh(circuit, edges)
     c2, e2 = utils.get_circuit_data(TEMP_FILE, uid)
     assert red.isomorphic_circuit_in_set(c, e, [c2])
 
     edges = [(0, 2), (2, 1), (0, 1)]
     circuit = [("C",), ("C",), ("J",)]
     uid = enum.find_equiv_cir_series(TEMP_FILE, circuit, edges)
-    c, e = red.remove_series_elems(circuit, edges)
+    c, e = red.linear_star_mesh(circuit, edges)
     c2, e2 = utils.get_circuit_data(TEMP_FILE, uid)
     assert red.isomorphic_circuit_in_set(c, e, [c2])
 
     edges = [(0, 1), (1, 2), (2, 3)]
     circuit = [("C",), ("C",), ("J",)]
     uid = enum.find_equiv_cir_series(TEMP_FILE, circuit, edges)
-    c, e = red.remove_series_elems(circuit, edges)
+    c, e = red.linear_star_mesh(circuit, edges)
     c2, e2 = utils.get_circuit_data(TEMP_FILE, uid)
     assert red.isomorphic_circuit_in_set(c, e, [c2])
 
     edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
     circuit = [("C",), ("C",), ("J",), ("L",)]
     uid = enum.find_equiv_cir_series(TEMP_FILE, circuit, edges)
-    c, e = red.remove_series_elems(circuit, edges)
+    c, e = red.linear_star_mesh(circuit, edges)
     c2, e2 = utils.get_circuit_data(TEMP_FILE, uid)
     assert red.isomorphic_circuit_in_set(c, e, [c2])
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
 
 def test_generate_graphs_node():
@@ -271,7 +298,7 @@ def test_generate_graphs_node():
                                         subset['circuit'].values)
 
 
-def test_reduce_individual_set_():
+def test__reduce_individual_set():
 
     # Generate all the 2/3 node circuits
     enum.generate_graphs_node(TEMP_FILE, 2, base=7)
@@ -279,19 +306,19 @@ def test_reduce_individual_set_():
 
     # CJL Delta
     filter_str = f"WHERE edge_counts LIKE '1,1,1,0,0,0,0' AND graph_index LIKE 1"
-    args = (filter_str, TEMP_FILE, 3, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
-    enum.reduce_individual_set_(args)
+    args = (filter_str, TEMP_FILE, 3, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], True)
+    enum._reduce_individual_set(args)
     df = utils.get_circuit_data_batch(TEMP_FILE, 3, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
     assert df["in_non_iso_set"].sum() == 1
 
     # CLL Delta
     filter_str = f"WHERE edge_counts LIKE '1,0,2,0,0,0,0' AND graph_index LIKE 1"
-    args = (filter_str, TEMP_FILE, 3, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
-    enum.reduce_individual_set_(args)
+    args = (filter_str, TEMP_FILE, 3, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], True)
+    enum._reduce_individual_set(args)
     df = utils.get_circuit_data_batch(TEMP_FILE, 3, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
     assert df["in_non_iso_set"].sum() == 0
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
 
 def test_trim_graph_node():
@@ -321,34 +348,10 @@ def test_trim_graph_node():
         df = utils.get_circuit_data_batch(TEMP_FILE, 3, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
         assert df["in_non_iso_set"].sum() == 0
 
-        os.remove(TEMP_FILE)
+        cleanup_db(TEMP_FILE)
 
 
-
-def test_gen_hamiltonian():
-
-    # Transmon
-    edges = [(0, 1)]
-    circuit = [("J", "C")]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    assert sy.latex(H, order="grlex") == '- E_{J_1} \\cos{\\left(\\hat{θ}_{1} \\right)} + \\frac{\\hat{n}_{1}^{2}}{2 C_{1} + 2 C_{J_1}}'
-
-    # Fluxoinium
-    edges = [(0, 1)]
-    circuit = [("J", "L")]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    assert sy.latex(H, order="grlex") == '- E_{J_1} \\cos{\\left(\\hat{φ}_{1} \\right)} + \\frac{\\hat{φ}_{1}^{2}}{2 L_{1}} + \\frac{\\hat{q}_{1}^{2}}{2 C_{J_1}}'
-    
-    # Zero-Pi
-    edges = [(0, 1), (2, 3), (0, 3), (1, 2), (0, 2), (1, 3)]
-    circuit = [("J",),("J",), ("L",), ("L",), ("C",), ("C",)]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    assert sy.latex(H, order="grlex") == '\\left(- E_{J_1} - E_{J_2}\\right) \\cos{\\left(\\hat{θ}_{1} \\right)} \\cos{\\left(\\hat{φ}_{3} \\right)} + \\left(E_{J_1} - E_{J_2}\\right) \\sin{\\left(\\hat{θ}_{1} \\right)} \\sin{\\left(\\hat{φ}_{3} \\right)} + \\frac{\\hat{n}_{1}^{2} \\left(C_{1} C_{J_1} + C_{1} C_{J_2} + C_{2} C_{J_1} + C_{2} C_{J_2}\\right)}{8 C_{1} C_{2} C_{J_1} + 8 C_{1} C_{2} C_{J_2} + 8 C_{1} C_{J_1} C_{J_2} + 8 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{n}_{1} \\hat{q}_{2} \\left(C_{1} C_{J_1} + C_{1} C_{J_2} - C_{2} C_{J_1} - C_{2} C_{J_2}\\right)}{8 C_{1} C_{2} C_{J_1} + 8 C_{1} C_{2} C_{J_2} + 8 C_{1} C_{J_1} C_{J_2} + 8 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{n}_{1} \\hat{q}_{3} \\left(- C_{1} C_{J_1} + C_{1} C_{J_2} - C_{2} C_{J_1} + C_{2} C_{J_2}\\right)}{4 C_{1} C_{2} C_{J_1} + 4 C_{1} C_{2} C_{J_2} + 4 C_{1} C_{J_1} C_{J_2} + 4 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{q}_{2}^{2} \\left(C_{1} C_{J_1} + C_{1} C_{J_2} + C_{2} C_{J_1} + C_{2} C_{J_2} + 4 C_{J_1} C_{J_2}\\right)}{32 C_{1} C_{2} C_{J_1} + 32 C_{1} C_{2} C_{J_2} + 32 C_{1} C_{J_1} C_{J_2} + 32 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{q}_{2} \\hat{q}_{3} \\left(- C_{1} C_{J_1} + C_{1} C_{J_2} + C_{2} C_{J_1} - C_{2} C_{J_2}\\right)}{8 C_{1} C_{2} C_{J_1} + 8 C_{1} C_{2} C_{J_2} + 8 C_{1} C_{J_1} C_{J_2} + 8 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{q}_{3}^{2} \\left(4 C_{1} C_{2} + C_{1} C_{J_1} + C_{1} C_{J_2} + C_{2} C_{J_1} + C_{2} C_{J_2}\\right)}{8 C_{1} C_{2} C_{J_1} + 8 C_{1} C_{2} C_{J_2} + 8 C_{1} C_{J_1} C_{J_2} + 8 C_{2} C_{J_1} C_{J_2}} + \\frac{\\hat{φ}_{2}^{2} \\left(2 L_{1} + 2 L_{2}\\right)}{L_{1} L_{2}} + \\frac{\\hat{φ}_{2} \\hat{φ}_{3} \\left(2 L_{1} - 2 L_{2}\\right)}{L_{1} L_{2}} + \\frac{\\hat{φ}_{3}^{2} \\left(L_{1} + L_{2}\\right)}{2 L_{1} L_{2}}'
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=True)[0]
-    assert sy.latex(H, order="grlex") == '- 2 E_{J} \\cos{\\left(\\hat{θ}_{1} \\right)} \\cos{\\left(\\hat{φ}_{3} \\right)} + \\frac{\\hat{n}_{1}^{2}}{4 C + 4 C_{J}} + \\frac{4 \\hat{φ}_{2}^{2}}{L} + \\frac{\\hat{φ}_{3}^{2}}{L} + \\frac{\\hat{q}_{3}^{2}}{4 C_{J}} + \\frac{\\hat{q}_{2}^{2}}{16 C}'
-
-
-def test_gen_ham_row_():
+def test__gen_ham_class_row():
 
     # Generate all the 2 node circuits
     enum.generate_graphs_node(TEMP_FILE, 2, base=7)
@@ -360,159 +363,40 @@ def test_gen_ham_row_():
     uid = df.iloc[0]["unique_key"]
 
     # Add cols
-    new_cols = ["n_periodic", "n_extended", "n_harmonic",
-                        "periodic", "extended", "harmonic"]
-    new_cols += enum.gen_func_combos_(1).keys()
-    new_cols += [x+"_sym" for x in new_cols]
-    new_cols = ["H", "H_sym", "coord_transform",
-                "H_class", "H_class_sym", "nonlinearity_counts",
-                "nonlinearity_counts_sym",
-                "H_group", "H_group_sym"] + new_cols
-    with sqlite3.connect(TEMP_FILE) as con:
-        cur = con.cursor()
-        for col in new_cols:
-            sql_str = f"ALTER TABLE {table_name}\n"
-            if "n_" in col or "cos" in col or "sin" in col:
-                sql_str += f"ADD {col} int DEFAULT 0"
-            else:
-                sql_str += f"ADD {col}"
-            cur.execute(sql_str)
-            con.commit()
-    enum.gen_ham_row_(uid, TEMP_FILE)
+    new_cols = ["n_compact", "n_extended", "n_harmonic",
+                "n_free", "n_frozen", "n_sigma",
+                "H_class", "wJT",  "H_class_sym", "wJT_sym"]
+    con = sqlite3.connect(TEMP_FILE)
+    cur = con.cursor()
+    for col in new_cols:
+        sql_str = f"ALTER TABLE {table_name}\n"
+        if "n_" in col or "cos" in col or "sin" in col:
+            sql_str += f"ADD {col} int DEFAULT 0"
+        else:
+            sql_str += f"ADD {col}"
+        cur.execute(sql_str)
+    con.commit()
+    con.close()
 
-    # Test H is right
+    enum._gen_ham_class_row((uid, TEMP_FILE, False, True))
+    enum._gen_ham_class_row((uid, TEMP_FILE, True, True))
+
+    # Test stuff is right
     df = utils.get_circuit_data_batch(TEMP_FILE, 2, char_mapping=utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], filter_str=filter_str)
-    assert df["H"].iloc[0] == '- E_{J_1} \\cos{\\left(\\hat{φ}_{1} \\right)} + \\frac{\\hat{φ}_{1}^{2}}{2 L_{1}} + \\frac{\\hat{q}_{1}^{2}}{2 C_{J_1}}'
-
-    os.remove(TEMP_FILE)
-
-
-def test_unique_hams():
-
-    h_list = ['\\cos{(\\hat{θ}_{1})} + \\hat{n}_{1}^{2}']*3
-    reduced, groups = enum.unique_hams(h_list)
-    assert len([x for x in reduced if not x is None]) == 1
-    assert all(x == "_1" for x in groups)
-
-    h_list = ['\\cos{(\\hat{θ}_{1})} + \\hat{n}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{2})} + \\hat{n}_{1}^{2}']
-    reduced, groups = enum.unique_hams(h_list)
-    assert len([x for x in reduced if not x is None]) == 1
-    assert all(x == "_1" for x in groups)
-
-    h_list = ['\\cos{(\\hat{θ}_{1})} \\cos{(\\hat{φ}_{3})} + \\hat{n}_{1}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{3}^{2} + \\hat{q}_{3}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{3})} \\cos{(\\hat{φ}_{1})} + \\hat{n}_{3}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{1}^{2} + \\hat{q}_{1}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{1})}} + \\hat{n}_{1}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{3}^{2} + \\hat{q}_{3}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{2})} + \\hat{n}_{1}^{2}']
-    reduced, groups = enum.unique_hams(h_list)
-    assert len([x for x in reduced if not x is None]) == 3
-    assert groups == ["_1", "_1", "_2", "_3"]
+    entry = df.iloc[0]
+    assert entry["n_compact"] == 0
+    assert entry["n_extended"] == 1
+    assert entry["n_harmonic"] == 0
+    assert entry["n_free"] == 0
+    assert entry["n_frozen"] == 0
+    assert entry["n_sigma"] == 1
+    assert entry["H_class"] == '010_0--1-1-1_0_0-_0-'
+    assert entry["H_class_sym"] == '010_0--1-1-1_0_0-_0-'
+    assert entry["wJT"] == "1"
+    assert entry["wJT_sym"] == "1"
 
 
-def test_unique_hams_in_df():
-
-
-    h_list = ['\\cos{(\\hat{θ}_{1})} \\cos{(\\hat{φ}_{3})} + \\hat{n}_{1}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{3}^{2} + \\hat{q}_{3}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{3})} \\cos{(\\hat{φ}_{1})} + \\hat{n}_{3}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{1}^{2} + \\hat{q}_{1}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{1})}} + \\hat{n}_{1}^{2} + 4 \\hat{φ}_{2}^{2} + \\hat{φ}_{3}^{2} + \\hat{q}_{3}^{2} + \\hat{q}_{2}^{2}',
-              '\\cos{(\\hat{θ}_{2})} + \\hat{n}_{1}^{2}']
-    
-    df = pd.DataFrame({"H_class": h_list, "nonlinearity_counts": [""]*4})
-    enum.unique_hams_in_df(df, symmetric=False)
-    assert len(np.unique([x for x in df["H_group"] if not x is None])) == 3
-    assert list(df["H_group"].values) == ["_1", "_1", "_2", "_3"]
-    
-
-def test_unique_hams_for_count_():
-
-
-    enum.generate_all_circuits(TEMP_FILE, 2, 2, base=7, n_workers=4)
-    args = (TEMP_FILE, 2, "1000", True, utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
-    enum.unique_hams_for_count_(args)
-    assert utils.get_unique_qubits(TEMP_FILE, 2)["H_group"].unique().size == 2
-    os.remove(TEMP_FILE)
-
-
-def test_gen_func_combos_():
-    
-    assert len(enum.gen_func_combos_(1)) == 4
-    assert len(enum.gen_func_combos_(2)) == 14
-
-
-def test_categorize_hamiltonian():
-
-    # Transmon
-    edges = [(0, 1)]
-    circuit = [("J", "C")]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    info = enum.categorize_hamiltonian(H)
-    assert info['n_modes'] == 1
-    assert info['n_periodic'] == 1
-    assert info['n_extended'] == 0
-    assert info['n_harmonic'] == 0
-    assert info["periodic"] == ["1"]
-    assert info["extended"] == []
-    assert info["harmonic"] == []
-    for k in info:
-        if "sin" in k or "cos" in k:
-            if k == "cos_p":
-                assert info[k] == 1
-            else:
-                assert info[k] == 0
-
-    # Fluxoinium
-    edges = [(0, 1)]
-    circuit = [("J", "L")]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    info = enum.categorize_hamiltonian(H)
-    assert info['n_modes'] == 1
-    assert info['n_periodic'] == 0
-    assert info['n_extended'] == 1
-    assert info['n_harmonic'] == 0
-    assert info["periodic"] == []
-    assert info["extended"] == ["1"]
-    assert info["harmonic"] == []
-    for k in info:
-        if "sin" in k or "cos" in k:
-            if k == "cos_e":
-                assert info[k] == 1
-            else:
-                assert info[k] == 0
-
-    # Zero-Pi
-    edges = [(0, 1), (2, 3), (0, 3), (1, 2), (0, 2), (1, 3)]
-    circuit = [("J",),("J",), ("L",), ("L",), ("C",), ("C",)]
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=False)[0]
-    info = enum.categorize_hamiltonian(H)
-    assert info['n_modes'] == 3
-    assert info['n_periodic'] == 1
-    assert info['n_extended'] == 1
-    assert info['n_harmonic'] == 1
-    assert info["periodic"] == ["1"]
-    assert info["extended"] == ["3"]
-    assert info["harmonic"] == ["2"]
-    for k in info:
-        if "sin" in k or "cos" in k:
-            if k in ["cos_e_cos_p", "sin_e_sin_p"]:
-                assert info[k] == 1
-            else:
-                assert info[k] == 0
-
-    H = enum.gen_hamiltonian(circuit, edges, symmetric=True)[0]
-    info = enum.categorize_hamiltonian(H)
-    assert info['n_modes'] == 3
-    assert info['n_periodic'] == 1
-    assert info['n_extended'] == 1
-    assert info['n_harmonic'] == 1
-    assert info["periodic"] == ["1"]
-    assert info["extended"] == ["3"]
-    assert info["harmonic"] == ["2"]
-    for k in info:
-        if "sin" in k or "cos" in k:
-            if k == "cos_e_cos_p":
-                assert info[k] == 1
-            else:
-                assert info[k] == 0
+    cleanup_db(TEMP_FILE)
 
 
 def df_equality_check(df1: pd.DataFrame, df2: pd.DataFrame):
@@ -538,31 +422,85 @@ def df_equality_check(df1: pd.DataFrame, df2: pd.DataFrame):
                     assert v1 == v2
 
 
-def test_assign_H_groups():
+def test_add_hamiltonian_classes():
     
-    
-    # Generate all the 3 node circuits and check that
-    # there's 22 H classes
-    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=4)
-    enum.assign_H_groups(TEMP_FILE, 3, n_workers=4, resume=False)
-    df = utils.get_unique_qubits(TEMP_FILE, 3)
-    assert df.H_group.unique().size == 22
-    assert df.H_group_sym.unique().size == 22
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
+    cleanup_db(TEMP_FILE2)
 
+    res =     ['011_0-0-1-1-5_0_0-0_0-0', '011_0-0-1-1-5_1_0-0_1-1', '011_0-0-1-1-5_1_1-1_0-0', '011_0-0-1-1-5_2_1-1_1-1', '020_0-0-2-1-5445_0_0-0_0-0', '020_0-0-2-1-5445_1_0-0_1-1', '020_0-0-2-1-5445_1_1-1_0-0', '020_0-0-2-1-5445_2_1-1_1-1', '020_1-1-4-1-544555_1_0-0_1-1', '020_1-1-4-1-544555_2_1-1_1-1', '101_0-0-1-1-5_0_0-0_0-0', '101_0-0-1-1-5_1_0-0_1-1', '110_0-0-2-1-5445_0_0-0_0-0', '110_0-0-2-1-5445_1_0-0_1-1', '110_1-1-3-1-5455_1_0-0_1-1', '110_1-1-4-1-544555_1_0-0_1-1', '200_0-0-2-1-5445_0_0-0_0-0', '200_0-0-2-1-5445_1_0-0_1-1', '200_1-1-4-1-544555_1_0-0_1-1']
+    res_sym = ['011_0-0-1-1-5_0_0-0_0-0', '011_0-0-1-1-5_1_0-0_1-1', '020_0-0-2-1-5445_0_0-0_0-0', '020_0-0-2-1-5445_1_0-0_1-1', '020_0-0-2-1-5445_1_1-1_0-0', '020_0-0-2-1-5445_2_1-1_1-1', '020_1-1-4-1-544555_1_0-0_1-1', '020_1-1-6-2-465553_0_0-0_0-0', '101_0-0-1-1-5_0_0-0_0-0', '101_0-0-1-1-5_1_0-0_1-1', '110_0-0-2-1-5445_0_0-0_0-0', '110_0-0-2-1-5445_1_0-0_1-1', '110_1-1-3-1-5455_1_0-0_1-1', '110_1-1-4-1-544555_1_0-0_1-1', '110_1-1-4-1-5553_0_0-0_0-0', '110_1-1-6-2-465553_0_0-0_0-0', '200_0-0-2-1-5445_0_0-0_0-0', '200_0-0-2-1-5445_1_0-0_1-1', '200_1-1-4-1-544555_1_0-0_1-1']
+    num_map = {"0": -4, "1": -3, "2": -2, "3": -1,"4": 0, "5": 1, "6": 2, "7": 3, "8": 4}
+    def old_to_new_hclass(hclass):
+        parts = hclass.split("_")
+        part1 = parts[1].split("-")
+        nums = part1[-1]
+        new_nums = ",".join([str(num_map[n]) for n in nums]).replace("-","n")
+        print(nums, new_nums)
+        return "_".join([parts[0], "-".join(part1[:-1] + [new_nums])] + parts[2:])
+    
+    res = [old_to_new_hclass(x) for x in res]
+    res_sym = [old_to_new_hclass(x) for x in res_sym]
+
+    # Generate all the 3 node circuits and check that
+    # there's 19 H classes
+    print("--- not parallel ---")
+    enum.generate_all_circuits(TEMP_FILE2, 2, 3, base=7, n_workers=1, quiet=False)
+    print("--- yes parallel ---")
+    enum.generate_all_circuits(TEMP_FILE, 2, 3, base=7, n_workers=4, quiet=False)
+    # assert False
+    df = utils.get_unique_qubits(TEMP_FILE, 3)
+    df2 = utils.get_circuit_data_batch(TEMP_FILE2, 3)
+    for i, row in df2.iterrows():
+        comp = utils.find_circuit_in_db(TEMP_FILE,
+                                      row['circuit'],
+                                      row['edges']).iloc[0]
+        if comp["H_class"] != row["H_class"]:
+            print("mismatch found (H_class):")
+            print("ref:", row['circuit'], row['H_class'])
+            print("test:", comp['circuit'], comp['H_class'])
+            # breakpoint()
+            assert False
+        if comp["H_class_sym"] != row["H_class_sym"]:
+            print("mismatch found (H_class_sym):")
+            print("ref:", row['circuit'], row['H_class_sym'])
+            print("test:", comp['circuit'], comp['H_class_sym'])
+            # breakpoint()
+            assert False
+    classes = sorted(df.H_class.unique())
+    sym_classes = sorted(df.H_class_sym.unique())
+    diff = [x for x in classes if x not in sym_classes]
+    diff2 = [x for x in sym_classes if x not in classes]
+
+
+    assert len(classes) == 19
+    assert len(sym_classes) == 19
+    for x in res:
+        assert x in classes
+    for x in res_sym:
+        assert x in sym_classes
+    
+
+    exp_diff_sym_nonsym = [old_to_new_hclass(x) for x in ['020_1-1-6-2-465553_0_0-0_0-0', '110_1-1-4-1-5553_0_0-0_0-0', '110_1-1-6-2-465553_0_0-0_0-0']]
+    for x in exp_diff_sym_nonsym:
+        assert x in sym_classes and x not in classes
+    exp_diff_nonsym_sym = [old_to_new_hclass(x) for x in ['011_0-0-1-1-5_1_1-1_0-0', '011_0-0-1-1-5_2_1-1_1-1', '020_1-1-4-1-544555_2_1-1_1-1']]
+    for x in exp_diff_nonsym_sym:
+        assert x in classes and x not in sym_classes
+
+    cleanup_db(TEMP_FILE)
+    cleanup_db(TEMP_FILE2)
     
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=5, n_workers=1)
-    enum.assign_H_groups(TEMP_FILE, 3, n_workers=1, resume=False)
     df = utils.get_unique_qubits(TEMP_FILE, 3)
-    assert df.H_group.unique().size == 22
-    assert df.H_group_sym.unique().size == 22
+    assert df.H_class.unique().size == 19
+    assert df.H_class_sym.unique().size == 16
     os.remove(TEMP_FILE)
 
 
 def test_generate_all_circuits():
 
     if Path(TEMP_FILE).exists():
-        os.remove(TEMP_FILE)
+        cleanup_db(TEMP_FILE)
 
     # Generate all the 2, 3 node circuits
     enum.generate_all_circuits(TEMP_FILE, 2, 3, base=3, quiet=False)
@@ -579,8 +517,14 @@ def test_generate_all_circuits():
         df_untrimmed_good['filter']),
         df_untrimmed_good['no_series'])
     df_trimmed_good = df_untrimmed_good[unique_qubits]
-    df_equality_check(df_untrimmed, df_untrimmed_good)
-    df_equality_check(df_trimmed, df_trimmed_good)
+    cols_to_compare = df_trimmed_good.columns
+    # Sort the dataframes to ensure consistent ordering
+    df_untrimmed = df_untrimmed.sort_index()
+    df_untrimmed_good = df_untrimmed_good.sort_values(by="unique_key")
+    df_trimmed = df_trimmed.sort_index()
+    df_trimmed_good = df_trimmed_good.sort_values(by="unique_key")
+    df_equality_check(df_untrimmed[cols_to_compare], df_untrimmed_good[cols_to_compare])
+    df_equality_check(df_trimmed[cols_to_compare], df_trimmed_good[cols_to_compare])
 
     # Test the 3 nodes I/0
     df_untrimmed = utils.get_circuit_data_batch(TEMP_FILE, n_nodes=3)
@@ -606,21 +550,21 @@ def test_generate_all_circuits():
                                                       row['edges']
                                                       )
 
+    df_trimmed_good = df_untrimmed_good[unique_qubits]
+    cols_to_compare = df_trimmed_good.columns
+    # Sort the dataframes to ensure consistent ordering
     df_untrimmed = df_untrimmed.sort_index()
     df_untrimmed_good = df_untrimmed_good.sort_values(by="unique_key")
     df_trimmed = df_trimmed.sort_index()
     df_trimmed_good = df_trimmed_good.sort_values(by="unique_key")
-
-    df_equality_check(df_untrimmed, df_untrimmed_good)
-    df_equality_check(df_trimmed, df_trimmed_good)
+    df_equality_check(df_untrimmed[cols_to_compare], df_untrimmed_good[cols_to_compare])
+    df_equality_check(df_trimmed[cols_to_compare], df_trimmed_good[cols_to_compare])
 
 
     # Test the accuracy
     df2 = utils.get_unique_qubits(TEMP_FILE, n_nodes=2)
     df3_og = utils.get_unique_qubits(TEMP_FILE, n_nodes=3)
     df3 = df3_og[df3_og['graph_index'] == 1]
-    # df4 = utils.get_unique_qubits(TEMP_FILE, n_nodes=4)
-    # df4 = df4[df4['graph_index'] == 3]
 
     assert df2.shape[0] == 1
     assert df3.shape[0] == len(NON_ISOMORPHIC_3)
@@ -629,33 +573,7 @@ def test_generate_all_circuits():
     for c in NON_ISOMORPHIC_3:
         assert red.isomorphic_circuit_in_set(c, edges, df3.circuit.values)
 
-    # A set of four 4 element circuits that should be there
-    # edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
-    # circuit = [("J",), ("J",), ("C",), ("J",)]
-    # equiv_cirs = utils.get_equiv_circuits(TEMP_FILE, circuit, edges)
-    # assert equiv_cirs.shape[0] == 4
-    # assert all(equiv_cirs['equiv_circuit'].iloc[1:] ==
-    #            equiv_cirs['unique_key'].iloc[0])
-
-    # # Test a few random circuits for 4
-    # edges = [(0, 1), (1, 2), (2, 3), (3, 0)]
-    # circuit = [("L",), ("J",), ("C",), ("J",)]
-    # assert red.isomorphic_circuit_in_set(circuit, edges,
-    #                                      df4.circuit.values,
-    #                                      df4.edges.values)
-    # circuit = [("J",), ("J",), ("C",), ("J",)]
-    # assert red.isomorphic_circuit_in_set(circuit, edges,
-    #                                      df4.circuit.values,
-    #                                      df4.edges.values)
-    # circuit = [("J",), ("C",), ("C",), ("J",)]
-    # assert red.isomorphic_circuit_in_set(circuit, edges,
-    #                                      df4.circuit.values,
-    #                                      df4.edges.values) is False
-    # circuit = [("L",), ("C",), ("L",), ("J",)]
-    # assert red.isomorphic_circuit_in_set(circuit, edges,
-    #                                      df4.circuit.values,
-    #                                      df4.edges.values)
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
     # Compare parallel vs. not parallel generation for 3 nodes
     df3 = df3_og.copy()
@@ -668,7 +586,7 @@ def test_generate_all_circuits():
     df_equality_check(df3, comp)
 
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
 
 
 def test_qps_enum():
@@ -698,24 +616,63 @@ def test_qps_enum():
     # reset enum params
     utils.set_enum_params()
 
-    os.remove(TEMP_FILE)
+    cleanup_db(TEMP_FILE)
+
+
+def test_planar_regular_enum_max_elem():
+
+
+    n = 6
+    enum.generate_graphs_node(TEMP_FILE, n_nodes=n, base=3, regular=True, planar=True, max_elem={("J",):1, 
+                                                                                                 ("L",):2})
+    enum.trim_graph_node(TEMP_FILE, n_nodes=n, base=3, n_workers=4, find_equiv=False)
+    df = utils.get_circuit_data_batch(TEMP_FILE, n_nodes=n)
+    for i, row in df.iterrows():
+        for elem, max_count in {("J",):1, ("L",):2}.items():
+            count = sum(1 for c in row['circuit'] if c == elem)
+            assert count <= max_count
+        G = utils.get_basegraphs(n)[utils.edges_to_graph_index(row['edges'])]
+        assert nx.is_planar(G)
+        assert nx.is_regular(G)
+    assert df.shape[0] == 1380
+
+    n = 6
+    enum.generate_graphs_node(TEMP_FILE, n_nodes=n, base=3, regular=True, planar=True, max_elem={("J",):(3,3), ("L",):(3,3),
+                                                                                                 ("C",):(3,3)})
+    enum.trim_graph_node(TEMP_FILE, n_nodes=n, base=3, n_workers=1, find_equiv=False)
+    df = utils.get_circuit_data_batch(TEMP_FILE, n_nodes=n)
+    for i, row in df.iterrows():
+        for elem, max_count in {("J",):(3,3), ("L",):(3,3), ("C",):(3,3)}.items():
+            count = sum(1 for c in row['circuit'] if c == elem)
+            if isinstance(max_count, tuple):
+                assert max_count[0] <= count <= max_count[1]
+            else:
+                assert count <= max_count
+        G = utils.get_basegraphs(n)[utils.edges_to_graph_index(row['edges'])]
+        assert nx.is_planar(G)
+        assert nx.is_regular(G)
+    assert df.shape[0] == 1680
+
+    utils.set_enum_params()  # reset enum params
+    cleanup_db(TEMP_FILE)
+    utils.LOADED_BASEGRAPHS = {}
 
 
 if __name__ == "__main__":
-    # test_generate_graphs_node()
-    test_generate_all_circuits()
-    # test_find_equiv_cir_series()
-    # test_gen_hamiltonian()
-    # test_categorize_hamiltonian()
-    # test_group_hamiltonian()
+    # test_num_possible_circuits()
+    # test_generate_for_specific_graph()
+    # test_delete_table()
     # test_find_uniuqe_ground_placements()
-
     # test_expand_ground_node()
+    # test_has_dangling_edges()
     # test_remove_dangling_edges()
-    # test_find_equiv_cir_series()
+    test_find_equiv_cir_series()
+    # test_generate_graphs_node()
+    # test__reduce_individual_set()
+    # test_trim_graph_node()
+    # test__gen_ham_class_row()
+    # test_add_hamiltonian_classes()
     # test_generate_all_circuits()
-    # test_unique_hams_in_df()
-    # test_group_hamiltonian()
-
     # test_qps_enum()
+    # test_planar_regular_enum_max_elem()
 

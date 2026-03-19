@@ -5,6 +5,7 @@ __all__ = ['get_circuit_data_batch', 'find_circuit_in_db', "get_equiv_circuits",
 
 import itertools
 import functools
+import multiprocessing
 from typing import Union
 from pathlib import Path
 from time import sleep
@@ -14,10 +15,8 @@ import numpy as np
 import networkx as nx
 import pandas as pd
 from tqdm import tqdm
-import sympy as sym
-from sympy import collect, expand_mul, Mul, Dummy
-from sympy.core.add import Add
-from sympy.core.symbol import Symbol
+
+from func_timeout import func_timeout, FunctionTimedOut
 
 # Set ENUM_PARAMS at end of file
 global ENUM_PARAMS
@@ -63,6 +62,8 @@ def edges_to_graph_index(edges: list, return_mapping: bool = False) -> int:
     This function finds a base graph that is isomorphic 
     to the input edge set.
 
+    If none is found, returns -1
+
     Parameters
     ----------
     edges : list of tuple of int
@@ -96,7 +97,7 @@ def edges_to_graph_index(edges: list, return_mapping: bool = False) -> int:
                     return i, GM.mapping
                 return i
 
-    raise ValueError("Error: No Isomorphic Graph Found")
+    return -1
 
 
 def encoding_to_components(circuit_raw: str, char_mapping: dict = None):
@@ -164,21 +165,34 @@ def convert_loaded_df(df: pd.DataFrame, n_nodes: int, char_mapping: dict = None)
                      for c in df.circuit.values]
 
 
-def get_basegraphs(n_nodes: int):
+def get_basegraphs(n_nodes: int, planar: bool = False, regular: bool = False):
     """
     Loads the base graphs for a specific number of nodes
 
     Args:
         n_nodes (int): number of nodes in the graph
+        planar (bool): if True, only load planar graphs
+        regular (bool): if True, only load regular graphs
     """
-    if int(n_nodes) > 6:
-        raise ValueError("Only basegraphs up to 6 nodes are included. See https://users.cecs.anu.edu.au/~bdm/data/graphs.html for larger sets of graphs.")
+    # Return if it has already been loaded
+    if str(n_nodes) in LOADED_BASEGRAPHS:
+        return LOADED_BASEGRAPHS[str(n_nodes)]
+    if int(n_nodes) > 6 and (not planar) and (not regular):
+        raise ValueError("Only basegraphs up to 6 nodes are included in generality. See https://users.cecs.anu.edu.au/~bdm/data/graphs.html for larger sets of graphs, or select planar/regular.")
+    elif n_nodes == 10 and not regular:
+        raise ValueError("Only regular graphs are included for 10 nodes. See https://users.cecs.anu.edu.au/~bdm/data/graphs.html for larger sets of graphs, or select regular.")
     # Load it if it hasn't been loaded
     if str(n_nodes) not in LOADED_BASEGRAPHS:
-        f = Path(DOWNLOAD_PATH, 'sircuitenum', 'graphs', f"graph{n_nodes}c.g6")
+        fname =  f"graph{n_nodes}c"
+        if planar:
+            fname = "planar_" + fname
+        if regular:
+            fname = fname + "_regular"
+        fname = fname + ".g6"
+        f = Path(DOWNLOAD_PATH, 'sircuitenum', 'graphs', fname)
         all_graphs = nx.read_graph6(f)
         # Fix two vertex case so it always returns a list
-        if n_nodes == 2:
+        if n_nodes == 2 or isinstance(all_graphs, nx.Graph):
             all_graphs = [all_graphs]
         LOADED_BASEGRAPHS[str(n_nodes)] = all_graphs
 
@@ -228,16 +242,18 @@ def count_elems_mapped(circuit: list, **kwargs):
         counts[elem] = 0
 
     for elems in circuit:
-        for elem in elems:
-            counts[elem] += 1
+        for elem in possible_elems:
+            for device in elems:
+                if elem in device:
+                    counts[elem] += 1
 
     return counts
 
 
 def add_elem_number(circuit: list, **kwargs):
     """
-    Counts the total number of each mapped circuit
-    element in the circuit
+    Returns a new circuit list where elements
+    are numbered
 
     Args:
         circuit (list): a list of element labels for the desired circuit
@@ -246,7 +262,7 @@ def add_elem_number(circuit: list, **kwargs):
                                is the unique set in CHAR_TO_COMBINATION
 
     Returns:
-        dict: each entry is element -> number, i.e. "J" -> 2
+        list: each element is followed by a number starting at 1 e.g. "C2" or "L1"
     """
     possible_elems = kwargs.get("possible_elems", list_single_elems())
     circuit_new = []
@@ -258,6 +274,7 @@ def add_elem_number(circuit: list, **kwargs):
     for elems in circuit:
         elems_new = []
         for elem in elems:
+            elem = [c for c in elem if c in possible_elems][0]
             counts[elem] += 1
             elems_new.append(elem+"_"+str(counts[elem]))
         circuit_new.append(tuple(elems_new))
@@ -393,7 +410,7 @@ def circuit_degree(circuit: list, edges: list):
 
     Returns:
        list of how many elements are connected to each node
-       e.g. [1, 2, 1]
+       e.g. [3, 2, 3]
     """
     node_repr = circuit_node_representation(circuit, edges)
     return list(sum([np.array(x) for x in node_repr.values()]))
@@ -489,7 +506,35 @@ def get_num_nodes(edges: list):
     return np.unique(np.concatenate(edges)).size
 
 
-def renumber_nodes(edges: list):
+def swap_nodes(edges: list, na: int, nb: int):
+    """
+    Swaps all instances of node na with nb and vice versa
+
+    Args:
+        edges (list): A list of edge connections for the desired circuit
+                       e.g. [(0,1), (0,2), (1,2)]
+        na (int): The first node to swap
+        nb (int): The second node to swap
+
+    Returns:
+        list: A new list of edges with the nodes swapped
+    """
+    new_edges = []
+    for (n0, n1) in edges:
+        # Swap na and nb
+        if n0 == nb:
+            n0 = na
+        elif n0 == na:
+            n0 = nb
+        if n1 == nb:
+            n1 = na
+        elif n1 == na:
+            n1 = nb
+        new_edges.append((n0, n1))
+    return new_edges
+
+
+def renumber_nodes(edges: list, return_map=False):
     """
     Renumbers nodes so that there is a continuous range
     of integers between 0 and the max number
@@ -504,15 +549,20 @@ def renumber_nodes(edges: list):
     """
     new_edges = edges[:]
     nodes = np.unique(np.concatenate(new_edges))
+    relabel_map = {}
     if nodes[-1] != nodes.shape[0]-1:
-        relabel_map = {}
         for i in range(len(nodes)):
             relabel_map[nodes[i]] = i
         for i in range(len(new_edges)):
             edge = new_edges[i]
             new_edges[i] = tuple([relabel_map[x] for x in edge])
+    else:
+        relabel_map = {i: i for i in range(len(nodes))}
 
-    return new_edges
+    if return_map:
+        return new_edges, relabel_map
+    else:
+        return new_edges
 
 
 def combine_redundant_edges(circuit: list, edges: list):
@@ -569,7 +619,7 @@ def circuit_in_set(circuit: list, c_set: list):
 ###############################################################################
 
 
-def write_df(file: str, df: pd.DataFrame, n_nodes: int, overwrite=False):
+def write_df(file: str, df: pd.DataFrame, n_nodes: int, overwrite=False, table_name: str = None):
     """
     Writes the given dataframe to a database file. Appends it if the
     table is already there.
@@ -599,14 +649,18 @@ def write_df(file: str, df: pd.DataFrame, n_nodes: int, overwrite=False):
         if_exists = "replace"
 
     with sqlite3.connect(file) as con:
-        to_write.to_sql(f"CIRCUITS_{n_nodes}_NODES",
-                        con, if_exists=if_exists, index=False)
+        if table_name is None:
+            table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
+        to_write.to_sql(table_name, con, if_exists=if_exists, index=False)
+        con.commit()
 
 
 def update_db_from_df(file: str, df: pd.DataFrame,
                       to_update: list,
                       str_cols: list = [],
-                      float_cols: list = []):
+                      float_cols: list = [],
+                      uids: list = [], parallel_safe: bool = True,
+                      table_name: str = None):
     """
     Updates the given columns listed in to_update
     for entries within df.
@@ -619,45 +673,65 @@ def update_db_from_df(file: str, df: pd.DataFrame,
         to_update (list): columns to update
         str_cols (list): columns that are string valued
         float_cols (list): columns that are float valued
+        uids (list): list of individual uids to update
+        parallel_safe (bool): if True, uses a method that is safe
+                              for parallel writing to the database
 
     Returns:
         None, writes the dataframe info to the database
 
     """
+    if len(uids) == 0:
+        uids = list(df.unique_key.values)
 
-    n_fields = len(to_update)
+
+
+
+    # Group updates by table (n_nodes)
+    updates_by_table = {}
+    
+    for uid in uids:
+        row = df.loc[uid]
+        n_nodes = row['n_nodes']
+        
+        if n_nodes not in updates_by_table:
+            updates_by_table[n_nodes] = []
+        
+        values = []
+        for col in to_update:
+            val = row[col]
+            if col not in str_cols and col not in float_cols:
+                values.append(int(val))
+            elif col in str_cols:
+                values.append(str(val).replace("'", ""))
+            else:
+                values.append(float(val))
+        values.append(row['unique_key'])  # WHERE clause value
+        updates_by_table[n_nodes].append(tuple(values))
 
     with sqlite3.connect(file, timeout=5000) as con:
         cur = con.cursor()
-        # sql_str = ""
-        for _, row in df.iterrows():
-            n_nodes = row['n_nodes']
-            sql_str = f"UPDATE CIRCUITS_{n_nodes}_NODES SET "
-            for i, col in enumerate(to_update):
-                val = row[col]
-                if col not in str_cols and col not in float_cols:
-                    val = int(val)
-                elif col in str_cols:
-                    val = str(val).replace("'", "")
-                else:
-                    val = float(val)
-                if i < n_fields - 1:
-                    sql_str += f"{col} = '{val}', "
-                else:
-                    sql_str += f"{col} = '{val}' "
-                    sql_str += f"WHERE unique_key = '{row['unique_key']}';\n"
         
+        cur.execute("PRAGMA busy_timeout = 30000")
+        if parallel_safe:
+            cur.execute("PRAGMA synchronous = NORMAL")
+        else:
+            cur.execute("PRAGMA cache_size = -64000")
+         
+        for n_nodes, batch_values in updates_by_table.items():
+            set_clause = ", ".join(f"{col} = ?" for col in to_update)
+            if table_name is None:
+                table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
+            sql = f"UPDATE {table_name} SET {set_clause} WHERE unique_key = ?"
+            
             written = False
             while not written:
                 try:
-                    cur.executescript(sql_str)
+                    cur.executemany(sql, batch_values)
                     written = True
-                except sqlite3.OperationalError:
-                    # Database is locked, wait random amount
-                    # of time and try again
-                    print("Write Conflict")
+                except sqlite3.OperationalError as exc:
                     sleep(np.abs(np.random.random()))
-
+        
         con.commit()
 
 
@@ -732,7 +806,9 @@ def get_circuit_data(file: str, unique_key: str, char_mapping: dict = None):
 
 def get_circuit_data_batch(db_file: str, n_nodes: int,
                            char_mapping: dict = None,
-                           filter_str: str = '') -> pd.DataFrame:
+                           filter_str: str = '',
+                           unique_keys:list[str] = [],
+                           table_name: str = '') -> pd.DataFrame:
     """
     Retrieve all circuits from the database for a specified number of nodes, 
     with optional filtering criteria.
@@ -757,15 +833,19 @@ def get_circuit_data_batch(db_file: str, n_nodes: int,
 
     if char_mapping is None:
         char_mapping = ENUM_PARAMS["CHAR_TO_COMBINATION"]
-    table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
-    connection_obj = sqlite3.connect(db_file, timeout=5000)
-    query = "SELECT * FROM {table} {filter_str}".format(
-        table=table_name, filter_str=filter_str)
-
-    df = pd.read_sql_query(query, connection_obj)
-
-    connection_obj.commit()
-    connection_obj.close()
+    if table_name == '':
+        table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
+    with sqlite3.connect(db_file, timeout=5000) as con:
+        if filter_str != '' and unique_keys != []:
+            raise ValueError("Provide either filter string or list of keys")
+        elif filter_str == '' and unique_keys == []:
+            query = f"SELECT * FROM {table_name}"
+        elif filter_str != "":
+            query = f"SELECT * FROM {table_name} {filter_str}"
+        else:
+            unique_keys = [f" '{k}'" for k in unique_keys]
+            query = f"SELECT * FROM {table_name} WHERE unique_key in ({','.join(unique_keys)})"
+        df = pd.read_sql_query(query, con)
 
     convert_loaded_df(df, n_nodes, char_mapping)
 
@@ -963,144 +1043,29 @@ def list_all_columns(db_file: str, table_name: str):
 
     return cols
 
-def collect_H_terms(H: Add, zero_ext: bool = True, 
-                    periodic_charge="n", periodic_phase="θ",
-                    extended_charge="q", extended_phase="φ",
-                    ext_charge: str = "ng", ext_flux: str = "_{ext}",
-                    no_coeff: bool = False, collect_phase: bool = True) -> Add:
-    """
-    Groups terms in the Hamiltonian.
 
-    Default settings are for our operator convention --
-    not Scqubits (q -> Q and \varphi -> \theta).
+def run_with_timeout(func, args=(), kwargs=None, timeout=1):
+    """
+    Runs the specified function with a timeout
 
     Args:
-        H (Add): Hamiltonian
-        zero_ext (bool, optional): Whether to zero all gate voltages/external
-                                   fluxes. Defaults to True.
-        periodic_charge (str, optional): symbol used for periodic charges.
-                                         Defaults to "n".
-        extended_charge (str, optional): symbol used for extended charges.
-                                         Defaults to "Q".
-        periodic_phase (str, optional): symbol used for periodic phases.
-                                        Defaults to "θ".
-        extended_phase (str, optional): symbol used for extended phases.
-                                         Defaults to "θ".
-        ext_charge (str, optional): symbol used in external charges.
-                                    Defaults to "ng".
-        ext_flux (str, optional): symbol used in external fluxes.
-                                   Defaults to "_{ext}"
-        no_coef (bool, optional): Remove all the coefficients,
-                                  only leaving operators.
-        collect_phase (bool, optional): for speed, don't collect the phase terms.
-                                        slightly messier, but faster.
-
+        func (function): function to run
+        args (tuple, optional): arguments to the function. Defaults to ().
+        kwargs (_type_, optional): kwarguments to the function. Defaults to None.
+        timeout (int, optional): timeout in minutes. Defaults to 1.
+    Raises:
+        KI: KeyboardInterrupt if interrupted by user
     Returns:
-        Add: Hamiltonian with terms grouped
+        None if didn't return, else the function output
     """
-
-    # List of variable types
-    q_list = [q for q in H.free_symbols
-              if extended_charge in str(q)]
-    n_list = [q for q in H.free_symbols
-              if periodic_charge in str(q) and
-              ext_charge not in str(q)]
-    theta_list = [th for th in H.free_symbols
-                  if (periodic_phase in str(th) or
-                      extended_phase in str(th)) and
-                  ext_flux not in str(th)]
-    ext_list = [q for q in H.free_symbols
-                if ext_charge in str(q) or
-                ext_flux in str(q)]
-    n_modes = len(theta_list)
-
-    # Set all external parameters to 0
-    if zero_ext:
-        for ext in ext_list:
-            H = H.subs(ext, 0)
-
-    # Terms to group
-    # Q and n
-    combosQ = {}
-    for terms in itertools.product(q_list + n_list, repeat=2):
-        combo = functools.reduce(lambda x, y: x*y, terms)
-        indices = np.unique([str(x)[-1] for x in terms])
-        combosQ[combo] = "E_{C"+''.join(indices)+"}"
-
-    # Phase
-    combos = []
-    combos_trig = []
-    if collect_phase:
-        for num_terms in range(1, n_modes + 1):
-            # Straight products
-            combos += list(set([functools.reduce(lambda x, y: x*y, z)
-                                for z in itertools.product(theta_list,
-                                                           repeat=num_terms)]))
-            # Trig products
-            # Encoding signals cos or sin
-            for encoding in itertools.product([0, 1], repeat=num_terms):
-                # Modes is which num_terms modes are being considered
-                for modes in itertools.combinations(range(n_modes), num_terms):
-                    trig_prod = 1
-                    for i, term in enumerate(encoding):
-                        if term:
-                            trig_prod *= sym.cos(theta_list[modes[i]])
-                        else:
-                            trig_prod *= sym.sin(theta_list[modes[i]])
-                    combos_trig += [trig_prod]
-
-        # Explicitly add theta squared terms if only one mode
-        if n_modes == 1:
-            combos += list(set([functools.reduce(lambda x, y: x*y, z)
-                                for z in itertools.product(theta_list,
-                                                           repeat=2)]))
-
-    H = collect(H, list(combosQ.keys()) + combos, func=sym.ratsimp)
-    if collect_phase:
-        H = collect(H, combos_trig)
-
-    if no_coeff:
-        H = _remove_coeff(H, list(combosQ.keys()) + combos + combos_trig)
-
-    return H, combos+combos_trig, combosQ
-
-
-def _remove_coeff(H, all_combos):
-    H_class = H.copy()
-    for combo in all_combos:
-        H_class = H_class.replace(lambda x: x.is_Mul
-                                  # Dividing removes all the terms in combo
-                                  and all([sym not in combo.free_symbols
-                                           for sym in
-                                           (x/combo).free_symbols])
-                                  # And all theta/n terms in x are also in
-                                  # combo
-                                  and all([sym in combo.free_symbols
-                                           for sym in x.free_symbols
-                                           if sym in all_combos]),
-                                  lambda x: -combo if str(x)[0] == "-"
-                                  else combo)
-    return H_class
-
-
-def zero_start_edges(edges):
-    """
-    Helper function to convert a list of edges from 1
-    indexing to 0 indexing of the nodes
-
-    Args:
-        edges (list of tuples of ints): a list of edge connections for the
-                                        desired circuit
-                                        (i.e., [(0,1),(1,2),(2,3),(3,0)])
-
-    Returns:
-         list[tuple[int]]: edges modified to have zero as the lowest
-                           index
-    """
-    min_node = min([min(edge) for edge in edges])
-    if min_node > 0:
-        edges = [(edge[0] - min_node, edge[1] - min_node) for edge in edges]
-    return edges
+    if kwargs is None:
+        kwargs = {}
+    try:
+        return func_timeout(60*timeout, func, args, kwargs)
+    except FunctionTimedOut:
+        return None
+    except KeyboardInterrupt as KI:
+        raise KI
 
 
 def set_enum_params(char_to_combo = {'0': ('C',),

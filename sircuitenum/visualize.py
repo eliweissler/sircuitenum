@@ -398,8 +398,9 @@ def draw_all_qubits(file: str, n_nodes: int, out_dir: str,
 
 def draw_circuit_diagram(circuit: list, edges: list,
                          out: str = "",
-                         scale: float = 4.0, layout: str = 'fixed',
-                         spread: float = 2/5, graph_index: int = None) -> None:
+                         scale: float = 4.0, layout: Union[str, dict] = 'fixed',
+                         spread: float = 2/5, graph_index: int = None,
+                         label=False, label_loc={}) -> None:
     """
     Draw the circuit diagram using `schemdraw`.
 
@@ -419,10 +420,14 @@ def draw_circuit_diagram(circuit: list, edges: list,
         the plot is displayed interactively.
     scale : float
         Scaling factor for the networkx positions to spread out the plots if needed.
-    layout : str
+    layout : Union[str, dict]
         Options for graph layouts.  
         **"spring"** produces aesthetically pleasing circuits but may lead to 
         overlapping elements, even for planar graphs.
+        **"fixed"** uses pre-determined node positions G_POS.
+        To specify positions directly, give a dictionary that maps node to
+        position {0: np.array([1., 1.]), 1: np.array([0., 0.])}
+
     spread : float
         Fraction of edge length used to fan out parallel components.
     graph_index : int
@@ -443,7 +448,9 @@ def draw_circuit_diagram(circuit: list, edges: list,
     >>>     scale=1.5
     >>> )
     """
-    edges = utils.zero_start_edges(edges)
+
+    if not isinstance(layout, dict):
+        edges = utils.renumber_nodes(edges)
 
     elem_dict = {
         'C': {'default_unit': 'GHz', 'default_value': 0.2},
@@ -482,11 +489,19 @@ def draw_circuit_diagram(circuit: list, edges: list,
         pos = nx.spring_layout(G)
     elif layout == 'fixed':
         pos = G_POS[G.number_of_nodes()][graph_index]
-
+    elif layout == 'polygon':
+        pos = {}
+        n_nodes = utils.get_num_nodes(edges)
+        for n in range(n_nodes+1):
+            angle = 2*n*np.pi/n_nodes
+            pos[n] = np.array((np.cos(angle), np.sin(angle)))
+    else:
+        pos = {k: np.array(v) for k,v in layout.items()}
+    
     # Scale
     scaled_pos = {}
     for k in pos:
-        scaled_pos[k] = pos[k]*scale
+        scaled_pos[k] = pos[k]*float(scale)
 
     # Define the circuit elements
     elem_bank = {
@@ -502,8 +517,11 @@ def draw_circuit_diagram(circuit: list, edges: list,
     with schemdraw.Drawing() as d:
         for n0 in G.nodes():
             # Draw a dot at every node
-            d.add(DotCustom(radius=0.1, fill="#FFFFFF", color="#000000",
-                            lw=1).at(scaled_pos[n0]))
+            node_dot = DotCustom(radius=0.1, fill="#FFFFFF", color="#000000",
+                            lw=1).at(scaled_pos[n0])
+            if label:
+                node_dot.label(str(n0), label_loc.get(n0, "top").lower())
+            d.add(node_dot)
             # d.add(schemdraw.segments.SegmentCircle(scaled_pos[n0],
             #                                        radius=0.2,
             #                                        color="#000000",
