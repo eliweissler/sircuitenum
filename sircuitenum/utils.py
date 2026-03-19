@@ -652,6 +652,7 @@ def write_df(file: str, df: pd.DataFrame, n_nodes: int, overwrite=False, table_n
         if table_name is None:
             table_name = 'CIRCUITS_' + str(n_nodes) + '_NODES'
         to_write.to_sql(table_name, con, if_exists=if_exists, index=False)
+        con.commit()
 
 
 def update_db_from_df(file: str, df: pd.DataFrame,

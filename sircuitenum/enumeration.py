@@ -6,6 +6,7 @@ __all__ = ["generate_all_circuits", "generate_graphs_node", "trim_graph_node", "
 import sqlite3
 import itertools
 import functools
+import re
 import traceback
 import contextlib
 import random
@@ -33,9 +34,54 @@ from sircuitenum import qpackage_interface as pi
 from sircuitenum import quantize
 from sircuitenum.singular_interface import initialize_singular
 
-# -------------------------------------------------------------------
-# Functions
-# -------------------------------------------------------------------
+
+def _create_temp_table_like(con: sqlite3.Connection, source_table: str,
+                            temp_table: str, where_clause: str = None) -> None:
+    """Create a temp table that preserves the source table schema and keys."""
+    cur = con.cursor()
+    row = cur.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+        (source_table,)
+    ).fetchone()
+    if row is None or row[0] is None:
+        raise ValueError(f"Could not find schema for table {source_table}")
+
+    create_sql = row[0]
+    pattern = rf'^(CREATE TABLE\s+)("?){re.escape(source_table)}\2'
+    temp_sql = re.sub(pattern, rf'\1{temp_table}', create_sql, count=1)
+    if temp_sql == create_sql:
+        raise ValueError(f"Could not clone schema for table {source_table}")
+
+    cur.execute(temp_sql)
+
+    if where_clause is not None:
+        cur.execute(f"""
+            INSERT OR IGNORE INTO {temp_table}
+            SELECT * FROM {source_table}
+            WHERE {where_clause}
+        """)
+
+    cur.execute(
+        f"CREATE INDEX IF NOT EXISTS idx_{temp_table}_edge_counts "
+        f"ON {temp_table}(edge_counts)"
+    )
+    con.commit()
+
+
+def _swap_in_temp_table(con: sqlite3.Connection, table_name: str,
+                        temp_table: str) -> None:
+    """Merge untouched rows back into the temp table, then swap it in."""
+    cur = con.cursor()
+    cur.execute(f"""
+        INSERT OR IGNORE INTO {temp_table}
+        SELECT * FROM {table_name}
+    """)
+    con.commit()
+    cur.execute(f"DROP TABLE IF EXISTS {table_name}")
+    cur.execute(f"ALTER TABLE {temp_table} RENAME TO {table_name}")
+    con.commit()
+
+
 def num_possible_circuits(base: int, n_nodes: int, quiet: bool = True) -> int:
     """
     Estimate the number of possible circuits for a given number of edges and vertices.
@@ -101,7 +147,7 @@ def generate_for_specific_graph(base: int, graph: nx.Graph,
     
     num_configs = base**n_edges
     save_every = max(1, num_configs // 1000)
-    for i, circuit in tqdm(enumerate(itertools.product(choices, repeat=n_edges)), total=num_configs):
+    for i, circuit in tqdm(enumerate(itertools.product(choices, repeat=n_edges)), total=num_configs, position=0, leave=False):
         to_continue = True
         counts = {}
         for elem in circuit:
@@ -196,7 +242,7 @@ def expand_ground_node(df: pd.DataFrame):
     """
     new_df = []
     df["ground_node"] = -1
-    for i in tqdm(range(df.shape[0])):
+    for i in tqdm(range(df.shape[0]), position=0, leave=False):
         row = df.iloc[[i]].copy()
         circuit, edges = row["circuit"].iloc[0], row["edges"].iloc[0]
         for gnd in find_unique_ground_placements(circuit, edges):
@@ -333,7 +379,7 @@ def generate_graphs_node(db_file: str, n_nodes: int,
 
     all_graphs = utils.get_basegraphs(n_nodes, planar=planar, regular=regular)
     data = []
-    for graph_index, G in tqdm(enumerate(all_graphs), total=len(all_graphs)):
+    for graph_index, G in tqdm(enumerate(all_graphs), total=len(all_graphs), position=0, leave=False):
         data.append(generate_for_specific_graph(base, G,
                                                 graph_index,
                                                 cursor_obj,
@@ -408,13 +454,11 @@ def trim_graph_node(db_file: str, n_nodes: int,
                 con.commit()
             
             # Create temp table with same schema
-            cur.execute(f"CREATE TABLE {temp_table} AS SELECT * FROM {table_name} WHERE 0")
-            con.commit()
+            _create_temp_table_like(con, table_name, temp_table)
         else:
             # If resuming but temp table doesn't exist, create it
             if temp_table not in tables:
-                cur.execute(f"CREATE TABLE {temp_table} AS SELECT * FROM {table_name} WHERE 0")
-                con.commit()
+                _create_temp_table_like(con, table_name, temp_table)
         
         # Get all edge_counts from main table
         sql_query = f"SELECT DISTINCT edge_counts FROM {table_name}"
@@ -452,7 +496,7 @@ def trim_graph_node(db_file: str, n_nodes: int,
     if n_workers > 1:
         with Pool(processes=n_workers) as pool:
             for entry, to_update, str_cols in tqdm(pool.imap_unordered(_reduce_individual_set, args),
-                        total=n_to_do):
+                        total=n_to_do, position=0, leave=False):
                 df_update.append(entry)
                 count += 1
                 if count % save_every == 0 or count == n_to_do:
@@ -460,7 +504,7 @@ def trim_graph_node(db_file: str, n_nodes: int,
                     utils.write_df(db_file, combined_df, n_nodes, overwrite=False, table_name=temp_table)
                     df_update = []
     else:
-        for arg_set in tqdm(args):
+        for arg_set in tqdm(args, position=0, leave=False):
             entry, to_update, str_cols = _reduce_individual_set(arg_set)
             df_update.append(entry)
             count += 1
@@ -470,20 +514,7 @@ def trim_graph_node(db_file: str, n_nodes: int,
                 df_update = []
     # Move temp table to main table
     with sqlite3.connect(db_file) as con:
-        cur = con.cursor()
-        # Insert rows from main table that aren't in temp table
-        cur.execute(f"""
-            INSERT INTO {temp_table}
-            SELECT m.* FROM {table_name} m
-            LEFT JOIN {temp_table} t ON m.unique_key = t.unique_key
-            WHERE t.unique_key IS NULL
-        """)
-        con.commit()
-        # Delete old table
-        # Rename temp table to main table
-        cur.execute(f"DROP TABLE IF EXISTS {table_name}")
-        cur.execute(f"ALTER TABLE {temp_table} RENAME TO {table_name}")
-        con.commit()
+        _swap_in_temp_table(con, table_name, temp_table)
 
 def _reduce_individual_set(args: tuple):
     """
@@ -577,7 +608,11 @@ def _gen_ham_class_row(args):
     else:
         circuit, edges = utils.add_elem_number(entry.circuit), entry.edges
     try:
-        Z, var_types, h_class = quantize.choose_Z(circuit, edges)
+        # 10 minute timeout so we don't hang indefinitely on a single circuit
+        ans = utils.run_with_timeout(quantize.choose_Z, (circuit, edges), timeout=10)
+        if ans is None:
+            raise TimeoutError("Timeout in choosing Z")
+        Z, var_types, h_class = ans
         wJT_key = ",".join(str(x) for x in h_class[4]).replace("-", "n")
         h_class_str = "_".join([h_class[0],"-".join([h_class[1], 
                                 str(h_class[2]), str(h_class[3]), wJT_key]),
@@ -631,7 +666,7 @@ def _gen_ham_class_row(args):
 
 def add_hamiltonian_classes(db_file: str, n_nodes: int,
                               n_workers: int = 4, resume: bool = False,
-                              eq_params=False, save_every=1):
+                              eq_params=False, save_every=10):
     """
     Constructs a variable transformation and identifies the hamiltonian
     class for each circuit in the database
@@ -681,14 +716,17 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
         if temp_table not in tables:
             if resume:
                 if eq_params:
-                    cur.execute(f"CREATE TABLE {temp_table} AS SELECT * FROM {table_name} WHERE\
-                                H_class_sym NOT LIKE 'UNDEFINED' AND H_class_sym IS NOT NULL")
+                    _create_temp_table_like(
+                        con, table_name, temp_table,
+                        where_clause="H_class_sym NOT LIKE 'UNDEFINED' AND H_class_sym IS NOT NULL"
+                    )
                 else:
-                    cur.execute(f"CREATE TABLE {temp_table} AS SELECT * FROM {table_name} WHERE\
-                            H_class NOT LIKE 'UNDEFINED' AND H_class IS NOT NULL")
+                    _create_temp_table_like(
+                        con, table_name, temp_table,
+                        where_clause="H_class NOT LIKE 'UNDEFINED' AND H_class IS NOT NULL"
+                    )
             else:
-                cur.execute(f"CREATE TABLE {temp_table} AS SELECT * FROM {table_name} WHERE 0")
-            con.commit()
+                _create_temp_table_like(con, table_name, temp_table)
                
         # If we're resuming filter out those without H_class made
         sql_query = f"SELECT DISTINCT unique_key\
@@ -727,7 +765,7 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
     if n_workers > 1:
         with Pool(processes=n_workers, initializer=initialize_singular) as pool:
             for entry, to_update, str_cols in tqdm(pool.imap_unordered(_gen_ham_class_row, args),
-                            total=n_to_do):
+                            total=n_to_do, position=0, leave=False):
                 count += 1
                 df_update.append(entry)
                 if count % save_every == 0 or count == n_to_do:
@@ -735,7 +773,7 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
                     utils.write_df(db_file, combined_df, temp_table, overwrite=False, table_name=temp_table)
                     df_update = []
     else:
-        for arg_set in tqdm(args, total=n_to_do):
+        for arg_set in tqdm(args, total=n_to_do, position=0, leave=False):
             entry, to_update, str_cols = _gen_ham_class_row((arg_set[0], arg_set[1], arg_set[2], arg_set[3]))
             count += 1
             df_update.append(entry)
@@ -746,20 +784,7 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
 
     # Move temp table to main table
     with sqlite3.connect(db_file) as con:
-        cur = con.cursor()
-        # Insert rows from main table that aren't in temp table
-        cur.execute(f"""
-            INSERT INTO {temp_table}
-            SELECT m.* FROM {table_name} m
-            LEFT JOIN {temp_table} t ON m.unique_key = t.unique_key
-            WHERE t.unique_key IS NULL
-        """)
-        con.commit()
-        # Delete old table
-        # Rename temp table to main table
-        cur.execute(f"DROP TABLE IF EXISTS {table_name}")
-        cur.execute(f"ALTER TABLE {temp_table} RENAME TO {table_name}")
-        con.commit()
+        _swap_in_temp_table(con, table_name, temp_table)
 
 
 
