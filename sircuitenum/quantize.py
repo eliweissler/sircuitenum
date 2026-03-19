@@ -1350,11 +1350,8 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
     for trMat in to_decouple:
         for (i, j) in pairs:
             vars_in_eq = [v for v in var_list if v in trMat[i, j].free_symbols]
-<<<<<<< HEAD
             # If it takes more than 1 second to determine equations for decoupling, then
             # assume it's unsolvable and move on to avoid long computation times
-=======
->>>>>>> d800c56b9dcb0370ff88f64d03458ec8d71a3b09
             ans = utils.run_with_timeout(eq_indep_of_vars, (trMat[i, j], vars_in_eq), timeout=1/60)
             count += 1
             if ans is None:
