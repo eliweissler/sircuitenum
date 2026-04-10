@@ -42,3 +42,9 @@ will necessarily be stable between releases. Code that depends on this package i
 state is very likely to break when the package version changes.
 
 At the moment, a few circuits examined in the paper require a development branch of [SQcircuit](https://github.com/stanfordLINQS/SQcircuit/tree/dev-ew) to run properly.
+
+
+Runtime
+----------
+
+It is possible to consider four node circuits with a personal computer, but more resources are needed to enumerate and categorize five node circuits. We required about 50,000 core hours.
