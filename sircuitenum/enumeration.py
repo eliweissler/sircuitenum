@@ -140,6 +140,7 @@ def generate_for_specific_graph(base: int, graph: nx.Graph,
 
     edges = graph.edges
     n_edges = len(edges)
+    basegraph_g6 = nx.to_graph6_bytes(graph, header=False).decode("ascii").strip()
     if return_vals:
         data = []
 
@@ -162,7 +163,9 @@ def generate_for_specific_graph(base: int, graph: nx.Graph,
                 to_continue = False
                 break
         if to_continue:
-            c_dict = utils.circuit_entry_dict(circuit, graph_index, n_nodes, i, base)
+            c_dict = utils.circuit_entry_dict(circuit, graph_index, n_nodes, i,
+                                              base,
+                                              basegraph_g6=basegraph_g6)
             if cursor_obj is not None:
                 utils.write_circuit(cursor_obj, c_dict,
                                     to_commit= i % save_every == 0)
@@ -370,7 +373,7 @@ def generate_graphs_node(db_file: str, n_nodes: int,
         sql_str = f"CREATE TABLE {table_name} (circuit, graph_index int, edge_counts, \
             unique_key, n_nodes int, base int, no_series int, \
             filter int, in_non_iso_set int, \
-            equiv_circuit, "
+            equiv_circuit, basegraph_g6, "
         sql_str += "PRIMARY KEY(unique_key))"
         cursor_obj.execute(sql_str)
         connection_obj.commit()
@@ -426,13 +429,6 @@ def trim_graph_node(db_file: str, n_nodes: int,
     if base is None:
         base = len(utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
 
-    # Get the max number of edges
-    # from fully connected graph
-    all_graphs = utils.get_basegraphs(n_nodes)
-    n_edges_in_graph = [len(g.edges) for g in all_graphs]
-    n_graphs = len(all_graphs)
-    max_edges = max(n_edges_in_graph)
-
     # Loop through all possible numbers of each component
     # For all unique base graphs and create non-isomorphic
     # Sets within these slices
@@ -463,6 +459,14 @@ def trim_graph_node(db_file: str, n_nodes: int,
         # Get all edge_counts from main table
         sql_query = f"SELECT DISTINCT edge_counts FROM {table_name}"
         counts_main = set(x[0] for x in cur.execute(sql_query).fetchall())
+
+        # Build edge_counts -> existing graph_index mapping from the table.
+        # This keeps trimming compatible with planar/regular subsets where
+        # graph_index values are sparse/non-contiguous in the default family.
+        sql_query = f"SELECT DISTINCT edge_counts, graph_index FROM {table_name}"
+        graph_indices_by_counts = {}
+        for counts_str, graph_index in cur.execute(sql_query).fetchall():
+            graph_indices_by_counts.setdefault(counts_str, []).append(int(graph_index))
         
         # Get edge_counts already processed in temp table
         if resume:
@@ -475,17 +479,11 @@ def trim_graph_node(db_file: str, n_nodes: int,
 
     args = []
     for counts_str in counts_to_consider:
-        n_edges = sum(int(x) for x in counts_str.split(","))
-        for graph_index in range(n_graphs):
-            # Skip entries without the right number of edges
-            # in edge counts
-            if n_edges != n_edges_in_graph[graph_index]:
-                continue
-            else:
-                filter_str = f"WHERE edge_counts = '{counts_str}'\
-                               AND graph_index = {graph_index}"
-                args.append((filter_str, db_file, n_nodes,
-                             utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], False, find_equiv))
+        for graph_index in graph_indices_by_counts.get(counts_str, []):
+            filter_str = f"WHERE edge_counts = '{counts_str}'\
+                           AND graph_index = {graph_index}"
+            args.append((filter_str, db_file, n_nodes,
+                         utils.ENUM_PARAMS["CHAR_TO_COMBINATION"], False, find_equiv))
 
     # Shuffle to spread out longer cases for more accurate time
     # estimates and better parallel performance

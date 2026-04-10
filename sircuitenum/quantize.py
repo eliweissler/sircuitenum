@@ -9,7 +9,7 @@ import time
 from copy import deepcopy
 
 from dataclasses import dataclass, field
-from typing import Union, Sequence, Iterable, Mapping, Optional, Tuple
+from typing import Union, Sequence, Iterable, Mapping, Optional, Tuple, Any
 
 import sympy as sym
 import numpy as np
@@ -940,6 +940,176 @@ def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True, extra_n
             lowest_perm = perm + tuple(range(n_dyn, n_nodes))
 
     return lowest_hash, lowest_perm
+
+
+def _decode_upper_triangle_bits(bits: str, n: int) -> list[tuple[int, int]]:
+    """Decode packed upper-triangle bitstring into index pairs."""
+    pairs = []
+    k = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            if k < len(bits) and bits[k] == "1":
+                pairs.append((i, j))
+            k += 1
+    return pairs
+
+
+def parse_h_class(h_class: Union[str, tuple]) -> dict[str, Any]:
+    """
+    Parse an H-class string/tuple into a structured dictionary.
+
+    Accepted forms:
+    - tuple from ``choose_Z(...)[2]`` with ``extra_nl=True`` shape:
+      ``(mode_str, w_key, n_val, max_n_val, wJT_flat, total_nz, L_key, C_key)``
+    - serialized string stored by enumeration:
+      ``mode_wkey-nval-maxn-wJTflat_totalnz_Lkey_Ckey``
+    """
+    if isinstance(h_class, tuple):
+        if len(h_class) < 8:
+            raise ValueError(f"Unexpected h_class tuple length: {len(h_class)}")
+        mode_str = str(h_class[0])
+        w_nonzero_key = str(h_class[1])
+        n_val = int(h_class[2])
+        max_n_val = int(h_class[3])
+        wjt_flat = tuple(int(x) for x in h_class[4])
+        total_nz = int(h_class[5])
+        L_key = str(h_class[6])
+        C_key = str(h_class[7])
+    elif isinstance(h_class, str):
+        parts = h_class.split("_", 4)
+        if len(parts) != 5:
+            raise ValueError(f"Unexpected H_class format: {h_class}")
+        mode_str, w_block, total_nz_str, L_key, C_key = parts
+        # Split from the right because w_nonzero_key itself contains a dash.
+        w_parts = w_block.rsplit("-", 3)
+        if len(w_parts) != 4:
+            raise ValueError(f"Unexpected w-block format: {w_block}")
+        w_nonzero_key, n_val_str, max_n_val_str, wjt_flat_str = w_parts
+        n_val = int(n_val_str)
+        max_n_val = int(max_n_val_str)
+        total_nz = int(total_nz_str)
+
+        wjt_flat = []
+        if wjt_flat_str.strip() != "":
+            for token in wjt_flat_str.split(","):
+                token = token.strip().replace("n", "-")
+                if token != "":
+                    wjt_flat.append(int(token))
+        wjt_flat = tuple(wjt_flat)
+    else:
+        raise TypeError("h_class must be a tuple or string")
+
+    if not (mode_str.isdigit() and len(mode_str) == 3):
+        raise ValueError(f"mode_str expected 3 digits, got: {mode_str}")
+
+    n_comp = int(mode_str[0])
+    n_ext = int(mode_str[1])
+    n_harm = int(mode_str[2])
+    n_dyn = n_comp + n_ext + n_harm
+    n_nl = n_comp + n_ext
+
+    return {
+        "mode_str": mode_str,
+        "n_comp": n_comp,
+        "n_ext": n_ext,
+        "n_harm": n_harm,
+        "n_dyn": n_dyn,
+        "n_nl": n_nl,
+        "w_nonzero_key": w_nonzero_key,
+        "n_val": n_val,
+        "max_n_val": max_n_val,
+        "wjt_flat": wjt_flat,
+        "total_nz": total_nz,
+        "L_key": L_key,
+        "C_key": C_key,
+    }
+
+
+def symbolic_hamiltonian_from_h_class(h_class: Union[str, tuple],
+                                      return_parts: bool = False,
+                                      no_coeff: bool = False):
+    """
+    Reconstruct a canonical symbolic Hamiltonian from stored H-class metadata.
+
+    This avoids recomputing a change-of-coordinates matrix ``Z`` and provides a
+    symbolic representative based on the class signature only.
+    """
+    parsed = parse_h_class(h_class)
+    n_comp = parsed["n_comp"]
+    n_ext = parsed["n_ext"]
+    n_harm = parsed["n_harm"]
+    n_dyn = parsed["n_dyn"]
+    n_nl = parsed["n_nl"]
+
+    # Canonical variables in [compact, extended, harmonic] order.
+    compact_charge = [sym.Symbol(f"{PERIODIC_CHARGE}{i+1}", real=True) for i in range(n_comp)]
+    compact_phase = [sym.Symbol(f"{PERIODIC_PHASE}{i+1}", real=True) for i in range(n_comp)]
+    rest_count = n_ext + n_harm
+    rest_charge = [sym.Symbol(f"{EXTENDED_CHARGE}{i+1+n_comp}", real=True) for i in range(rest_count)]
+    rest_phase = [sym.Symbol(f"{EXTENDED_PHASE}{i+1+n_comp}", real=True) for i in range(rest_count)]
+    charge_vars = compact_charge + rest_charge
+    phase_vars = compact_phase + rest_phase
+
+    # Build quadratic parts using coupling bitmasks.
+    try:
+        _, L_bits = parsed["L_key"].split("-", 1)
+        _, C_bits = parsed["C_key"].split("-", 1)
+    except ValueError as exc:
+        raise ValueError("L_key/C_key must have format count-bits") from exc
+
+    L_pairs = _decode_upper_triangle_bits(L_bits, n_dyn)
+    C_pairs = _decode_upper_triangle_bits(C_bits, n_dyn)
+
+    H_c = sym.Integer(0)
+    H_l = sym.Integer(0)
+    for i in range(n_dyn):
+        if not no_coeff:
+            H_c += sym.Symbol(f"E_{{C{i+1}}}", real=True) * charge_vars[i]**2
+            if i >= n_comp:
+                H_l += sym.Symbol(f"E_{{L{i+1}}}", real=True) * phase_vars[i]**2
+        else:
+            H_c +=  charge_vars[i]**2
+            if i >= n_comp:
+                H_l += phase_vars[i]**2
+    if not no_coeff:
+        for i, j in C_pairs:
+            H_c += sym.Symbol(f"E_{{C{i+1}{j+1}}}", real=True) * charge_vars[i] * charge_vars[j]
+        for i, j in L_pairs:
+            H_l += sym.Symbol(f"E_{{L{i+1}{j+1}}}", real=True) * phase_vars[i] * phase_vars[j]
+    else:
+        for i, j in C_pairs:
+            H_c += charge_vars[i] * charge_vars[j]
+        for i, j in L_pairs:
+            H_l += phase_vars[i] * phase_vars[j]
+
+    # Reconstruct cosine terms from flattened canonical wJT entries.
+    H_j = sym.Integer(0)
+    wjt_flat = parsed["wjt_flat"]
+    if n_nl > 0:
+        if len(wjt_flat) % n_nl != 0:
+            raise ValueError("wJT_flat length is not divisible by number of nonlinear modes")
+        n_jj = len(wjt_flat) // n_nl
+        for row in range(n_jj):
+            coeffs = wjt_flat[row*n_nl:(row+1)*n_nl]
+            arg = sym.Integer(0)
+            for col, coeff in enumerate(coeffs):
+                if coeff != 0:
+                    arg += int(coeff) * phase_vars[col]
+            if arg != 0:
+                if not no_coeff:
+                    H_j += -sym.Symbol(f"E_{{J{row+1}}}", positive=True, real=True) * sym.cos(arg)
+                else:
+                    H_j += -sym.cos(arg)
+
+    H = H_c + H_l + H_j
+    if return_parts:
+        parsed = parsed.copy()
+        parsed["L_pairs"] = L_pairs
+        parsed["C_pairs"] = C_pairs
+        parsed["charge_vars"] = charge_vars
+        parsed["phase_vars"] = phase_vars
+        return H, parsed
+    return H
 
 
 def incidence_to_square(w, vals):
@@ -1928,7 +2098,7 @@ def symbolic_hamiltonian(circuit, edges, Cv=None, V=None, Z=None,
     # Transform C, L and Qv
     cMat = sym.transpose(Z)*cMat*Z
     lMat = sym.transpose(Z)*lMat*Z
-    Qv = Z.inv()*Qv
+    Qv = Z.transpose()*Qv
     wJT = wJT*Z
         
 
@@ -2257,7 +2427,17 @@ if __name__ == "__main__":
     circuit = utils.add_elem_number(circuit)
     pos = {0: (0, 0), 1: (1, 0), 2: (1, 1), 3: (0, 1)}
 
-    draw_circuit_diagram(circuit, edges, out="test_circuit.png", scale=5.0,
+
+    circuit = [("J","C"), ("J","C"), ("J",), ("L",), ("L",)]
+    # circuit = [("J",), ("J",), ("J",), ("L1",), ("L2",)]
+    # edges = [(0, 1), (0, 3), (2, 3), (0, 2), (1, 3)]
+    edges = [(0, 1), (1, 2), (1, 3), (2, 3), (0, 3)]
+
+    circuit = [['J', "C"], ['J', "C"], ['L'], ['J'], ['L'], ["C"], ["C"]]
+    edges = [(0, 2), (0, 3), (1, 3), (1, 4), (2, 4), (0, 1), (0,4)]
+    pos = "planar"
+
+    draw_circuit_diagram(circuit, edges, out="test_circuit.pdf", scale=5.0,
                         layout=pos, label=True)
 
     cMat = gen_cap_mat(circuit, edges)

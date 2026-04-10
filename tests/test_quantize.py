@@ -935,6 +935,46 @@ def test_H_hash():
     assert new_to_old(hash) == '111_1-100_4_1-001_3-111'
 
 
+def test_parse_h_class():
+    h_tuple = ("111", "1-100", 4, 1, (1, -1, 0, 0), 0, "0-000", "0-000")
+    h_str = "111_1-100-4-1-1,n1,0,0_0_0-000_0-000"
+
+    parsed_tuple = quantize.parse_h_class(h_tuple)
+    parsed_str = quantize.parse_h_class(h_str)
+
+    assert parsed_tuple["mode_str"] == parsed_str["mode_str"] == "111"
+    assert parsed_tuple["n_comp"] == parsed_str["n_comp"] == 1
+    assert parsed_tuple["n_ext"] == parsed_str["n_ext"] == 1
+    assert parsed_tuple["n_harm"] == parsed_str["n_harm"] == 1
+    assert parsed_tuple["wjt_flat"] == parsed_str["wjt_flat"] == (1, -1, 0, 0)
+
+
+def test_symbolic_hamiltonian_from_h_class():
+    h_tuple = ("111", "1-100", 4, 1, (1, -1, 0, 0), 0, "0-000", "0-000")
+    h_str = "111_1-100-4-1-1,n1,0,0_0_0-000_0-000"
+
+    H_tuple, parts_tuple = quantize.symbolic_hamiltonian_from_h_class(h_tuple, return_parts=True)
+    H_str, parts_str = quantize.symbolic_hamiltonian_from_h_class(h_str, return_parts=True)
+
+    assert sym.simplify(H_tuple - H_str) == 0
+    assert len(H_tuple.atoms(sym.cos)) == 1
+    assert parts_tuple["L_pairs"] == parts_str["L_pairs"] == []
+    assert parts_tuple["C_pairs"] == parts_str["C_pairs"] == []
+
+    bad_h_str = "not_a_valid_hclass"
+    try:
+        quantize.symbolic_hamiltonian_from_h_class(bad_h_str)
+        assert False, "Expected ValueError for malformed H_class string"
+    except ValueError:
+        pass
+
+    h_str = "200_0-0-2-1-1,0,0,1_0_0-0_0-0"
+
+    H_str, parts_str = quantize.symbolic_hamiltonian_from_h_class(h_str, return_parts=True)
+
+    assert sym.latex(H_str, order="grlex") == 'E_{C1} n_{1}^{2} + E_{C2} n_{2}^{2} - E_{J1} \\cos{\\left(θ_{1} \\right)} - E_{J2} \\cos{\\left(θ_{2} \\right)}'
+
+
 def test_incidence_to_square():
 
     wTest = sym.Matrix([[1, 0, 1, 1],
@@ -1633,7 +1673,7 @@ def main():
     # test_decoupling_transformation()
     # test_decouple_column()
 
-    test_symbolic_hamiltonian()
+    # test_symbolic_hamiltonian()
     # test__var_col_perms()
 
     # test_unique_compact()
@@ -1669,6 +1709,8 @@ def main():
     # test_gen_cap_mat()
     # test_var_trans_basis()
     # test__cached_solve()
+
+    test_symbolic_hamiltonian_from_h_class()
 
     return
 

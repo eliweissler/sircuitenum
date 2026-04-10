@@ -46,8 +46,13 @@ TEST_GI = 1
 TEST_NN = 3
 TEST_B = 7
 TEST_CN = 16
+TEST_BG_G6 = nx.to_graph6_bytes(
+    utils.get_basegraphs(TEST_NN)[TEST_GI],
+    header=False,
+).decode("ascii").strip()
 TEST_ENTRY = utils.circuit_entry_dict(TEST_C, TEST_GI, TEST_NN,
-                                      TEST_CN, TEST_B)
+                                      TEST_CN, TEST_B,
+                                      basegraph_g6=TEST_BG_G6)
 
 TEMP_FILE = 'temp.db'
 
@@ -485,6 +490,14 @@ def test_circuit_entry_dict():
     assert entry['edge_counts'] == "1,1,1,0,0,0,0"
     assert entry['n_nodes'] == n_nodes
     assert entry['base'] == base
+    assert 'basegraph_g6' not in entry
+
+    G = utils.get_basegraphs(n_nodes)[graph_index]
+    g6 = nx.to_graph6_bytes(G, header=False).decode("ascii").strip()
+    entry = utils.circuit_entry_dict(circuit, graph_index, n_nodes,
+                                     circuit_num, base,
+                                     basegraph_g6=g6)
+    assert entry['basegraph_g6'] == g6
 
 
 def test_convert_loaded_df():
@@ -619,6 +632,27 @@ def test_get_circuit_data():
     os.remove(TEMP_FILE)
 
 
+def test_get_circuit_data_prefers_basegraph_g6():
+
+    if Path(TEMP_FILE).exists():
+        os.remove(TEMP_FILE)
+
+    # Write row with intentionally wrong graph_index but correct basegraph_g6.
+    con, cur = write_test_circuit(TEMP_FILE, reps=0)
+    entry = TEST_ENTRY.copy()
+    entry['graph_index'] = 0
+    utils.write_circuit(cur, entry, True)
+
+    circuit, edges = utils.get_circuit_data(TEMP_FILE, entry['unique_key'])
+
+    assert circuit == TEST_MAPPED_C
+    # For 3 nodes, index 0 has 2 edges while this graph6 has 3 edges.
+    assert len(edges) == 3
+
+    con.close()
+    os.remove(TEMP_FILE)
+
+
 def test_get_circuit_data_batch():
 
     if Path(TEMP_FILE).exists():
@@ -638,6 +672,28 @@ def test_get_circuit_data_batch():
             assert all(x in v1 for x in v2)
         else:
             assert v1 == v2
+
+    os.remove(TEMP_FILE)
+
+
+def test_get_circuit_data_batch_prefers_basegraph_g6():
+
+    if Path(TEMP_FILE).exists():
+        os.remove(TEMP_FILE)
+
+    df = write_test_df()
+    G = utils.get_basegraphs(3)[1]
+    g6 = nx.to_graph6_bytes(G, header=False).decode("ascii").strip()
+
+    # Corrupt graph_index so fallback path would generate the wrong edge count.
+    df['graph_index'] = 0
+    df['basegraph_g6'] = g6
+    utils.write_df(TEMP_FILE, df, 3, overwrite=True)
+
+    loaded = utils.get_circuit_data_batch(TEMP_FILE, 3)
+    assert 'basegraph_g6' in loaded.columns
+    assert np.all(loaded['basegraph_g6'] == g6)
+    assert np.all([len(e) == 3 for e in loaded['edges'].values])
 
     os.remove(TEMP_FILE)
 
@@ -795,7 +851,7 @@ def write_test_circuit(fname: str = TEMP_FILE, reps: int = 1):
            "CREATE TABLE {table} (circuit, graph_index int, edge_counts, \
             unique_key, n_nodes int, base int, no_series int, \
             filter int, in_non_iso_set int, \
-            equiv_circuit)".format(table=table_name))
+            equiv_circuit, basegraph_g6)".format(table=table_name))
 
     for i in range(reps):
         utils.write_circuit(cur, TEST_ENTRY, True)

@@ -373,8 +373,7 @@ def mark_non_isomorphic_set(df: pd.DataFrame, **kwargs):
     df['equiv_circuit'] = equiv_circuit
 
 
-def linear_star_mesh(circuit: list, edges: list,
-                        to_reduce: list = ["L", "C"]):
+def linear_star_mesh(circuit: list, edges: list):
     """
     Identifies whether a fully inductive or fully capacitive star
     subcircuit exists. In the special case of degree 1 this is a
@@ -386,8 +385,6 @@ def linear_star_mesh(circuit: list, edges: list,
                         e.g. [["J"],["L", "J"], ["C"]]
         edges (list): a list of edge connections for the desired circuit
                         e.g. [(0,1), (0,2), (1,2)]
-        to_reduce (list, optional): circuit elements to reduce.
-                                    Defaults to linear elements ['L','C']
 
     Returns:
         new circuit, new edges

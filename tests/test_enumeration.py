@@ -83,6 +83,9 @@ def test_generate_for_specific_graph():
     df = enum.generate_for_specific_graph(7, G, 0, return_vals=True)
     exp_circuits = ['0', '1', '2', '3', '4', '5', '6']
     assert [x for x in df['circuit'].values] == exp_circuits
+    g6 = nx.to_graph6_bytes(G, header=False).decode("ascii").strip()
+    assert 'basegraph_g6' in df.columns
+    assert np.all(df['basegraph_g6'].values == g6)
 
     # Fully connected three node with no parallel stuff
     G = utils.get_basegraphs(3)[1]
@@ -91,6 +94,8 @@ def test_generate_for_specific_graph():
                              for combo in circuit])
                     for circuit in ALL_CONNECTED_3]
     assert [x for x in df['circuit'].values] == exp_circuits
+    g6 = nx.to_graph6_bytes(G, header=False).decode("ascii").strip()
+    assert np.all(df['basegraph_g6'].values == g6)
 
     # Four nodes
     n_trials = 1000
@@ -100,6 +105,8 @@ def test_generate_for_specific_graph():
     G = utils.get_basegraphs(n_nodes)[graph_index]
     df = enum.generate_for_specific_graph(base, G, graph_index,
                                           return_vals=True)
+    g6 = nx.to_graph6_bytes(G, header=False).decode("ascii").strip()
+    assert np.all(df['basegraph_g6'].values == g6)
     n_edges = len(G.edges)
     choices = [np.base_repr(x, base) for x in range(base)]
     for i in range(n_trials):
@@ -114,6 +121,8 @@ def test_generate_for_specific_graph():
     G = utils.get_basegraphs(n_nodes)[graph_index]
     df = enum.generate_for_specific_graph(base, G, graph_index,
                                           return_vals=True)
+    g6 = nx.to_graph6_bytes(G, header=False).decode("ascii").strip()
+    assert np.all(df['basegraph_g6'].values == g6)
     n_edges = len(G.edges)
     choices = [np.base_repr(x, base) for x in range(base)]
     for i in range(n_trials):
@@ -264,6 +273,8 @@ def test_generate_graphs_node():
     df = enum.generate_graphs_node(None, 2, 7, return_vals=True)
     exp_circuits = ['0', '1', '2', '3', '4', '5', '6']
     assert [x for x in df['circuit'].values] == exp_circuits
+    g6 = nx.to_graph6_bytes(G, header=False).decode("ascii").strip()
+    assert np.all(df['basegraph_g6'].values == g6)
 
     # Three nodes
     n_trials = 100
@@ -273,6 +284,9 @@ def test_generate_graphs_node():
     grouped = df.groupby("graph_index")
     for graph_index, G in enumerate(utils.get_basegraphs(n_nodes)):
         subset = grouped.get_group(graph_index)
+        g6 = nx.to_graph6_bytes(G, header=False).decode("ascii").strip()
+        assert subset['basegraph_g6'].nunique() == 1
+        assert subset['basegraph_g6'].iloc[0] == g6
         n_edges = len(G.edges)
         choices = [np.base_repr(x, base) for x in range(base)]
         for i in range(n_trials):
@@ -289,6 +303,9 @@ def test_generate_graphs_node():
     grouped = df.groupby("graph_index")
     for graph_index, G in enumerate(utils.get_basegraphs(n_nodes)):
         subset = grouped.get_group(graph_index)
+        g6 = nx.to_graph6_bytes(G, header=False).decode("ascii").strip()
+        assert subset['basegraph_g6'].nunique() == 1
+        assert subset['basegraph_g6'].iloc[0] == g6
         n_edges = len(G.edges)
         choices = [np.base_repr(x, base) for x in range(base)]
         for i in range(n_trials):

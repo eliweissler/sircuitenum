@@ -37,6 +37,22 @@ DOWNLOAD_PATH = Path(__file__).parent.parent
 LOADED_BASEGRAPHS = {}
 
 
+def _basegraph_cache_key(n_nodes: int, planar: bool = False, regular: bool = False) -> str:
+    """Build a cache key that is unique for a graph family."""
+    return f"n{int(n_nodes)}_p{int(planar)}_r{int(regular)}"
+
+
+def _basegraph_sort_key(graph: nx.Graph):
+    """Deterministic, unique sort key for a base graph within a node count."""
+    g6 = nx.to_graph6_bytes(graph, header=False).decode("ascii").strip()
+    return (graph.number_of_edges(), g6)
+
+
+def _edges_from_graph6(basegraph_g6: str):
+    """Decode graph6 text and return the graph edge list."""
+    return list(nx.from_graph6_bytes(basegraph_g6.strip().encode("ascii")).edges)
+
+
 def graph_index_to_edges(graph_index: int, n_nodes: int):
     """
     Returns a list of edges [(from, to), (from, to)]
@@ -157,9 +173,21 @@ def convert_loaded_df(df: pd.DataFrame, n_nodes: int, char_mapping: dict = None)
     """
     if char_mapping is None:
         char_mapping = ENUM_PARAMS["CHAR_TO_COMBINATION"]
-    # Get the edges
-    df['edges'] = [graph_index_to_edges(int(i), n_nodes)
-                   for i in df.graph_index.values]
+    # Prefer the persisted basegraph graph6 when available.
+    # This keeps edge reconstruction stable even if graph indexing changes.
+    if 'basegraph_g6' in df.columns:
+        edges = []
+        for graph_index, basegraph_g6 in zip(df.graph_index.values,
+                                             df.basegraph_g6.values):
+            if basegraph_g6 is not None and str(basegraph_g6) != "":
+                edges.append(_edges_from_graph6(str(basegraph_g6)))
+            else:
+                edges.append(graph_index_to_edges(int(graph_index), n_nodes))
+        df['edges'] = edges
+    else:
+        # Get the edges
+        df['edges'] = [graph_index_to_edges(int(i), n_nodes)
+                       for i in df.graph_index.values]
     df['circuit_encoding'] = df.circuit.values.copy()
     df['circuit'] = [encoding_to_components(c, char_mapping=char_mapping)
                      for c in df.circuit.values]
@@ -174,15 +202,16 @@ def get_basegraphs(n_nodes: int, planar: bool = False, regular: bool = False):
         planar (bool): if True, only load planar graphs
         regular (bool): if True, only load regular graphs
     """
+    cache_key = _basegraph_cache_key(n_nodes, planar=planar, regular=regular)
     # Return if it has already been loaded
-    if str(n_nodes) in LOADED_BASEGRAPHS:
-        return LOADED_BASEGRAPHS[str(n_nodes)]
-    if int(n_nodes) > 6 and (not planar) and (not regular):
-        raise ValueError("Only basegraphs up to 6 nodes are included in generality. See https://users.cecs.anu.edu.au/~bdm/data/graphs.html for larger sets of graphs, or select planar/regular.")
+    if cache_key in LOADED_BASEGRAPHS:
+        return LOADED_BASEGRAPHS[cache_key]
+    if int(n_nodes) > 8 and (not planar) and (not regular):
+        raise ValueError("Only basegraphs up to 8 nodes are included in generality. See https://users.cecs.anu.edu.au/~bdm/data/graphs.html for larger sets of graphs, or select planar/regular.")
     elif n_nodes == 10 and not regular:
         raise ValueError("Only regular graphs are included for 10 nodes. See https://users.cecs.anu.edu.au/~bdm/data/graphs.html for larger sets of graphs, or select regular.")
     # Load it if it hasn't been loaded
-    if str(n_nodes) not in LOADED_BASEGRAPHS:
+    if cache_key not in LOADED_BASEGRAPHS:
         fname =  f"graph{n_nodes}c"
         if planar:
             fname = "planar_" + fname
@@ -194,10 +223,13 @@ def get_basegraphs(n_nodes: int, planar: bool = False, regular: bool = False):
         # Fix two vertex case so it always returns a list
         if n_nodes == 2 or isinstance(all_graphs, nx.Graph):
             all_graphs = [all_graphs]
-        LOADED_BASEGRAPHS[str(n_nodes)] = all_graphs
+        # Sort first by number of edges and then by graph6 encoding.
+        # The secondary key makes ties deterministic across reloads.
+        all_graphs = sorted(all_graphs, key=_basegraph_sort_key)
+        LOADED_BASEGRAPHS[cache_key] = all_graphs
 
     # Return if it has already been loaded
-    return LOADED_BASEGRAPHS[str(n_nodes)]
+    return LOADED_BASEGRAPHS[cache_key]
 
 
 def count_elems(circuit: list, base: int):
@@ -283,7 +315,8 @@ def add_elem_number(circuit: list, **kwargs):
 
 
 def circuit_entry_dict(circuit: list, graph_index: int, n_nodes: int,
-                       circuit_num: int, base: int):
+                       circuit_num: int, base: int,
+                       basegraph_g6: str = None):
     """Creates a dictionary that can serve as a row of a dataframe of
     circuits, or can be used to write an individual row to a database
 
@@ -297,6 +330,8 @@ def circuit_entry_dict(circuit: list, graph_index: int, n_nodes: int,
                            a unique key.
         base (int): The number of possible edges. By default this is 7:
                         (i.e., J, C, I, JI, CI, JC, JCI)
+        basegraph_g6 (str): graph6 encoding of the basegraph used
+                    for this circuit row.
 
     Returns:
         dictionary with circuit, graph_index, edge_counts, n_nodes
@@ -309,6 +344,8 @@ def circuit_entry_dict(circuit: list, graph_index: int, n_nodes: int,
     c_dict['no_series'] = 0
     c_dict['filter'] = 0
     c_dict['equiv_circuit'] = ""
+    if basegraph_g6 is not None:
+        c_dict['basegraph_g6'] = str(basegraph_g6)
 
     counts = [str(c) for c in count_elems(circuit, base)]
     c_dict['edge_counts'] = ",".join(counts)
@@ -794,12 +831,21 @@ def get_circuit_data(file: str, unique_key: str, char_mapping: dict = None):
     query_str = f"SELECT * FROM {table_name} WHERE unique_key = '{unique_key}'"
     cursor_obj.execute(query_str)
     output = cursor_obj.fetchone()
+    columns = [x[0] for x in cursor_obj.description]
     connection_obj.commit()
     connection_obj.close()
 
+    if output is None:
+        raise ValueError(f"No circuit found for unique_key '{unique_key}'")
+
+    row = dict(zip(columns, output))
+
     # Map the edges and circuit component info
-    edges = graph_index_to_edges(int(output[1]), n_nodes)
-    circuit = encoding_to_components(output[0], char_mapping=char_mapping)
+    if 'basegraph_g6' in row and row['basegraph_g6'] not in [None, ""]:
+        edges = _edges_from_graph6(str(row['basegraph_g6']))
+    else:
+        edges = graph_index_to_edges(int(row['graph_index']), n_nodes)
+    circuit = encoding_to_components(row['circuit'], char_mapping=char_mapping)
 
     return circuit, edges
 
@@ -829,6 +875,8 @@ def get_circuit_data_batch(db_file: str, n_nodes: int,
     -------
     pandas.DataFrame
         A DataFrame where each row represents a circuit matching the query.
+        If present in the database table, the ``basegraph_g6`` column is
+        preserved and used to reconstruct edges during loading.
     """
 
     if char_mapping is None:
@@ -997,18 +1045,19 @@ def write_circuit(cursor_obj, c_dict: dict, to_commit: bool = False):
         to_commit: commit the database (i.e., save changes)
     """
     table = f"CIRCUITS_{c_dict['n_nodes']}_NODES"
-    sql_str = f"INSERT INTO {table} VALUES ("
     sql_fields = ["circuit", "graph_index", "edge_counts",
                   "unique_key", "n_nodes", "base",
                   "no_series", "filter", "in_non_iso_set",
                   "equiv_circuit"]
-    n_fields = len(sql_fields)
-    for i, field in enumerate(sql_fields):
-        if i < n_fields - 1:
-            sql_str += f"'{c_dict[field]}', "
-        else:
-            sql_str += f"'{c_dict[field]}')"
-    cursor_obj.execute(sql_str)
+    if "basegraph_g6" in c_dict:
+        sql_fields.append("basegraph_g6")
+    columns = ", ".join(sql_fields)
+    placeholders = ", ".join(["?"]*len(sql_fields))
+    values = [c_dict[field] for field in sql_fields]
+    cursor_obj.execute(
+        f"INSERT INTO {table} ({columns}) VALUES ({placeholders})",
+        values,
+    )
 
     if to_commit:
         cursor_obj.connection.commit()
