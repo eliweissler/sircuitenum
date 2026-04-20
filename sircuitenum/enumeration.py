@@ -819,14 +819,16 @@ def generate_and_trim(n_nodes: int, db_file: str = "circuits.db",
     # Pre-Hamiltonian Steps are Fast
     if (not resume) or (not H_started):
         print("----------------------------------------")
-        print('Starting generating ' + str(n_nodes) + ' node circuits.')
-        generate_graphs_node(db_file, n_nodes, base, planar=planar, regular=regular, max_elem=max_elem)
-        print("Circuits Generated for " +
-            str(n_nodes) + " node circuits.")
+        temp_table = f"TEMP_CIRCUITS_{n_nodes}_NODES"
+        if temp_table not in utils.list_all_tables(db_file):
+            print('Starting generating ' + str(n_nodes) + ' node circuits.')
+            generate_graphs_node(db_file, n_nodes, base, planar=planar, regular=regular, max_elem=max_elem)
+            print("Circuits Generated for " +
+                str(n_nodes) + " node circuits.")
         print("Now Trimming.")
         find_equiv = not(planar or regular)
         trim_graph_node(db_file=db_file, n_nodes=n_nodes, base=base,
-                        n_workers=n_workers, find_equiv=find_equiv)
+                        n_workers=n_workers, find_equiv=find_equiv, resume=resume)
         print("Finished trimming " + str(n_nodes) + " node circuits.")
 
     if (not resume) or H_started:
