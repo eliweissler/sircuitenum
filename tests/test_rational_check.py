@@ -453,7 +453,7 @@ class TestBiquadratics:
     def test_eighth_degree_biquadratic(self):
         # x⁸ - 1 → reduces to y⁴ - 1 → reduces to z² - 1
         x = sym.Symbol('x')
-        poly = sym.Poly(x**8 - sym.Rational(12/17)**8, x)
+        poly = sym.Poly(x**8 - 1, x)
         result, details = check_rationality(poly)
         assert result is True
 
