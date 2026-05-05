@@ -748,6 +748,11 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
             already_done = set(x[0] for x in cur.execute(sql_query).fetchall())
             unique_keys = unique_keys - already_done
 
+            # After determining unique_keys, delete the "UNDEFINED" or NULL ones from the temp table
+            # so that when pandas re-inserts the rows, they don't cause a Unique Constraint error.
+            cur.execute(f"DELETE FROM {temp_table} WHERE {H_class_col} = 'UNDEFINED' OR {H_class_col} IS NULL")
+            con.commit()
+
     
     # Filter out those already done if resuming
     # Randmize order because difficult ones tend to be near each other
@@ -803,8 +808,8 @@ def generate_and_trim(n_nodes: int, db_file: str = "circuits.db",
         n_workers (int): The number of workers to use. Default 1.
         resume (bool): Resuming a run or not
     """
-    if base is None:
-        base = len(utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
+    # if base is None:
+    #     base = len(utils.ENUM_PARAMS["CHAR_TO_COMBINATION"])
     
     # Check if Hamiltonians have started or not
     if resume:
