@@ -21,7 +21,6 @@ except:
     print("Multiprocessing fork not available on your system.\
            More than one worker is not supported for enumeration \
            with custom elements.")
-
 import sympy as sym
 import networkx as nx
 import numpy as np
@@ -766,7 +765,7 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
     df_update = []
     count = 0
     if n_workers > 1:
-        with Pool(processes=n_workers, initializer=initialize_singular) as pool:
+        with Pool(processes=n_workers, initializer=initialize_singular, maxtasksperchild=1000) as pool:
             for entry, to_update, str_cols in tqdm(pool.imap_unordered(_gen_ham_class_row, args),
                             total=n_to_do, position=0, leave=False):
                 count += 1
