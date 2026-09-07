@@ -1,7 +1,13 @@
 __doc__ = "quantize.py: contains functions used to produce symbolic hamiltonians"
 __author__ = "Eli Weissler"
 __version__ = "0.1.0"
-__all__ = ["gen_cap_mat", "gen_ind_mat", "gen_junc_pot", "quantize_circuit"]
+__all__ = [
+    "choose_Z",
+    "gen_cap_mat",
+    "gen_ind_mat",
+    "gen_junc_pot",
+    "symbolic_hamiltonian",
+]
 
 import itertools
 import functools

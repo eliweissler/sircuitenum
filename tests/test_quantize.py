@@ -10,6 +10,15 @@ import time
 import itertools
 
 
+def test_quantization_entry_points_are_publicly_exported():
+    expected = {"choose_Z", "symbolic_hamiltonian"}
+    assert expected <= set(quantize.__all__)
+    namespace = {}
+    exec("from sircuitenum.quantize import *", namespace)
+    assert namespace["choose_Z"] is quantize.choose_Z
+    assert namespace["symbolic_hamiltonian"] is quantize.symbolic_hamiltonian
+
+
 def test__independent_from():
     # Basic: A = {[1,0], [0,1]}, B = {[1,1]}
     A = [sym.Matrix([1, 0]), sym.Matrix([0, 1])]

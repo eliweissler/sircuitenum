@@ -1,0 +1,48 @@
+name: sircuitenum-paper
+
+# Reproducible numerical environment for the paper and its resubmission.
+# Create this environment from the root of a tagged sircuitenum checkout:
+#
+#   conda env create --solver libmamba -f environment-paper.yml
+#   conda activate sircuitenum-paper
+#
+# SQcircuit is intentionally pinned by immutable commit rather than by the
+# moving dev-ew branch name.  That commit contains the negligible charge-mode
+# classification fix required by the n3_g1_c66 circuit.
+
+channels:
+  - conda-forge
+  - nodefaults
+
+dependencies:
+  - python=3.11
+  # Hamiltonian-class generation imports SageMath and uses its bundled
+  # Singular executable for exact polynomial-system calculations.
+  # Sage 10.7 / Singular 4.4.1 passes the Singular-vs-Mathematica branch
+  # benchmark. The paper's older numerical pins are applied in the pip phase
+  # below so Conda can first resolve the current Sage package.
+  - sage=10.7
+  # Required to open and execute the paper notebooks in this environment.
+  - jupyterlab=4.5
+  - matplotlib=3.10
+  - pandas=2.2
+  - qutip=5.1.1
+  - scqubits=4.2.0
+  - scikit-image=0.25
+  - imagecodecs=2024.12.30
+  - pytorch=2.5
+  - ipyvue>=3
+  - tqdm
+  - ipython
+  - pytest
+  - pip
+  - pip:
+      # Preserve the numerical stack used for the paper. These match the
+      # package requirements and the known-good Sage 10.7 environment.
+      - numpy==1.26.4
+      - scipy==1.13.1
+      - sympy==1.13.3
+      - SQcircuit @ git+https://github.com/stanfordLINQS/SQcircuit.git@9693264cfc75865379ea037a8643d8f31160f151
+      - func-timeout==4.3.5
+      # Install the tagged sircuitenum checkout containing this file.
+      - -e .

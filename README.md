@@ -7,19 +7,35 @@ A library for enumerating superconducting circuits and exporting them for analys
 Installation
 ------------
 
-Currently `sircuitenum` can only be installed from source, although installation via the Python package manager PyPI will be added soon. The package has been tested on Python 3.11 on both Linux and Mac.
+Currently `sircuitenum` is installed from source. The tested paper environment
+is defined in `environment-paper.yml` and includes Python, SageMath, Singular,
+the numerical dependencies, JupyterLab, and the pinned SQcircuit revision.
 
-### Source
-The variable transformations require sagemath/singular, which are only installable via conda. Until the workflow is updated, you must first make a conda environment before pip installing from source. This will be updated to use conda for the full package later.
-```bash
-conda create --name sircuitenum -c conda-forge sage python=3.11
-```
+### Paper environment
+
+Clone the repository, check out the desired release or tagged revision, and
+create the environment from the repository root:
 
 ```bash
-git clone https://github.com/combes-group/sircuitenum.git
+git clone https://github.com/eliweissler/sircuitenum.git
 cd sircuitenum/
-pip install -e .
+git checkout <release-tag>
+conda env create --solver libmamba -f environment-paper.yml
+conda activate sircuitenum-paper
 ```
+
+The environment recipe installs the checked-out source tree in editable mode,
+so run the creation command from the `sircuitenum` repository root. No separate
+`pip install` step is required. To recreate the environment, remove the old
+environment first and run the same creation command again.
+
+Start the notebook interface with:
+
+```bash
+conda activate sircuitenum-paper
+jupyter lab
+```
+
 Examples
 ------------
 Examples of how to use the library to enumerate and optimize circuits are included in the examples folder.
@@ -28,11 +44,16 @@ Examples of how to use the library to enumerate and optimize circuits are includ
 Testing
 -------
 
-The unit tests can be run locally using `pytest`. To install testing dependencies, install sircuitenum using
+The paper environment includes pytest. From the repository root, run the full
+test suite with:
 
 ```bash
-pip install -e '.[full]'
+conda activate sircuitenum-paper
+pytest -q
 ```
+
+The complete suite includes computationally expensive enumeration and algebra
+tests and can take approximately twenty minutes.
 
 Disclaimer
 ----------
@@ -41,7 +62,8 @@ This package is currently in alpha (v0.x), and therefore you should not expect t
 will necessarily be stable between releases. Code that depends on this package in its current
 state is very likely to break when the package version changes.
 
-At the moment, a few circuits examined in the paper require a development branch of [SQcircuit](https://github.com/stanfordLINQS/SQcircuit/tree/dev-ew) to run properly.
+The paper environment pins the exact SQcircuit revision needed for the circuits
+affected by the negligible charge-mode tolerance fix.
 
 
 Runtime
