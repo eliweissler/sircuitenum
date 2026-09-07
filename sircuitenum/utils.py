@@ -6,6 +6,11 @@ __all__ = ['get_circuit_data_batch', 'find_circuit_in_db', "get_equiv_circuits",
 import itertools
 import functools
 import multiprocessing
+import os
+import pickle
+import signal
+import tempfile
+import time
 from typing import Union
 from pathlib import Path
 from time import sleep
@@ -1109,12 +1114,147 @@ def run_with_timeout(func, args=(), kwargs=None, timeout=1):
     """
     if kwargs is None:
         kwargs = {}
+
+    # Pass a zero-argument closure to func_timeout.  On timeout the library
+    # formats the supplied args/kwargs into its exception message; symbolic
+    # matrices can take minutes to stringify and can raise again inside the
+    # timeout thread.  Keeping those objects in the closure makes timeout
+    # reporting bounded without changing the function call.
+    def call_with_arguments():
+        return func(*args, **kwargs)
+
     try:
-        return func_timeout(60*timeout, func, args, kwargs)
+        return func_timeout(60*timeout, call_with_arguments)
     except FunctionTimedOut:
         return None
     except KeyboardInterrupt as KI:
         raise KI
+
+
+def run_with_timeout_process(func, args=(), kwargs=None, timeout=1,
+                             child_initializer=None, child_cleanup=None,
+                             terminate_grace_seconds=2):
+    """Run a callable in a disposable Unix process with a hard deadline.
+
+    Unlike a thread-injected exception, this deadline remains enforceable while
+    the callable is inside Z3, Sage, Singular, or another native extension.  A
+    temporary pickle file carries the result so large symbolic objects cannot
+    deadlock on a full IPC pipe.  The child starts a new process group, allowing
+    its subprocess tree to be terminated as a unit.
+
+    Parameters
+    ----------
+    func : callable
+        Function to execute in the child process.
+    args : tuple, optional
+        Positional arguments passed to ``func``.
+    kwargs : dict or None, optional
+        Keyword arguments passed to ``func``.
+    timeout : float, optional
+        Hard deadline in minutes.  Defaults to one minute.
+    child_initializer : callable or None, optional
+        Zero-argument hook run in the child immediately before ``func``.  Use
+        this to initialize process-local native resources.
+    child_cleanup : callable or None, optional
+        Zero-argument hook run in the child before it exits, including after a
+        handled exception or termination request.
+    terminate_grace_seconds : float, optional
+        Time to wait after ``SIGTERM`` before sending ``SIGKILL`` to the child
+        process group.  Defaults to two seconds.
+
+    Returns
+    -------
+    Any or None
+        The callable's return value, or ``None`` when the deadline expires.
+
+    Raises
+    ------
+    RuntimeError
+        If the child callable or one of its setup steps raises.  The error
+        message contains the child traceback.
+    KeyboardInterrupt
+        If the supervising process is interrupted.
+
+    Notes
+    -----
+    On platforms without ``os.fork``, this falls back to
+    :func:`run_with_timeout`; child setup and cleanup hooks are then ignored.
+    Results must be pickleable.  Because the child calls ``setsid``, subprocesses
+    it starts are terminated with it when the deadline expires.
+    """
+    if kwargs is None:
+        kwargs = {}
+    if not hasattr(os, "fork"):
+        return run_with_timeout(func, args=args, kwargs=kwargs, timeout=timeout)
+
+    descriptor, result_path = tempfile.mkstemp(prefix="sircuitenum-timeout-")
+    os.close(descriptor)
+    child_pid = os.fork()
+    if child_pid == 0:
+        try:
+            os.setsid()
+
+            def terminate_child(_signal_number, _frame):
+                raise TimeoutError("Terminated by process timeout supervisor")
+
+            signal.signal(signal.SIGTERM, terminate_child)
+            try:
+                if child_initializer is not None:
+                    child_initializer()
+                payload = ("result", func(*args, **kwargs))
+            except BaseException:
+                import traceback
+                payload = ("exception", traceback.format_exc())
+            with open(result_path, "wb") as result_file:
+                pickle.dump(payload, result_file, protocol=pickle.HIGHEST_PROTOCOL)
+        finally:
+            if child_cleanup is not None:
+                try:
+                    child_cleanup()
+                except BaseException:
+                    pass
+            os._exit(0)
+
+    deadline = time.monotonic() + 60 * timeout
+    timed_out = False
+    try:
+        while True:
+            finished_pid, _ = os.waitpid(child_pid, os.WNOHANG)
+            if finished_pid == child_pid:
+                break
+            if time.monotonic() >= deadline:
+                timed_out = True
+                try:
+                    os.killpg(child_pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                grace_deadline = time.monotonic() + terminate_grace_seconds
+                while time.monotonic() < grace_deadline:
+                    finished_pid, _ = os.waitpid(child_pid, os.WNOHANG)
+                    if finished_pid == child_pid:
+                        break
+                    time.sleep(0.05)
+                else:
+                    try:
+                        os.killpg(child_pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    os.waitpid(child_pid, 0)
+                break
+            time.sleep(0.05)
+
+        if timed_out:
+            return None
+        with open(result_path, "rb") as result_file:
+            status, value = pickle.load(result_file)
+        if status == "exception":
+            raise RuntimeError(f"Child process failed:\n{value}")
+        return value
+    finally:
+        try:
+            os.unlink(result_path)
+        except FileNotFoundError:
+            pass
 
 
 def set_enum_params(char_to_combo = {'0': ('C',),

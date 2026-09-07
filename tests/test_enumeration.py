@@ -69,6 +69,40 @@ def cleanup_db(filename):
                 pass
 
 
+def test_swap_in_temp_table_preserves_complete_key_set():
+    with sqlite3.connect(TEMP_FILE) as con:
+        con.execute("CREATE TABLE CIRCUITS_2_NODES (unique_key TEXT PRIMARY KEY, value INTEGER)")
+        con.execute("CREATE TABLE TEMP_CIRCUITS_2_NODES (unique_key TEXT PRIMARY KEY, value INTEGER)")
+        con.executemany(
+            "INSERT INTO CIRCUITS_2_NODES VALUES (?, ?)",
+            [("a", 1), ("b", 2)],
+        )
+        con.execute("INSERT INTO TEMP_CIRCUITS_2_NODES VALUES ('a', 10)")
+        enum._swap_in_temp_table(
+            con, "CIRCUITS_2_NODES", "TEMP_CIRCUITS_2_NODES"
+        )
+        assert con.execute(
+            "SELECT * FROM CIRCUITS_2_NODES ORDER BY unique_key"
+        ).fetchall() == [("a", 10), ("b", 2)]
+
+
+def test_swap_in_temp_table_rejects_extra_keys():
+    with sqlite3.connect(TEMP_FILE) as con:
+        con.execute("CREATE TABLE CIRCUITS_2_NODES (unique_key TEXT PRIMARY KEY)")
+        con.execute("CREATE TABLE TEMP_CIRCUITS_2_NODES (unique_key TEXT PRIMARY KEY)")
+        con.execute("INSERT INTO CIRCUITS_2_NODES VALUES ('a')")
+        con.executemany(
+            "INSERT INTO TEMP_CIRCUITS_2_NODES VALUES (?)", [("a",), ("extra",)]
+        )
+        with pytest.raises(RuntimeError, match="mismatched key sets"):
+            enum._swap_in_temp_table(
+                con, "CIRCUITS_2_NODES", "TEMP_CIRCUITS_2_NODES"
+            )
+        assert set(utils.list_all_tables(TEMP_FILE)) >= {
+            "CIRCUITS_2_NODES", "TEMP_CIRCUITS_2_NODES"
+        }
+
+
 def test_num_possible_circuits():
 
     assert enum.num_possible_circuits(3, 2) == 3
@@ -692,4 +726,3 @@ if __name__ == "__main__":
     # test_generate_all_circuits()
     # test_qps_enum()
     # test_planar_regular_enum_max_elem()
-

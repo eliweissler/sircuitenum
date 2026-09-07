@@ -1,6 +1,7 @@
 import os
 import itertools
 import sqlite3
+import time
 
 import numpy as np
 import networkx as nx
@@ -909,6 +910,41 @@ def test_run_with_timeout():
     assert utils.run_with_timeout(func, (x + y,)) == x + y
     assert utils.run_with_timeout(func, (x + x,)) == 2*x
     assert utils.run_with_timeout(func, (x + x,), timeout=0.00001) == x + x
+
+    class ReprMustNotRun:
+        def __repr__(self):
+            raise AssertionError("timeout reporting should not stringify arguments")
+
+    def slow_func(value):
+        time.sleep(0.1)
+        return value
+
+    assert utils.run_with_timeout(
+        slow_func, (ReprMustNotRun(),), timeout=0.0001
+    ) is None
+
+
+def test_run_with_timeout_process():
+    x = sym.Symbol("x")
+    assert utils.run_with_timeout_process(sym.expand, ((x + 1) ** 2,)) == (
+        x ** 2 + 2 * x + 1
+    )
+
+    started = time.monotonic()
+    assert utils.run_with_timeout_process(
+        time.sleep, (2,), timeout=0.001, terminate_grace_seconds=0.2
+    ) is None
+    assert time.monotonic() - started < 1
+
+    def fail_in_child():
+        raise ValueError("child failure marker")
+
+    try:
+        utils.run_with_timeout_process(fail_in_child)
+    except RuntimeError as error:
+        assert "child failure marker" in str(error)
+    else:
+        raise AssertionError("Child exception was not propagated")
 
 
 if __name__ == "__main__":

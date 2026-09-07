@@ -31,6 +31,7 @@ from sircuitenum import utils
 from sircuitenum import reduction as red
 from sircuitenum import qpackage_interface as pi
 from sircuitenum import quantize
+from sircuitenum import singular_interface
 from sircuitenum.singular_interface import initialize_singular
 
 
@@ -76,6 +77,24 @@ def _swap_in_temp_table(con: sqlite3.Connection, table_name: str,
         SELECT * FROM {table_name}
     """)
     con.commit()
+    missing_from_temp = cur.execute(f"""
+        SELECT COUNT(*)
+        FROM {table_name} AS source
+        LEFT JOIN {temp_table} AS temp USING (unique_key)
+        WHERE temp.unique_key IS NULL
+    """).fetchone()[0]
+    missing_from_source = cur.execute(f"""
+        SELECT COUNT(*)
+        FROM {temp_table} AS temp
+        LEFT JOIN {table_name} AS source USING (unique_key)
+        WHERE source.unique_key IS NULL
+    """).fetchone()[0]
+    if missing_from_temp or missing_from_source:
+        raise RuntimeError(
+            "Refusing to swap Hamiltonian tables with mismatched key sets: "
+            f"{missing_from_temp} missing from {temp_table}, "
+            f"{missing_from_source} missing from {table_name}"
+        )
     cur.execute(f"DROP TABLE IF EXISTS {table_name}")
     cur.execute(f"ALTER TABLE {temp_table} RENAME TO {table_name}")
     con.commit()
@@ -605,8 +624,16 @@ def _gen_ham_class_row(args):
     else:
         circuit, edges = utils.add_elem_number(entry.circuit), entry.edges
     try:
-        # 10 minute timeout so we don't hang indefinitely on a single circuit
-        ans = utils.run_with_timeout(quantize.choose_Z, (circuit, edges), timeout=10)
+        # A disposable child process makes the deadline enforceable even while
+        # Z3/Sage/Singular is executing native code.  Initialize Singular in
+        # that child so no live solver connection is shared across forks.
+        ans = utils.run_with_timeout_process(
+            quantize.choose_Z,
+            (circuit, edges),
+            timeout=10,
+            child_initializer=initialize_singular,
+            child_cleanup=_cleanup_worker_singular,
+        )
         if ans is None:
             raise TimeoutError("Timeout in choosing Z")
         Z, var_types, h_class = ans
@@ -661,28 +688,54 @@ def _gen_ham_class_row(args):
     return df, to_update, str_cols
 
 
+def _cleanup_worker_singular():
+    """Terminate the per-circuit Singular subprocess, if it was started."""
+    worker = singular_interface.WORKER_SINGULAR
+    if worker is not None:
+        worker.kill()
+        singular_interface.WORKER_SINGULAR = None
+
+
 def add_hamiltonian_classes(db_file: str, n_nodes: int,
                               n_workers: int = 4, resume: bool = False,
                               eq_params=False, save_every=10):
-    """
-    Constructs a variable transformation and identifies the hamiltonian
-    class for each circuit in the database
+    """Calculate and persist Hamiltonian classes for filtered circuits.
 
-    Args:
-        db_file (str): database file
-        n_nodes (int): number of nodes to add for
-        n_workers (int): parallelize the Hamiltonian generation to this many
-                         processes.
-        resume (bool, optional): whether to resume a previously started run.
-                                 this only grabs rows that don't have Hamiltonians
-                                 yet.
-        eq_params (bool, optional): whether to set circuit parameters to be equal
+    Results are checkpointed in ``TEMP_CIRCUITS_<n_nodes>_NODES`` and merged
+    back into the main table only after processing finishes.  The temporary
+    table always retains the complete main-table key set, so resuming cannot
+    delete unresolved source rows.  Each circuit calculation runs in a
+    disposable process with a ten-minute hard deadline; failures are recorded
+    as ``UNDEFINED``.
 
-    Raises:
-        ValueError: if multiple circuits with the same unique key exist
+    Parameters
+    ----------
+    db_file : str
+        SQLite circuit database to update.
+    n_nodes : int
+        Node count selecting ``CIRCUITS_<n_nodes>_NODES``.
+    n_workers : int, optional
+        Number of outer worker processes.  Defaults to four.
+    resume : bool, optional
+        Process only eligible rows without a completed H class.  Existing TEMP
+        results and completed values in the main table are preserved.
+    eq_params : bool, optional
+        Use equal component parameters and write ``H_class_sym``/``wJT_sym``
+        instead of the distinct-parameter columns.
+    save_every : int, optional
+        Number of completed circuits buffered between TEMP-table checkpoints.
 
-    Returns:
-        None
+    Returns
+    -------
+    None
+
+    Raises
+    ------
+    RuntimeError
+        If the TEMP and main tables contain incompatible key sets at final
+        merge time.
+    ValueError
+        If a supposedly unique circuit lookup returns multiple rows.
     """
 
     with sqlite3.connect(db_file) as con:
@@ -724,6 +777,15 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
                     )
             else:
                 _create_temp_table_like(con, table_name, temp_table)
+
+        # Keep the work table complete throughout a resumable calculation.
+        # Results are updated in place below, so an interrupted run can never
+        # leave raw circuit rows deleted from the only classified work table.
+        cur.execute(f"""
+            INSERT OR IGNORE INTO {temp_table}
+            SELECT * FROM {table_name}
+        """)
+        con.commit()
                
         # If we're resuming filter out those without H_class made
         sql_query = f"SELECT DISTINCT unique_key\
@@ -747,12 +809,6 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
             already_done = set(x[0] for x in cur.execute(sql_query).fetchall())
             unique_keys = unique_keys - already_done
 
-            # After determining unique_keys, delete the "UNDEFINED" or NULL ones from the temp table
-            # so that when pandas re-inserts the rows, they don't cause a Unique Constraint error.
-            cur.execute(f"DELETE FROM {temp_table} WHERE {H_class_col} = 'UNDEFINED' OR {H_class_col} IS NULL")
-            con.commit()
-
-    
     # Filter out those already done if resuming
     # Randmize order because difficult ones tend to be near each other
     # This will give more accurate time estimates and spread workers better
@@ -765,14 +821,17 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
     df_update = []
     count = 0
     if n_workers > 1:
-        with Pool(processes=n_workers, initializer=initialize_singular, maxtasksperchild=1000) as pool:
+        with Pool(processes=n_workers, maxtasksperchild=1000) as pool:
             for entry, to_update, str_cols in tqdm(pool.imap_unordered(_gen_ham_class_row, args),
                             total=n_to_do, position=0, leave=False):
                 count += 1
                 df_update.append(entry)
                 if count % save_every == 0 or count == n_to_do:
                     combined_df = pd.concat(df_update)
-                    utils.write_df(db_file, combined_df, temp_table, overwrite=False, table_name=temp_table)
+                    utils.update_db_from_df(
+                        db_file, combined_df, to_update, str_cols=str_cols,
+                        parallel_safe=True, table_name=temp_table
+                    )
                     df_update = []
     else:
         for arg_set in tqdm(args, total=n_to_do, position=0, leave=False):
@@ -781,7 +840,10 @@ def add_hamiltonian_classes(db_file: str, n_nodes: int,
             df_update.append(entry)
             if count % save_every == 0 or count == n_to_do:
                 combined_df = pd.concat(df_update)
-                utils.write_df(db_file, combined_df, temp_table, overwrite=False, table_name=temp_table)
+                utils.update_db_from_df(
+                    db_file, combined_df, to_update, str_cols=str_cols,
+                    parallel_safe=True, table_name=temp_table
+                )
                 df_update = []
 
     # Move temp table to main table

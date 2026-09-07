@@ -191,6 +191,24 @@ def test_l1_minimization(vars):
     assert l1_norm <= 2
 
 
+def test_proven_lower_bound_can_accept_an_exact_heuristic_witness(vars):
+    """A structural certificate may bypass redundant optimum enumeration."""
+    Z1, Z2, _ = vars
+    results = find_rational_vars_integer_results(
+        integer_constraints=[Z1, Z2],
+        nonzero_constraints=[Z1 * Z2],
+        zero_constraints=[],
+        variables=[Z1, Z2],
+        max_result_range=2,
+        proven_lower_bound=2,
+        accept_heuristic_optimum=True,
+    )
+    assert results
+    assert all(sum(abs(value) for value in result["results"]) == 2
+               for result in results)
+    assert all(len(result["results"]) == 2 for result in results)
+
+
 def test_as_long_error():
 
     Z00, Z10, Z11 = sym.symbols('Z00 Z10 Z11')

@@ -16,11 +16,55 @@ from z3 import Tactic, Then
 from sircuitenum.singular_interface import _eq_as_numer_denom
 
 
+def _check_or_timeout(solver):
+    """Run a Z3 check and turn ``unknown`` into an explicit timeout error."""
+    result = solver.check()
+    if result == unknown:
+        raise TimeoutError(f"Z3 returned unknown: {solver.reason_unknown()}")
+    return result
+
+
+def _normalize_known_solutions(solutions, integer_constraints, expected_cost):
+    """Reconstruct and validate complete result vectors for known witnesses."""
+    normalized = []
+    seen = set()
+    for solution in solutions:
+        variables = solution["variables"]
+        values = []
+        valid = True
+        for expression in integer_constraints:
+            value = sym.simplify(expression.subs(variables))
+            if value.free_symbols or not value.is_integer:
+                valid = False
+                break
+            values.append(int(value))
+        if not valid or sum(abs(value) for value in values) != expected_cost:
+            continue
+        key = (
+            tuple(values),
+            tuple(sorted((str(var), str(value)) for var, value in variables.items())),
+        )
+        if key not in seen:
+            seen.add(key)
+            normalized.append({"results": values, "variables": variables})
+
+    normalized.sort(
+        key=lambda solution: (
+            sum(abs(x) for x in solution["results"]),
+            tuple(-x for x in solution["results"]),
+            tuple(sorted((str(k), str(v)) for k, v in solution["variables"].items())),
+        )
+    )
+    return normalized
+
+
 def find_rational_vars_integer_results(integer_constraints, nonzero_constraints, zero_constraints,
                                        variables, max_result_range=5, timeout_ms=int(1e06),
                                        heuristic_upper=True, apriori_sol=None,
                                        symmetry_map=lambda x: [x, [-i for i in x]],
-                                       enumerate_sols=True, debug=False):
+                                       enumerate_sols=True, debug=False,
+                                       proven_lower_bound=None,
+                                       accept_heuristic_optimum=False):
     """
     Find rational variable assignments such that integer constraints evaluate to integers
     with minimal L1 norm.
@@ -50,9 +94,10 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
     :param variables: Symbols representing the unknowns to solve for.
     :type variables: list[sympy.Symbol]
     :param max_result_range: Maximum absolute value allowed for integer constraint results.
-        Defaults to 4.
+        Defaults to 5.
     :type max_result_range: int
-    :param timeout_ms: Timeout in milliseconds for solver operations. Defaults to 100000.
+    :param timeout_ms: Timeout in milliseconds for each solver operation.
+        Defaults to 1,000,000.
     :type timeout_ms: int
     :param heuristic_upper: Whether to use heuristic search to find an upper bound
         on the optimal cost. Defaults to True.
@@ -68,6 +113,18 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
     :param enumerate_sols: Whether to enumerate all solutions at the minimum cost,
         or just return one. Defaults to True.
     :type enumerate_sols: bool
+    :param debug: Whether to print solver progress and bound information.
+        Defaults to False.
+    :type debug: bool
+    :param proven_lower_bound: Optional caller-supplied, mathematically proven
+        lower bound on the L1 cost.  This is added as a solver constraint; it
+        must not be an estimate.  Defaults to None.
+    :type proven_lower_bound: int | None
+    :param accept_heuristic_optimum: Whether a validated heuristic witness may
+        be returned when its cost equals ``proven_lower_bound``.  Callers must
+        use this only when all optima are known to form one canonical orbit.
+        Defaults to False.
+    :type accept_heuristic_optimum: bool
 
     :returns: List of solutions at the globally minimal cost. Each solution is a
         dictionary with keys:
@@ -99,6 +156,15 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
     # Consider individual terms for lower bound
     lower_bound, solv, cost_terms, z3_vars, cost = _calc_min_cost(integer_constraints, nonzero_constraints,
                                                                         zero_constraints, variables, max_result_range)
+    if proven_lower_bound is not None:
+        proven_lower_bound = int(proven_lower_bound)
+        if proven_lower_bound < 0:
+            raise ValueError("A proven lower bound must be non-negative")
+        lower_bound = max(lower_bound, proven_lower_bound)
+        # Besides skipping weaker objective values, give the nonlinear solver
+        # the certificate as a lemma.  This can turn an expensive global
+        # optimality proof into immediate propagation.
+        solv.add(cost >= lower_bound)
     solv.set("rlimit", 0)
     solv.set("timeout", timeout_ms)
     solv.set(logic='QF_NIA')
@@ -114,7 +180,7 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
             if debug:
                 print(f"  > Using apriori solution cost = {apriori_sol} to limit search.")
             solv.add(cost <= apriori_sol)
-            check_result = solv.check()
+            check_result = _check_or_timeout(solv)
             if debug:
                 print(f"    > Check result: {check_result}")
             # Nothing can achieve the apriori lower bound
@@ -129,34 +195,39 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
             heuristic_upper = True
         solv.pop()
     
-    # Check for whether the lower bound is achievable, if it is then we're done
-    solv.push()
-    try:
-        if debug:
-            print(f"  > Checking if lower bound cost = {lower_bound} is achievable...")
-        solv.add(cost == lower_bound)
-        check_result = solv.check()
-        if debug:
-            print(f"    > Check result: {check_result}")
-        if check_result == sat:
-            if enumerate_sols:
-                return _enumerate_solutions(solv, cost_terms, z3_vars,
-                                symmetry_map=symmetry_map)
-            else:
-                return _enumerate_solutions(solv, cost_terms, z3_vars,
-                                max_solutions=1)
-    except TimeoutError:
-        pass
-    solv.pop()
+    # Check whether the lower bound is achievable.  When a caller has both a
+    # structural lower-bound certificate and a unique canonical optimum orbit,
+    # defer this check until after the cheap heuristic witness search; equality
+    # itself can be a difficult nonlinear query.
+    if not (proven_lower_bound is not None and accept_heuristic_optimum):
+        solv.push()
+        try:
+            if debug:
+                print(f"  > Checking if lower bound cost = {lower_bound} is achievable...")
+            solv.add(cost == lower_bound)
+            check_result = _check_or_timeout(solv)
+            if debug:
+                print(f"    > Check result: {check_result}")
+            if check_result == sat:
+                if enumerate_sols:
+                    return _enumerate_solutions(solv, cost_terms, z3_vars,
+                                    symmetry_map=symmetry_map)
+                else:
+                    return _enumerate_solutions(solv, cost_terms, z3_vars,
+                                    max_solutions=1)
+        except TimeoutError:
+            pass
+        solv.pop()
 
     # Get a heuristic upper bound by setting the maximum number of variables to zero
     if any(nz == 0 for nz in nonzero_constraints):
         raise ValueError("Provided Already Zero Nonzero Constraint")
     nonzero_constraints = [nz for nz in nonzero_constraints if len(nz.free_symbols) > 0]
     # Are there any variables we could freely set to zero?
+    heuristic_solutions = []
     if nonzero_constraints and heuristic_upper:
         try:
-            upper_other, res = _heuristic_upper_bound(integer_constraints, nonzero_constraints,
+            upper_other, heuristic_solutions = _heuristic_upper_bound(integer_constraints, nonzero_constraints,
                                                     zero_constraints,
                                                 variables, max_result_range=max_result_range,
                                                 timeout_ms=timeout_ms)
@@ -171,6 +242,19 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
         target_costs = list(range(upper_bound, lower_bound-1,-1))
         iteration_order = "down"
 
+        # Some callers can prove both the lower bound and uniqueness of the
+        # canonical optimum orbit from problem structure.  In that case the
+        # heuristic witness is already an exact optimum, and enumerating every
+        # minimum-cost model is redundant (and can be dramatically harder than
+        # finding the witness).
+        if (accept_heuristic_optimum and upper_bound == lower_bound
+                and heuristic_solutions):
+            exact_solutions = _normalize_known_solutions(
+                heuristic_solutions, integer_constraints, upper_bound
+            )
+            if exact_solutions:
+                return exact_solutions
+
         # Check to see if we're already done
         done = False
         if upper_bound == lower_bound:
@@ -179,7 +263,7 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
             try:
                 solv.push()
                 solv.add(cost < upper_bound)
-                check_result = solv.check()
+                check_result = _check_or_timeout(solv)
                 solv.pop()
                 if check_result == unsat:
                     done = True
@@ -188,7 +272,7 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
         if done:
             solv.push()
             solv.add(cost == upper_bound)
-            check_result = solv.check()
+            check_result = _check_or_timeout(solv)
             if enumerate_sols:
                 solutions = _enumerate_solutions(solv, cost_terms, z3_vars,
                                 symmetry_map=symmetry_map)
@@ -214,14 +298,14 @@ def find_rational_vars_integer_results(integer_constraints, nonzero_constraints,
         # Push a temporary context to check "Can Cost == k?"
         solv.push()
         solv.add(cost == target_cost)
-        check_result = solv.check()
+        check_result = _check_or_timeout(solv)
         
         if check_result == sat:
             # Verify
             solv.pop()
             solv.push()
             solv.add(cost < target_cost)
-            check_result = solv.check()
+            check_result = _check_or_timeout(solv)
             solv.pop()
             if check_result != unsat and iteration_order == "down":
                 continue
@@ -397,7 +481,9 @@ def _calc_min_cost(integer_constraints, nonzero_constraints, zero_constraints,
             solv.add(term == val)
             result = solv.check()
             solv.pop()
-            # It is solvable, or timed out
+            # Unknown is conservative here: treating the value as attainable
+            # can only weaken this preliminary lower bound.  Critical checks
+            # below use _check_or_timeout instead.
             if result != unsat:
                 break
             if val < max_result_range:
@@ -415,7 +501,7 @@ def _calc_min_cost(integer_constraints, nonzero_constraints, zero_constraints,
     # Verify
     solv.push()
     solv.add(cost < min_possible_cost)
-    check_result = solv.check()
+    check_result = _check_or_timeout(solv)
     if check_result == sat:
         raise ValueError("Bad minimum value")
     solv.pop()
@@ -469,9 +555,11 @@ def _enumerate_solutions(solver_with_state, tracked_exprs, z3_vars, max_solution
     results = []
     n_res = 0
     
-    # We iterate while the solver remains Satisfiable.
-    # Each time we find a solution, we block it and ask for another.
-    while solver_with_state.check() == sat:
+    # We iterate while the solver remains satisfiable.  A Z3 timeout is
+    # reported as ``unknown``, not as a Python exception, so translate it
+    # explicitly rather than silently treating a timed-out enumeration as
+    # complete.
+    while _check_or_timeout(solver_with_state) == sat:
         m = solver_with_state.model()
         
         # 1. Extract Results

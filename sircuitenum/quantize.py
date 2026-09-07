@@ -154,21 +154,20 @@ def _linearly_indep_rows(X):
 
 
 def _linearly_indep_col_sets(X):
-    # Check if all rows are linearly independent -> 1 answer
-    if len(_linearly_indep_cols(X)) == X.shape[1]:
-        return [_linearly_indep_cols(X)]
-    # If not, try all permutations of column ordering to pick up
-    # different combinations
-    col_sets = []
-    for perm in itertools.permutations(range(X.shape[1])):
-        cols = _linearly_indep_cols(X[:, perm])
-        cols_og = []
-        for i in cols:
-            cols_og.append(perm[i])
-        cols_og = tuple(sorted(cols_og))
-        if tuple(cols_og) not in col_sets:
-            col_sets.append(cols_og)
-    return col_sets
+    pivot_cols = _linearly_indep_cols(X)
+    rank = len(pivot_cols)
+    if rank == X.shape[1]:
+        return [pivot_cols]
+
+    # Every independent column set is a rank-sized basis.  The previous
+    # implementation discovered these by trying all n! column permutations
+    # and rerunning RREF.  Enumerating the n-choose-r candidate bases directly
+    # is equivalent and avoids factorial work for junction-rich circuits.
+    return [
+        cols
+        for cols in itertools.combinations(range(X.shape[1]), rank)
+        if len(_linearly_indep_cols(X[:, cols])) == rank
+    ]
 
 
 def _linearly_indep_row_sets(X):
@@ -211,7 +210,12 @@ def _det_fast(M):
                    +M[1,2]*(M[2,0]*M[3,1] - M[2,1]*M[3,0]))
         )
     else:
-        return M.det()
+        # The default Bareiss path can spend minutes expanding rational
+        # expressions for the 5x5 symbolic transformations encountered during
+        # H-class enumeration.  DomainMatrix Gaussian elimination preserves a
+        # compact exact rational form and is dramatically faster for these
+        # matrices.
+        return M.det(method="domain-ge")
 
 
 def _equiv_cols(c1, c2, shifts=None):
@@ -363,6 +367,31 @@ def _nonzero_entries_str(X: Union[sym.Matrix, np.ndarray],
     return bin_str 
 
 
+def _incidence_square_nonzero_str(w: sym.Matrix, vals: list) -> str:
+    """Return the off-diagonal support of ``w diag(vals) w.T`` cheaply.
+
+    With distinct symbolic coefficients, terms from different incidence
+    columns cannot cancel.  The support can therefore be read directly from
+    pairs of nonzero incidence entries, avoiding construction and expansion of
+    a symbolic weighted Gram matrix.  Repeated coefficients use the original
+    exact symbolic path because cancellation is then possible.
+    """
+    if len(set(vals)) != len(vals):
+        return _nonzero_entries_str(incidence_to_square(w, vals))
+
+    bits = []
+    count = 0
+    for row in range(w.rows):
+        for column in range(row + 1, w.rows):
+            nonzero = any(
+                sym.simplify(w[row, edge] * w[column, edge]) != 0
+                for edge in range(w.cols)
+            )
+            bits.append("1" if nonzero else "0")
+            count += int(nonzero)
+    return f"{count}-" + "".join(bits)
+
+
 def _remove_permutation_equivalent_transformations(Z_list, perms=[]):
     """Filter transformations that are column permutations or sign-flips of each other. Considers
     subsets of columns based on variable types. Substitutes dummy variables to allow for equality
@@ -388,37 +417,43 @@ def _remove_permutation_equivalent_transformations(Z_list, perms=[]):
     if not perms:
         perms = list(itertools.permutations(range(Z_list[0].shape[1])))
 
+    def normalized_permutation(Z, perm):
+        Z_perm = Z[:, perm]
+        substitutions = {}
+        variable_count = 1
+        for column in range(Z_perm.shape[1]):
+            for row in range(Z_perm.shape[0]):
+                for variable in sorted(Z_perm[row, column].free_symbols, key=str):
+                    if variable not in substitutions:
+                        substitutions[variable] = sym.Symbol(
+                            f"v_{variable_count}", real=True
+                        )
+                        variable_count += 1
+        return Z_perm.subs(substitutions)
+
+    def orbit_fingerprint(Z):
+        permutation_keys = []
+        for perm in perms:
+            Z_perm = normalized_permutation(Z, perm)
+            column_keys = []
+            for column in range(Z_perm.shape[1]):
+                positive = tuple(sym.srepr(value) for value in Z_perm[:, column])
+                negative = tuple(sym.srepr(-value) for value in Z_perm[:, column])
+                column_keys.append(min(positive, negative))
+            permutation_keys.append(tuple(column_keys))
+        return min(permutation_keys)
+
     unique_Z = []
     idx_keep = []
+    seen_fingerprints = set()
     for k, Z_k in enumerate(Z_list):
-        Z_set = []
-        to_add = True
-        for perm in perms:
-            Z_perm = Z_k[:, perm]
-            # Make dummy variables to allow for equality check
-            subs = {}
-            v_count = 1
-            for j in range(Z_perm.shape[1]):
-                for i in range(Z_perm.shape[0]):
-                    for v in Z_perm[i, j].free_symbols:
-                        if v not in subs:
-                            subs[v] = sym.Symbol(f"v_{v_count}", real=True)
-                            v_count += 1
-            Z_perm = Z_perm.subs(subs)
-            
-            # Is there any past transformation equivalent to this one?
-            if any(any(_equal_up_to_column_shift_and_sign(Z_past, Z_perm, shifts=[]) 
-                      for Z_past in Z_past_set) 
-                  for Z_past_set in unique_Z):
-                to_add = False
-                break
-            Z_set.append(Z_perm)
-        
-        if to_add:
-            unique_Z.append(Z_set)
+        fingerprint = orbit_fingerprint(Z_k)
+        if fingerprint not in seen_fingerprints:
+            seen_fingerprints.add(fingerprint)
+            unique_Z.append(normalized_permutation(Z_k, perms[0]))
             idx_keep.append(k)
-    
-    return [Z_set[0] for Z_set in unique_Z], idx_keep
+
+    return unique_Z, idx_keep
 
 
 def _sort_wT(wT: Union[sym.Matrix, np.ndarray]):
@@ -463,39 +498,56 @@ def _maximize_wT(wT):
             segment = [i]
     swap_rows.append(segment)
 
-    # All different permutations of the swappable rows
-    perms = list(itertools.product(*[itertools.permutations(rows, len(rows)) for rows in swap_rows]))
-
-    # For tuple comparison
-    # (0,1) < (1,0)
-    # compares first element, then second, etc.
-    # and stops at first difference
+    # For a fixed set of column signs, the row signs that maximize the total
+    # sum are separable: each row must make its own signed row sum positive.
+    # A zero-sum row may take either sign, so choose its lexicographically
+    # larger representation. Rows with identical supports can then be sorted
+    # directly. This is equivalent to enumerating all row signs and row
+    # permutations, leaving only the much smaller column-sign search.
     best_w = None
     best_val = -np.inf
     best_key = None
 
-    # Choice of row swaps
     # Which columns to invert
     for cols in itertools.product([1, -1], repeat=wT.shape[1]):
         col_vec = np.array(cols).flatten()
-        # Which rows to invert
-        for rows in itertools.product([1, -1], repeat=wT.shape[0]):
-            row_vec = np.array(rows).flatten()
-            # Apply operations
-            wT_mod = row_vec[:, np.newaxis]*wT*col_vec[np.newaxis, :]
-            val = np.sum(wT_mod)
-            # First check the sum of the elements
-            if val >= best_val:
-                for row_perm in perms:
-                    row_order = list(itertools.chain.from_iterable(row_perm))
-                    wT_perm = wT_mod[row_order, :].astype(int)
-                    # Flattened matrix in base n -- for canonical ordering
-                    key = tuple(int(x) for x in wT_perm.flatten())
-                    if val > best_val or (val == best_val and key > best_key):
-                        best_val = val
-                        best_key = key
-                        best_w = (wT_perm.copy(), row_vec.copy(),
-                                  col_vec.copy(), row_order)
+        column_signed = wT * col_vec[np.newaxis, :]
+        row_signs = []
+        signed_rows = []
+        for row in column_signed:
+            row_sum = int(np.sum(row))
+            if row_sum > 0:
+                row_sign = 1
+            elif row_sum < 0:
+                row_sign = -1
+            else:
+                positive_key = tuple(int(value) for value in row)
+                negative_key = tuple(-value for value in positive_key)
+                row_sign = 1 if positive_key >= negative_key else -1
+            row_signs.append(row_sign)
+            signed_rows.append(row_sign * row)
+
+        row_order = []
+        for row_segment in swap_rows:
+            row_order.extend(sorted(
+                row_segment,
+                key=lambda row_index: tuple(
+                    int(value) for value in signed_rows[row_index]
+                ),
+                reverse=True,
+            ))
+        wT_perm = np.array(signed_rows)[row_order, :].astype(int)
+        val = int(np.sum(wT_perm))
+        key = tuple(int(value) for value in wT_perm.flatten())
+        if val > best_val or (val == best_val and key > best_key):
+            best_val = val
+            best_key = key
+            best_w = (
+                wT_perm.copy(),
+                np.array(row_signs).copy(),
+                col_vec.copy(),
+                row_order,
+            )
 
         
     return best_w[0], best_key, best_w[1:]
@@ -614,6 +666,169 @@ def _find_Z_min_cost(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
         return fixed_cost
     variable_cost = _calc_min_cost(integer_constraints,nonzero_constraints,[],var_list)[0]
     return fixed_cost + variable_cost
+
+
+def _complete_graph_wjt_cost_certificate(Z: sym.Matrix, wJ: sym.Matrix,
+                                         n_nl: int) -> Optional[int]:
+    """Return an exact L1 lower bound for a recognized complete-graph basis.
+
+    If ``wJ`` is the signed incidence matrix of the simple complete graph K_n,
+    its kernel is the one-dimensional common mode, the final columns of ``Z``
+    explicitly span that kernel, and all other columns are nonlinear dynamical
+    modes, then every dynamical column has integer edge differences with L1
+    norm at least the edge connectivity of K_n, namely ``n - 1``.  Invertibility
+    prevents any such column from lying in the common-mode kernel.  The bound
+    ``(n - 1)^2`` is achievable only by singleton-cut columns; every basis made
+    from those columns belongs to one canonical row/column-sign orbit.
+
+    ``None`` is returned unless every structural precondition is established
+    exactly.  This deliberately narrow certificate is preferable to applying a
+    plausible graph bound to a transformation whose nullspace layout is not
+    known.
+    """
+    if not isinstance(Z, sym.MatrixBase) or not isinstance(wJ, sym.MatrixBase):
+        return None
+    n_vertices = wJ.rows
+    if n_vertices < 2 or Z.rows != n_vertices or Z.cols != n_vertices:
+        return None
+    if n_nl != n_vertices - 1:
+        return None
+
+    expected_pairs = set(itertools.combinations(range(n_vertices), 2))
+    incidence_pairs = []
+    for column in range(wJ.cols):
+        nonzero = [row for row in range(n_vertices) if wJ[row, column] != 0]
+        if len(nonzero) != 2:
+            return None
+        values = {sym.simplify(wJ[row, column]) for row in nonzero}
+        if values != {sym.Integer(-1), sym.Integer(1)}:
+            return None
+        incidence_pairs.append(tuple(sorted(nonzero)))
+    if len(incidence_pairs) != len(expected_pairs):
+        return None
+    if set(incidence_pairs) != expected_pairs:
+        return None
+
+    kernel_columns = Z[:, n_nl:]
+    if kernel_columns.cols != 1 or kernel_columns.rank() != 1:
+        return None
+    kernel_image = wJ.transpose() * kernel_columns
+    if any(sym.simplify(value) != 0 for value in kernel_image):
+        return None
+
+    return (n_vertices - 1) ** 2
+
+
+def _decomposed_complete_graph_wjt_cost_certificate(
+        Z: sym.Matrix, wJ: sym.Matrix, n_nl: int) -> Optional[int]:
+    """Certify L1 cost for a direct sum of complete quotient-cut spaces.
+
+    A symbolic column may force some junction-edge differences to zero.  Those
+    zero edges contract vertices.  If the remaining quotient is a simple
+    complete graph K_m, any nonconstant integer potential on that column costs
+    at least ``m - 1``.  This routine accepts a collection of such column
+    spaces only when each K_m has exactly ``m - 1`` columns and their potential
+    spaces form a direct decomposition modulo the common mode.  Under those
+    conditions the minimum bases are products of singleton-cut bases and form
+    one canonical row/column-sign orbit.
+
+    The recognition rules are intentionally strict; unrecognized layouts fall
+    back to the general Z3 search.
+    """
+    complete_bound = _complete_graph_wjt_cost_certificate(Z, wJ, n_nl)
+    if complete_bound is not None:
+        return complete_bound
+
+    if not isinstance(Z, sym.MatrixBase) or not isinstance(wJ, sym.MatrixBase):
+        return None
+    n_vertices = wJ.rows
+    if (n_vertices < 2 or Z.rows != n_vertices or Z.cols != n_vertices
+            or n_nl != n_vertices - 1):
+        return None
+
+    edges = []
+    for column in range(wJ.cols):
+        nonzero = [row for row in range(n_vertices) if wJ[row, column] != 0]
+        if len(nonzero) != 2:
+            return None
+        values = {sym.simplify(wJ[row, column]) for row in nonzero}
+        if values != {sym.Integer(-1), sym.Integer(1)}:
+            return None
+        edges.append(tuple(sorted(nonzero)))
+    if len(set(edges)) != len(edges) or wJ.transpose().rank() != n_vertices - 1:
+        return None
+
+    kernel_columns = Z[:, n_nl:]
+    if kernel_columns.cols != 1 or kernel_columns.rank() != 1:
+        return None
+    if any(sym.simplify(value) != 0
+           for value in wJ.transpose() * kernel_columns):
+        return None
+
+    wJT = sym.simplify(wJ.transpose() * Z[:, :n_nl])
+    groups = {}
+    total_bound = 0
+    for dynamic_column in range(n_nl):
+        parent = list(range(n_vertices))
+
+        def find(vertex):
+            while parent[vertex] != vertex:
+                parent[vertex] = parent[parent[vertex]]
+                vertex = parent[vertex]
+            return vertex
+
+        def union(left, right):
+            left_root, right_root = find(left), find(right)
+            if left_root != right_root:
+                parent[right_root] = left_root
+
+        for edge_index, (left, right) in enumerate(edges):
+            if sym.simplify(wJT[edge_index, dynamic_column]) == 0:
+                union(left, right)
+
+        roots = [find(vertex) for vertex in range(n_vertices)]
+        root_order = {root: index for index, root in enumerate(dict.fromkeys(roots))}
+        partition = tuple(root_order[root] for root in roots)
+        n_quotient_vertices = len(root_order)
+        if n_quotient_vertices < 2:
+            return None
+
+        quotient_edges = []
+        for edge_index, (left, right) in enumerate(edges):
+            left_part, right_part = partition[left], partition[right]
+            expression = sym.simplify(wJT[edge_index, dynamic_column])
+            if left_part == right_part:
+                if expression != 0:
+                    return None
+                continue
+            if expression == 0:
+                return None
+            quotient_edges.append(tuple(sorted((left_part, right_part))))
+        expected_edges = set(itertools.combinations(range(n_quotient_vertices), 2))
+        if (len(quotient_edges) != len(expected_edges)
+                or set(quotient_edges) != expected_edges):
+            return None
+
+        groups.setdefault(partition, []).append(dynamic_column)
+        total_bound += n_quotient_vertices - 1
+
+    subspace_columns = [sym.ones(n_vertices, 1)]
+    expected_dimension = 1
+    for partition, columns in groups.items():
+        n_parts = max(partition) + 1
+        if len(columns) != n_parts - 1:
+            return None
+        expected_dimension += n_parts - 1
+        for part in range(n_parts - 1):
+            subspace_columns.append(sym.Matrix([
+                int(vertex_part == part) for vertex_part in partition
+            ]))
+    if expected_dimension != n_vertices:
+        return None
+    if sym.Matrix.hstack(*subspace_columns).rank() != n_vertices:
+        return None
+
+    return total_bound
     
 
 def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
@@ -645,6 +860,14 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
 
     fixed_cost, integer_constraints, nonzero_constraints, var_list, nz_idx = _fixed_cost_plus_integer_cost(Z, var_list,
                                                                                 var_types, wJ, nonzero)
+    total_cost_certificate = _decomposed_complete_graph_wjt_cost_certificate(
+        Z, wJ, n_nl
+    )
+    variable_cost_certificate = None
+    canonical_optimum_is_unique = False
+    if total_cost_certificate is not None:
+        variable_cost_certificate = max(0, total_cost_certificate - fixed_cost)
+        canonical_optimum_is_unique = True
     # Encode symmetry map of row swaps, column sign flips, and row sign flips
     n_terms = len(nz_idx)
     max_row = max(i for (i,j) in nz_idx)
@@ -684,7 +907,9 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
                                                 heuristic_upper=True,
                                                 symmetry_map=_symmetry_perms,
                                                 max_result_range=max_result_range,
-                                                debug=debug)
+                                                debug=debug,
+                                                proven_lower_bound=variable_cost_certificate,
+                                                accept_heuristic_optimum=canonical_optimum_is_unique)
         else:
             all_sols = find_rational_vars_integer_results(integer_constraints,
                                                 nonzero_constraints, [], var_list,
@@ -692,7 +917,8 @@ def _find_Z_instance(Z: Union[sym.Matrix, sym.Expr], var_list: list[sym.Expr],
                                                 heuristic_upper=False,
                                                 symmetry_map=_symmetry_perms,
                                                 max_result_range=max_result_range,
-                                                debug=debug)
+                                                debug=debug,
+                                                proven_lower_bound=variable_cost_certificate)
         if all_sols or apriori_sol is not None:
             break
 
@@ -925,7 +1151,9 @@ def H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types, try_perms = True, extra_n
         
         L_key = (_nonzero_entries_str(lTrans[perm, perm]),)
         C_key =  (_nonzero_entries_str(cTransInv[perm, perm]),)
-        w_key = (_nonzero_entries_str(incidence_to_square(wJtTrans[:, perm].transpose(), EJ)),)
+        w_key = (_incidence_square_nonzero_str(
+            wJtTrans[:, perm].transpose(), EJ
+        ),)
         if extra_nl and n_nl > 0:
             wT_tilde, wT_key_full, _ = _maximize_wT(_sort_wT(wJtTrans[:, perm][:, :n_nl]))
             n_val = sum(abs(x) for x in wT_key_full)
@@ -1587,27 +1815,52 @@ def secondary_decouple(var_types: dict[str, list[int]], mats: list[sym.Matrix], 
 def choose_Z(circuit: list, edges: list, ground_node: list = [],
              return_instance: bool = True, equal_total_C: bool = False,
              debug=False, minimize_nl=True, order=["L", "C"]) -> tuple[sym.Matrix, dict[str, list[int]], str]:
-    """
-    Chooses a transformation phi_node = Z*phi_new that separates
-    the circuit into compact, extended, harmonic, free, frozen, and cyclic modes.
-    Chooses the transformation that minimizes the H_hash function, which minimizes
-    the number of nonzero intermode coupling terms, while maintaining the
-    periodicity of the compact and extended mode junction terms.
+    """Choose a canonical node-to-mode transformation for a circuit.
 
-    Args:
-        circuit : list
-        A list of element labels for the desired circuit.
-        Example: ``[["J"], ["L", "J"], ["C"]]``.
-        edges : list
-        A list of edge connections for the desired circuit.
-        Example: ``[(0, 1), (0, 2), (1, 2)]``.
-        return_instance: bool
-        If there are free parameters in the final transformation,
-        substitute in a valid set of 1's and 0's to complete it,
-        which maximizes the number of 0's.
+    The transformation ``phi_node = Z * phi_new`` separates compact, extended,
+    harmonic, free, frozen, and sigma modes.  Candidate transformations preserve
+    junction periodicity and are ranked by :func:`H_hash` to minimize linear and
+    nonlinear intermode coupling.  Free rational parameters are assigned by an
+    exact integer-result optimization when ``return_instance`` is true.
 
-    Returns:
-        tuple[sym.Matrix, dict[str, list[int]], str]: _description_
+    Parameters
+    ----------
+    circuit : list
+        Element labels for each edge, for example
+        ``[["J"], ["L", "J"], ["C"]]``.  Numbered element labels are also
+        accepted.
+    edges : list[tuple[int, int]]
+        Edge endpoints corresponding positionally to ``circuit``.
+    ground_node : list[int], optional
+        Nodes to remove as fixed ground coordinates.
+    return_instance : bool, optional
+        Substitute exact rational values for any free transformation parameters.
+        If false, symbolic candidate transformations may be returned.
+    equal_total_C : bool, optional
+        Use the equal-total-capacitance convention when constructing the
+        capacitance matrix.
+    debug : bool, optional
+        Print intermediate bases, candidates, hashes, and solver progress.
+    minimize_nl : bool, optional
+        Include junction terms when minimizing off-diagonal coupling.
+    order : list[str], optional
+        Priority order for linear decoupling.  Entries must be ``"L"`` and/or
+        ``"C"``; a one-element list restricts minimization to that matrix.
+
+    Returns
+    -------
+    transformations : list[sympy.Matrix]
+        Canonically deduplicated transformations tied for the best H hash.
+    variable_types : dict[str, list[int]]
+        One-based mode indices grouped by physical mode type.
+    h_class : tuple
+        Canonical H-class tuple returned by :func:`H_hash`.
+
+    Raises
+    ------
+    ValueError
+        If the circuit has no dynamical modes, ``order`` is invalid, or no
+        valid parameter instance can be found.
     """
 
     if debug:
@@ -1706,10 +1959,23 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
     min_len = str_len[order[0]]
     lowest_Z = [lowest_Z[i] for i in order if str_len[i] <= 50*min_len]
 
+    # Collapse column-permutation/sign-equivalent symbolic transformations
+    # before determinant instantiation, matrix inversion, and H_hash.  These
+    # operations dominate runtime when compact alignment emits a large orbit.
+    col_perms = [
+        permutation + tuple(range(n_dyn, Z0.shape[1]))
+        for permutation in _var_col_perms(var_types, dyn_only=True)
+    ]
+    _, unique_indices = _remove_permutation_equivalent_transformations(
+        lowest_Z, perms=col_perms
+    )
+    lowest_Z = [lowest_Z[index] for index in unique_indices]
+
     # If there are multiple Z with the same lowest hash
     # then see if they separate with equal L/C values
     Z_final = []
     hash_final = tuple()
+    structural_hash_cache = {}
     for Z in lowest_Z:
         Z_equal = sym.simplify(_sub_equal_LC(Z))
         var_list = [x for x in Z.free_symbols if "Z" in str(x)]
@@ -1721,7 +1987,20 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
             cTransInv = cTrans.inv()
         lTrans = sym.simplify(Z_hash.transpose()*lMat*Z_hash)
         wJtTrans = sym.simplify(wJ.transpose()*Z_hash)
-        val, _ = H_hash(cTransInv, lTrans, wJtTrans, EJ, var_types=var_types)
+        # The non-instance H hash depends only on these three zero/nonzero
+        # support patterns.  Many distinct symbolic alignments instantiate to
+        # the same pattern, so avoid repeating all mode permutations for an
+        # already evaluated structure.
+        support_key = (
+            _nonzero_entries_str(cTransInv),
+            _nonzero_entries_str(lTrans),
+            _incidence_square_nonzero_str(wJtTrans.transpose(), EJ),
+        )
+        if support_key not in structural_hash_cache:
+            structural_hash_cache[support_key] = H_hash(
+                cTransInv, lTrans, wJtTrans, EJ, var_types=var_types
+            )[0]
+        val = structural_hash_cache[support_key]
         if val < hash_final or hash_final == tuple():
             hash_final = val
             Z_final = [Z]
@@ -1786,7 +2065,6 @@ def choose_Z(circuit: list, edges: list, ground_node: list = [],
         Z_final = Z_final_instance
         hash_final = hash_final_instance
 
-    col_perms = [x + tuple(range(n_dyn, Z0.shape[1])) for x in _var_col_perms(var_types, dyn_only=True)]
     _, idx = _remove_permutation_equivalent_transformations(Z_final, perms=col_perms)
     Z_final = [Z_final[i] for i in idx]
 

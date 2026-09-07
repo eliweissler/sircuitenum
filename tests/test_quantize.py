@@ -238,6 +238,12 @@ def test__det_fast():
         mat = sym.randMatrix(i, i, min=0, max=5)
         assert mat.det() == quantize._det_fast(mat)
 
+    # Regression case for rational 5x5 transformations: the default SymPy
+    # determinant algorithm expands this class of expression very slowly.
+    a, b, c, d = sym.symbols("a b c d", nonzero=True)
+    mat = sym.diag(a / b, c / d, 1, 1, 1)
+    assert sym.cancel(quantize._det_fast(mat) - a*c/(b*d)) == 0
+
 def test__equiv_cols():
 
     c1 = sym.Matrix([[1], [1]])
@@ -754,6 +760,146 @@ def test__find_Z_instance():
     assert sym.im(Zsub).is_zero_matrix
     wJT_trans = wJ.transpose()*Zsub
     assert all(sym.simplify(x) in range(-4,5) for x in wJT_trans)
+
+
+def test_complete_graph_wjt_cost_certificate():
+    """K_n incidence bases have a certified (n-1)^2 minimum L1 cost."""
+    for n_vertices in (3, 4, 5):
+        edges = list(itertools.combinations(range(n_vertices), 2))
+        wJ = sym.zeros(n_vertices, len(edges))
+        for column, (left, right) in enumerate(edges):
+            wJ[left, column] = 1
+            wJ[right, column] = -1
+
+        dynamic = [sym.eye(n_vertices)[:, column]
+                   for column in range(n_vertices - 1)]
+        common_mode = sym.ones(n_vertices, 1)
+        Z = sym.Matrix.hstack(*dynamic, common_mode)
+        assert quantize._complete_graph_wjt_cost_certificate(
+            Z, wJ, n_vertices - 1
+        ) == (n_vertices - 1) ** 2
+
+        # A missing edge is not a complete-graph certificate.
+        assert quantize._complete_graph_wjt_cost_certificate(
+            Z, wJ[:, :-1], n_vertices - 1
+        ) is None
+
+        # Nor is a final column that fails to span the common-mode kernel.
+        bad_Z = Z.copy()
+        bad_Z[:, -1] = sym.eye(n_vertices)[:, -1]
+        assert quantize._complete_graph_wjt_cost_certificate(
+            bad_Z, wJ, n_vertices - 1
+        ) is None
+
+
+def test_complete_graph_minimum_bases_have_one_canonical_wjt_orbit():
+    """All singleton-cut K_n bases canonicalize to one nonlinear key."""
+    for n_vertices in (3, 4, 5):
+        edges = list(itertools.combinations(range(n_vertices), 2))
+        singleton_cuts = [
+            sym.Matrix([int((left == vertex) - (right == vertex))
+                        for left, right in edges])
+            for vertex in range(n_vertices)
+        ]
+        keys = {
+            quantize._maximize_wT(sym.Matrix.hstack(
+                *(singleton_cuts[index] for index in basis)
+            ))[1]
+            for basis in itertools.combinations(range(n_vertices), n_vertices - 1)
+        }
+        assert len(keys) == 1
+
+
+def test_maximize_wT_matches_exhaustive_row_sign_search():
+    """The separable row optimizer preserves the former exhaustive result."""
+    def exhaustive(wT):
+        wT = quantize._sort_wT(wT)
+        supports = [tuple(wT[row].nonzero()[0]) for row in range(wT.shape[0])]
+        segments = []
+        segment = [0]
+        for row in range(1, wT.shape[0]):
+            if supports[row] == supports[row - 1]:
+                segment.append(row)
+            else:
+                segments.append(segment)
+                segment = [row]
+        segments.append(segment)
+        permutations = list(itertools.product(*[
+            itertools.permutations(rows, len(rows)) for rows in segments
+        ]))
+        best = None
+        best_value = -np.inf
+        best_key = None
+        for columns in itertools.product([1, -1], repeat=wT.shape[1]):
+            column_signs = np.array(columns)
+            for rows in itertools.product([1, -1], repeat=wT.shape[0]):
+                row_signs = np.array(rows)
+                modified = row_signs[:, None] * wT * column_signs[None, :]
+                value = np.sum(modified)
+                if value >= best_value:
+                    for row_permutation in permutations:
+                        order = list(itertools.chain.from_iterable(row_permutation))
+                        candidate = modified[order, :].astype(int)
+                        key = tuple(int(x) for x in candidate.flatten())
+                        if value > best_value or (value == best_value and key > best_key):
+                            best_value, best_key, best = value, key, candidate.copy()
+        return best, best_key
+
+    rng = np.random.default_rng(73)
+    matrices = [
+        rng.integers(-2, 3, size=(rows, columns))
+        for rows, columns in ((2, 2), (3, 2), (4, 3))
+        for _ in range(8)
+    ]
+    for matrix in matrices:
+        expected_matrix, expected_key = exhaustive(matrix)
+        actual_matrix, actual_key, _ = quantize._maximize_wT(matrix)
+        assert np.array_equal(actual_matrix, expected_matrix)
+        assert actual_key == expected_key
+
+
+def test_incidence_square_nonzero_str_matches_symbolic_construction():
+    rng = np.random.default_rng(101)
+    for rows, columns in ((3, 4), (5, 7)):
+        w = sym.Matrix(rng.integers(-1, 2, size=(rows, columns)))
+        values = list(sym.symbols(f"e0:{columns}", nonzero=True))
+        expected = quantize._nonzero_entries_str(
+            quantize.incidence_to_square(w, values)
+        )
+        assert quantize._incidence_square_nonzero_str(w, values) == expected
+
+    # Repeated coefficients deliberately retain the cancellation-aware path.
+    shared = sym.Symbol("shared", nonzero=True)
+    w = sym.Matrix([[1, 1], [1, -1]])
+    values = [shared, shared]
+    assert quantize._incidence_square_nonzero_str(w, values) == "0-0"
+
+
+def test_decomposed_complete_graph_wjt_cost_certificate():
+    """A bridge K2 plus an independent K4 cut space has exact cost 1+9."""
+    n_vertices = 5
+    edges = [
+        (0, 1),
+        (0, 2), (0, 3), (0, 4),
+        (2, 3), (2, 4), (3, 4),
+    ]
+    wJ = sym.zeros(n_vertices, len(edges))
+    for column, (left, right) in enumerate(edges):
+        wJ[left, column] = 1
+        wJ[right, column] = -1
+    eye = sym.eye(n_vertices)
+    bridge_scale = sym.Symbol("bridge_scale", nonzero=True)
+    block_symbols = sym.symbols("block_0:9")
+    block = sym.Matrix(3, 3, block_symbols)
+    block_columns = [
+        sym.Matrix.vstack(sym.zeros(2, 1), block[:, column])
+        for column in range(3)
+    ]
+    Z = sym.Matrix.hstack(bridge_scale * eye[:, 1], *block_columns,
+                          sym.ones(n_vertices, 1))
+    assert quantize._decomposed_complete_graph_wjt_cost_certificate(
+        Z, wJ, 4
+    ) == 10
 
 
 
@@ -1643,7 +1789,7 @@ def test_symbolic_hamiltonian():
     V = sym.Matrix(np.array([sym.Symbol("V_g", real=True, positive=True)]).reshape((1, 1)))
     var_types = {"compact": [1], "sigma": [2]}
     H, qv, tv = quantize.symbolic_hamiltonian(circuit, edges, Z=Z, var_types=var_types, return_vars=True, Cv=Cv, V=V)
-    ans = '- \\frac{C_{c} V_{g} n_{1}}{C + C_{J}} - E_{J} \\cos{\\left(θ_{1} \\right)} + \\frac{n_{1}^{2}}{2 C + 2 C_{J}}'
+    ans = '- \\frac{C_{c} V_{g} n_{1}}{2 C + 2 C_{J}} - E_{J} \\cos{\\left(θ_{1} \\right)} + \\frac{n_{1}^{2}}{2 C + 2 C_{J}}'
     assert sym.latex(H, order="grlex") == ans
 
 
