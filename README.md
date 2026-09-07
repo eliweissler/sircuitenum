@@ -29,12 +29,9 @@ so run the creation command from the `sircuitenum` repository root. No separate
 `pip install` step is required. To recreate the environment, remove the old
 environment first and run the same creation command again.
 
-Start the notebook interface with:
+### Database
 
-```bash
-conda activate sircuitenum-paper
-jupyter lab
-```
+The enumerated circuit database used in the paper can be found on [zenodo](https://doi.org/10.5281/zenodo.22649936).
 
 Examples
 ------------
